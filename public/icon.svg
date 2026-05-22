@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0d0d0d"/>
+  <!-- LED freq display -->
+  <rect x="64" y="116" width="384" height="120" rx="16"
+        fill="url(#led)" stroke="#7a5a18" stroke-width="2"/>
+  <text x="256" y="206" text-anchor="middle"
+        font-family="ui-monospace, Menlo, monospace" font-weight="700"
+        font-size="78" fill="#101010" letter-spacing="6">
+    7200.00
+  </text>
+  <!-- Knobs row -->
+  <g transform="translate(0,290)">
+    <circle cx="106" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+    <circle cx="206" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+    <circle cx="306" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+    <circle cx="406" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+    <line x1="106" y1="64" x2="106" y2="30" stroke="#e8e8e8" stroke-width="4" stroke-linecap="round"/>
+    <line x1="206" y1="64" x2="184" y2="42" stroke="#e8e8e8" stroke-width="4" stroke-linecap="round"/>
+    <line x1="306" y1="64" x2="328" y2="42" stroke="#e8e8e8" stroke-width="4" stroke-linecap="round"/>
+    <line x1="406" y1="64" x2="430" y2="64" stroke="#e8e8e8" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <!-- Accent bar bottom -->
+  <rect x="64" y="408" width="384" height="32" rx="6" fill="#c0392b"/>
+  <defs>
+    <linearGradient id="led" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f3c466"/>
+      <stop offset="100%" stop-color="#e9a83a"/>
+    </linearGradient>
+  </defs>
+</svg>

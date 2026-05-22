@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Maskable: keep the meaningful artwork in the inner 80% (256-205 = 51px margin). -->
+  <rect width="512" height="512" fill="#0d0d0d"/>
+  <g transform="translate(64,64) scale(0.75)">
+    <rect width="512" height="512" rx="96" fill="#0d0d0d"/>
+    <rect x="64" y="116" width="384" height="120" rx="16"
+          fill="url(#led)" stroke="#7a5a18" stroke-width="2"/>
+    <text x="256" y="206" text-anchor="middle"
+          font-family="ui-monospace, Menlo, monospace" font-weight="700"
+          font-size="78" fill="#101010" letter-spacing="6">7200.00</text>
+    <g transform="translate(0,290)">
+      <circle cx="106" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+      <circle cx="206" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+      <circle cx="306" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+      <circle cx="406" cy="64" r="44" fill="#1a1a1a" stroke="#3a3a3a" stroke-width="2"/>
+    </g>
+    <rect x="64" y="408" width="384" height="32" rx="6" fill="#c0392b"/>
+  </g>
+  <defs>
+    <linearGradient id="led" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f3c466"/>
+      <stop offset="100%" stop-color="#e9a83a"/>
+    </linearGradient>
+  </defs>
+</svg>

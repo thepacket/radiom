@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.local
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Decoder build artifacts — each decoders/<name>/build.sh produces these
+# locally (and the Dockerfile reproduces them inside the image). Upstream
+# sources are fetched at build time, not committed.
+decoders/*/bin/
+decoders/*/build/
+decoders/*/.work/
+decoders/js8/src/
+decoders/wspr/build/
+decoders/packet/build/
+
+# Local Claude Code settings (user-specific)
+.claude/settings.local.json
+
+# Compiled object/debug artifacts that may land in source dirs
+*.o
+*.obj
+*.dSYM/
+
+# WSPR / decoder runtime state (written by the binaries when run locally)
+ALL_WSPR.TXT
+hashtable.txt
+wspr_spots.txt
+wspr_timer.out
+wspr_wisdom.dat
+*.log
+
+# Fly.io local state
+.fly/

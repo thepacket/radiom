@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "comment": "Curated list of well-known amateur HF voice nets. Public APIs for scheduled net listings don't exist, so this is maintained by hand. Each entry has frequency (kHz), mode, start/end UTC time (HHMM, end < start means wrap across midnight), days mask (1-7 for Mon-Sun, empty = every day), region, and short notes. The radiom NETS endpoint matches the current UTC time + weekday against this list to show what voice nets are active right now. Schedules drift; corrections welcome.",
+  "nets": [
+    { "name": "Maritime Mobile Service Net",        "freqKHz": 14300, "mode": "USB", "startUTC": 1700, "endUTC": 200,  "days": "",        "region": "Worldwide",     "notes": "Marine traffic, weather, position reports" },
+    { "name": "Pacific Seafarers' Net",             "freqKHz": 14300, "mode": "USB", "startUTC": 300,  "endUTC": 500,  "days": "",        "region": "Pacific",       "notes": "Position reports, weather, traffic" },
+    { "name": "Pacific Maritime Mobile Net",        "freqKHz": 21412, "mode": "USB", "startUTC": 2200, "endUTC": 2300, "days": "12345",   "region": "Pacific",       "notes": "Pacific maritime mobile traffic" },
+    { "name": "International Maritime Mobile Net",  "freqKHz": 14313, "mode": "USB", "startUTC": 1700, "endUTC": 2300, "days": "",        "region": "Worldwide",     "notes": "Sailors, vessel traffic" },
+    { "name": "South Africa Maritime Net",          "freqKHz": 14316, "mode": "USB", "startUTC": 630,  "endUTC": 730,  "days": "12345",   "region": "Indian Ocean",  "notes": "ZS-area maritime mobile" },
+    { "name": "Pacific Inter-Island Net",           "freqKHz": 14315, "mode": "USB", "startUTC": 1800, "endUTC": 1900, "days": "",        "region": "Pacific",       "notes": "Inter-island traffic" },
+
+    { "name": "Hurricane Watch Net (HWN, primary)", "freqKHz": 14325, "mode": "USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "N Atlantic/Caribbean", "notes": "Active only during tropical-cyclone events" },
+    { "name": "Hurricane Watch Net (HWN, 40m)",     "freqKHz": 7268,  "mode": "LSB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "N Atlantic/Caribbean", "notes": "Active only during tropical-cyclone events" },
+    { "name": "SATERN International Net",           "freqKHz": 14265, "mode": "USB", "startUTC": 1500, "endUTC": 1900, "days": "12345",   "region": "Americas",      "notes": "Salvation Army emergency net" },
+
+    { "name": "Halligan Net",                       "freqKHz": 14275, "mode": "USB", "startUTC": 100,  "endUTC": 230,  "days": "",        "region": "Worldwide",     "notes": "Long-standing DX/conversation net" },
+    { "name": "Old Geezers Net",                    "freqKHz": 14260, "mode": "USB", "startUTC": 1300, "endUTC": 1500, "days": "",        "region": "N America",     "notes": "Senior ops ragchew" },
+    { "name": "Friendship Net",                     "freqKHz": 14260, "mode": "USB", "startUTC": 1500, "endUTC": 1700, "days": "",        "region": "Worldwide",     "notes": "Round-table DX ragchew" },
+
+    { "name": "East Coast Amateur Radio Service",   "freqKHz": 7255,  "mode": "LSB", "startUTC": 1100, "endUTC": 2200, "days": "",        "region": "N America (east)", "notes": "ECARS — high-traffic 40 m chat" },
+    { "name": "West Coast Amateur Radio Service",   "freqKHz": 7256,  "mode": "LSB", "startUTC": 1500, "endUTC": 100,  "days": "",        "region": "N America (west)", "notes": "WCARS — sister to ECARS" },
+
+    { "name": "3905 Century Club — 75m",            "freqKHz": 3905,  "mode": "LSB", "startUTC": 2200, "endUTC": 600,  "days": "",        "region": "N America",     "notes": "Award-tracking ragchew on 75 m" },
+    { "name": "3905 Century Club — 40m",            "freqKHz": 7233,  "mode": "LSB", "startUTC": 100,  "endUTC": 500,  "days": "",        "region": "N America",     "notes": "Award-tracking ragchew on 40 m" },
+    { "name": "75 m Roundtable",                    "freqKHz": 3870,  "mode": "LSB", "startUTC": 200,  "endUTC": 1200, "days": "",        "region": "N America",     "notes": "Open ragchew" },
+
+    { "name": "Sunrise Net",                        "freqKHz": 3940,  "mode": "LSB", "startUTC": 1000, "endUTC": 1200, "days": "",        "region": "N America (east)", "notes": "Long-running ragchew at sunrise" },
+    { "name": "Mickey Mouse Net",                   "freqKHz": 3916,  "mode": "LSB", "startUTC": 200,  "endUTC": 600,  "days": "",        "region": "N America",     "notes": "Casual 80 m net" },
+
+    { "name": "AMSAT NA Net",                       "freqKHz": 7255,  "mode": "LSB", "startUTC": 100,  "endUTC": 200,  "days": "2",       "region": "N America",     "notes": "Tuesday evening (UTC), amateur satellite topics" },
+    { "name": "DX Ops Net",                         "freqKHz": 14220, "mode": "USB", "startUTC": 200,  "endUTC": 400,  "days": "12345",   "region": "Worldwide",     "notes": "DXing and contesting talk" },
+
+    { "name": "ANZA DX Net",                        "freqKHz": 14183, "mode": "USB", "startUTC": 600,  "endUTC": 700,  "days": "",        "region": "Australia/NZ",  "notes": "Aust/NZ DX traffic" },
+    { "name": "VK Trans-Tasman Net",                "freqKHz": 14116, "mode": "USB", "startUTC": 800,  "endUTC": 900,  "days": "",        "region": "Australia/NZ",  "notes": "Inter-Australasian QSO net" },
+    { "name": "South Pacific Tourist Net",          "freqKHz": 14315, "mode": "USB", "startUTC": 530,  "endUTC": 700,  "days": "",        "region": "Pacific",       "notes": "Cruisers and travellers" },
+
+    { "name": "Russian USA Pioneers Net",           "freqKHz": 14310, "mode": "USB", "startUTC": 1500, "endUTC": 1700, "days": "1",       "region": "Worldwide",     "notes": "Monday — Russian and US ops" },
+
+    { "name": "Trans-Atlantic Net",                 "freqKHz": 14313, "mode": "USB", "startUTC": 1300, "endUTC": 1500, "days": "",        "region": "Atlantic",      "notes": "Transatlantic ragchew" },
+    { "name": "African DX Net",                     "freqKHz": 14220, "mode": "USB", "startUTC": 1800, "endUTC": 1900, "days": "",        "region": "Africa",        "notes": "African DX traffic" },
+
+    { "name": "Cracker Barrel Net",                 "freqKHz": 3855,  "mode": "LSB", "startUTC": 1100, "endUTC": 1300, "days": "",        "region": "SE United States", "notes": "Southeast US ragchew" },
+    { "name": "Hit and Bounce Slow Net",            "freqKHz": 7090,  "mode": "LSB", "startUTC": 100,  "endUTC": 230,  "days": "",        "region": "N America",     "notes": "Slow CW/SSB practice net (informal)" }
+  ]
+}

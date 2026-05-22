@@ -1,0 +1,376 @@
+// HF WEFAX decoder — server-side native binary.
+//
+// Demod pipeline per audio sample:
+//   1. mixer  → I,Q at baseband by multiplying by cos/sin at 1900 Hz
+//   2. IIR LP → kill the sum-frequency image and out-of-band noise
+//   3. FM    → instantaneous freq via the (I·dQ − Q·dI) / (I² + Q²) form
+//   4. map    → freq 1500 → 255 (white), 2300 → 0 (black), clamp
+//   5. clock  → accumulate `1 / samplesPerPix` per sample, emit a pixel
+//               each time the accumulator crosses 1.0
+//   6. row    → flush every IMG_WIDTH pixels
+//
+// Line-clock recovery (two stages, both run continuously):
+//
+//   A. Phasing-tone lock (cold start, while the prelude is on the air)
+//      For each completed row, look for the WMO phasing signature: a
+//      ~5 % white pulse against a mostly-black background. Median pulse
+//      position over six consecutive matches gives the line origin (we
+//      apply it via `pxSkip` at the next row boundary). Linear regression
+//      of pulse position vs row index gives the line-rate error, which
+//      we fold into `samplesPerPix`.
+//
+//   B. Continuous correlation tracker (post-lock, or whenever the
+//      operator tunes in mid-image where there's no phasing tone).
+//      After every emitted row we cross-correlate against the previous
+//      row at integer shifts in ±TRACK_SEARCH pixels, refine the peak
+//      to sub-pixel via a 3-point parabolic fit, and run the residual
+//      through a small-gain integrator on `samplesPerPix`. A confidence
+//      gate (best SSD must be visibly better than the median SSD) keeps
+//      noisy / featureless rows from kicking the loop. Large integer
+//      residuals (>2 px) are also dumped into `pxSkip` so the loop
+//      doesn't have to converge purely through rate-only corrections.
+//
+// The combination handles tune-during-prelude (instant lock from A) and
+// tune-mid-image (gradual lock from B alone).
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <climits>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+constexpr int    SAMPLE_RATE       = 12000;
+constexpr int    IMG_WIDTH         = 1809;            // IOC 576
+constexpr int    ROWS_PER_IMG      = 1200;            // ~10 minutes at 120 LPM
+constexpr int    LPM               = 120;
+constexpr int    IOC               = 576;
+constexpr double CENTER_HZ         = 1900.0;
+constexpr double WHITE_HZ          = 1500.0;
+constexpr double BLACK_HZ          = 2300.0;
+constexpr double LP_CUTOFF_HZ      = 600.0;
+constexpr double SAMPLES_PER_LINE_BASE = double(SAMPLE_RATE) * 60.0 / double(LPM);  // 6000
+
+// Phasing detection.
+constexpr int    PHASE_PULSE_WIDTH    = 90;
+constexpr int    PHASE_MIN_LOCK_ROWS  = 6;
+constexpr int    PHASE_RESET_NON_RUN  = 3;
+constexpr int    PHASE_WHITE_THRESH   = 200;
+constexpr int    PHASE_BLACK_THRESH   = 80;
+
+// Continuous correlation tracker.
+constexpr int    TRACK_SEARCH         = 20;     // ±N pixel correlation window
+constexpr double TRACK_GAIN           = 0.10;   // proportional integrator gain
+constexpr double TRACK_CONF_MIN       = 0.10;   // best SSD must be ≥ this fraction below median
+constexpr int    TRACK_HARD_SKIP_PX   = 2;      // |residual| above this ⇒ also dump into pxSkip
+constexpr double TRACK_RATE_CLAMP     = 0.005;  // ±0.5% per-row clamp on samplesPerPix change
+
+const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string base64(const uint8_t* p, size_t n) {
+  std::string out;
+  out.reserve((n + 2) / 3 * 4);
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t v = uint32_t(p[i]) << 16
+               | (i + 1 < n ? uint32_t(p[i + 1]) << 8 : 0)
+               | (i + 2 < n ? uint32_t(p[i + 2])      : 0);
+    out += B64[(v >> 18) & 63];
+    out += B64[(v >> 12) & 63];
+    out += i + 1 < n ? B64[(v >> 6) & 63] : '=';
+    out += i + 2 < n ? B64[v        & 63] : '=';
+  }
+  return out;
+}
+
+void emit(const std::string& line) {
+  fwrite(line.data(), 1, line.size(), stdout);
+  fputc('\n', stdout);
+  fflush(stdout);
+}
+
+void emit_image_start() {
+  std::string s = "{\"t\":\"image-start\",\"width\":";
+  s += std::to_string(IMG_WIDTH);
+  s += ",\"lpm\":" + std::to_string(LPM);
+  s += ",\"ioc\":" + std::to_string(IOC) + "}";
+  emit(s);
+}
+
+void emit_row(int seq, const uint8_t* row) {
+  std::string s = "{\"t\":\"row\",\"seq\":";
+  s += std::to_string(seq);
+  s += ",\"data\":\"";
+  s += base64(row, IMG_WIDTH);
+  s += "\"}";
+  emit(s);
+}
+
+int detect_phasing(const uint8_t* row, int W) {
+  long long rowSum = 0;
+  for (int x = 0; x < W; x++) rowSum += row[x];
+  if (rowSum / W > PHASE_BLACK_THRESH) return -1;
+
+  long long winSum = 0;
+  for (int x = 0; x < PHASE_PULSE_WIDTH; x++) winSum += row[x];
+  long long bestSum = winSum;
+  int bestStart = 0;
+  for (int x = 1; x < W; x++) {
+    winSum += row[(x + PHASE_PULSE_WIDTH - 1) % W];
+    winSum -= row[(x - 1) % W];
+    if (winSum > bestSum) { bestSum = winSum; bestStart = x; }
+  }
+  if (bestSum / PHASE_PULSE_WIDTH < PHASE_WHITE_THRESH) return -1;
+  return (bestStart + PHASE_PULSE_WIDTH / 2) % W;
+}
+
+struct PhaseFit { int origin; double slope; };
+
+PhaseFit fit_phasing(const std::vector<std::pair<int,int>>& obs, int W) {
+  std::vector<double> xs, ys;
+  xs.reserve(obs.size()); ys.reserve(obs.size());
+  double prev = obs[0].second;
+  for (size_t i = 0; i < obs.size(); i++) {
+    double y = obs[i].second;
+    while (y - prev >  W / 2.0) y -= W;
+    while (y - prev < -W / 2.0) y += W;
+    xs.push_back(obs[i].first);
+    ys.push_back(y);
+    prev = y;
+  }
+  std::vector<int> sortedY;
+  sortedY.reserve(obs.size());
+  for (auto& p : obs) sortedY.push_back(p.second);
+  std::sort(sortedY.begin(), sortedY.end());
+  int origin = sortedY[sortedY.size() / 2];
+  const int N = int(xs.size());
+  double sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+  for (int i = 0; i < N; i++) { sumX += xs[i]; sumY += ys[i]; sumXY += xs[i]*ys[i]; sumXX += xs[i]*xs[i]; }
+  double denom = N * sumXX - sumX * sumX;
+  double slope = denom != 0 ? (N * sumXY - sumX * sumY) / denom : 0.0;
+  return { origin, slope };
+}
+
+/** Continuous correlation tracker.
+ *  Cross-correlates `row` against `prev` at integer shifts in
+ *  [-TRACK_SEARCH..+TRACK_SEARCH], refines to sub-pixel via parabolic
+ *  interpolation around the peak, and returns:
+ *    - subPxShift  : sub-pixel residual drift in our-pixels per row
+ *    - confidence  : (medianSSD - bestSSD) / medianSSD, clamped 0..1
+ *  Caller is expected to gate on confidence.
+ */
+struct TrackResult { double subPxShift; double confidence; };
+
+TrackResult track_drift(const uint8_t* prev, const uint8_t* row, int W) {
+  long long ssd[2 * TRACK_SEARCH + 1];
+  long long bestSSD = LLONG_MAX;
+  int       bestS   = 0;
+  for (int s = -TRACK_SEARCH; s <= TRACK_SEARCH; s++) {
+    long long sum = 0;
+    // Sub-sample every 2 px for speed; quality is plenty.
+    for (int x = 0; x < W; x += 2) {
+      const int xs = ((x + s) % W + W) % W;
+      const int d  = int(prev[x]) - int(row[xs]);
+      sum += d * d;
+    }
+    ssd[s + TRACK_SEARCH] = sum;
+    if (sum < bestSSD) { bestSSD = sum; bestS = s; }
+  }
+  // Sub-pixel refinement via 3-point parabola around the integer peak.
+  double subPx = double(bestS);
+  if (bestS > -TRACK_SEARCH && bestS < TRACK_SEARCH) {
+    const long long ym = ssd[bestS + TRACK_SEARCH - 1];
+    const long long y0 = ssd[bestS + TRACK_SEARCH];
+    const long long yp = ssd[bestS + TRACK_SEARCH + 1];
+    const long long denom = ym - 2 * y0 + yp;
+    if (denom != 0) {
+      subPx = double(bestS) + double(ym - yp) / (2.0 * double(denom));
+    }
+  }
+  // Confidence from how much better the best SSD is than the median.
+  long long sortedSSD[2 * TRACK_SEARCH + 1];
+  std::memcpy(sortedSSD, ssd, sizeof(ssd));
+  std::sort(sortedSSD, sortedSSD + 2 * TRACK_SEARCH + 1);
+  const long long medSSD = sortedSSD[TRACK_SEARCH];
+  double conf = 0.0;
+  if (medSSD > 0) {
+    conf = double(medSSD - bestSSD) / double(medSSD);
+    if (conf < 0) conf = 0;
+    if (conf > 1) conf = 1;
+  }
+  return { subPx, conf };
+}
+
+}  // namespace
+
+int main() {
+  emit("{\"t\":\"status\",\"msg\":\"wefax decoder ready (FM demod, 120 LPM, phasing-lock + correlation tracker)\"}");
+  emit_image_start();
+
+  // Mixer phase + LP state.
+  const double mixerW   = 2.0 * M_PI * CENTER_HZ / double(SAMPLE_RATE);
+  const double lpAlpha  = 1.0 - std::exp(-2.0 * M_PI * LP_CUTOFF_HZ / double(SAMPLE_RATE));
+  double mixerPh = 0.0;
+  double iLp = 0.0, qLp = 0.0;
+  double iPrev = 0.0, qPrev = 0.0;
+
+  const double freqRange = BLACK_HZ - WHITE_HZ;
+
+  // Pixel & row accumulator.
+  uint8_t row[IMG_WIDTH];
+  std::memset(row, 0, sizeof(row));
+  int    pxIdx     = 0;
+  double pxPhase   = 0.0;
+  double pxAccum   = 0.0;
+  int    pxAccumN  = 0;
+  int    rowSeq    = 0;
+  int    imgRows   = 0;
+  int    pxSkip    = 0;
+
+  // Mutable line clock — adjusted by both lockers.
+  double samplesPerPix = SAMPLES_PER_LINE_BASE / double(IMG_WIDTH);
+
+  // Phasing detector state.
+  std::vector<std::pair<int,int>> phasingObs;
+  int  consecutiveNonPhasing = 0;
+  bool phasingLocked = false;
+
+  // Continuous correlation tracker state.
+  uint8_t prevRow[IMG_WIDTH];
+  bool    prevRowValid = false;
+
+  // Read & process raw 12 kHz int16 PCM from stdin.
+  static int16_t inBuf[2048];
+  for (;;) {
+    size_t n = fread(inBuf, sizeof(int16_t), sizeof(inBuf) / sizeof(int16_t), stdin);
+    if (n == 0) {
+      if (feof(stdin)) break;
+      continue;
+    }
+    for (size_t k = 0; k < n; ++k) {
+      const double x = double(inBuf[k]) / 32768.0;
+
+      const double c = std::cos(mixerPh);
+      const double s = std::sin(mixerPh);
+      mixerPh += mixerW;
+      if (mixerPh > 2.0 * M_PI) mixerPh -= 2.0 * M_PI;
+
+      const double iRaw =  x * c;
+      const double qRaw = -x * s;
+      iLp += lpAlpha * (iRaw - iLp);
+      qLp += lpAlpha * (qRaw - qLp);
+
+      double freqOffsetHz = 0.0;
+      const double mag2 = iLp * iLp + qLp * qLp;
+      if (mag2 > 1e-12) {
+        const double dPhi = (iLp * qPrev - qLp * iPrev) / mag2;
+        freqOffsetHz = dPhi * double(SAMPLE_RATE) / (2.0 * M_PI);
+      }
+      iPrev = iLp;
+      qPrev = qLp;
+
+      const double audioHz = CENTER_HZ + freqOffsetHz;
+      double t = (BLACK_HZ - audioHz) / freqRange;
+      if (t < 0.0) t = 0.0;
+      if (t > 1.0) t = 1.0;
+      const double g = t * 255.0;
+
+      pxAccum  += g;
+      pxAccumN += 1;
+      pxPhase  += 1.0 / samplesPerPix;
+      while (pxPhase >= 1.0) {
+        pxPhase -= 1.0;
+        const uint8_t v = uint8_t(std::lround(pxAccum / std::max(1, pxAccumN)));
+        pxAccum = 0.0;
+        pxAccumN = 0;
+
+        if (pxSkip > 0) { pxSkip--; continue; }
+        if (pxSkip < 0) {
+          // Negative skip = need to back up; emulate by writing the same
+          // pixel twice (a one-pixel duplicate is invisible at this
+          // resolution) and decrementing toward zero.
+          row[pxIdx] = v;
+          pxSkip++;
+        }
+
+        row[pxIdx++] = v;
+        if (pxIdx < IMG_WIDTH) continue;
+
+        emit_row(rowSeq, row);
+
+        // ── Phasing-tone lock (cold start) ────────────────────────────
+        if (!phasingLocked) {
+          int pc = detect_phasing(row, IMG_WIDTH);
+          if (pc < 0) {
+            if (++consecutiveNonPhasing >= PHASE_RESET_NON_RUN) phasingObs.clear();
+          } else {
+            consecutiveNonPhasing = 0;
+            phasingObs.push_back({rowSeq, pc});
+            if (int(phasingObs.size()) >= PHASE_MIN_LOCK_ROWS) {
+              auto fit = fit_phasing(phasingObs, IMG_WIDTH);
+              const double oldSpp = samplesPerPix;
+              samplesPerPix *= (1.0 + fit.slope / double(IMG_WIDTH));
+              pxSkip = fit.origin;
+              phasingLocked = true;
+              std::string ev = "{\"t\":\"align\",\"originPx\":";
+              ev += std::to_string(fit.origin);
+              ev += ",\"driftPxPerRow\":";
+              char buf[64]; std::snprintf(buf, sizeof(buf), "%.4f", fit.slope); ev += buf;
+              ev += ",\"oldSpp\":";  std::snprintf(buf, sizeof(buf), "%.4f", oldSpp);        ev += buf;
+              ev += ",\"newSpp\":";  std::snprintf(buf, sizeof(buf), "%.4f", samplesPerPix); ev += buf;
+              ev += ",\"locked\":true,\"src\":\"phasing\"}";
+              emit(ev);
+            }
+          }
+        }
+
+        // ── Continuous correlation tracker ────────────────────────────
+        // Always runs (including after phasing lock) so any residual
+        // clock drift is corrected continuously. The phasing lock is
+        // really just a fast initial estimate; the tracker is what keeps
+        // the image straight indefinitely.
+        if (prevRowValid) {
+          TrackResult tr = track_drift(prevRow, row, IMG_WIDTH);
+          if (tr.confidence > TRACK_CONF_MIN) {
+            // Apply rate correction (clamped per-row to keep the loop
+            // stable in the presence of noisy single-row outliers).
+            double rateDelta = -tr.subPxShift / double(IMG_WIDTH) * TRACK_GAIN;
+            if (rateDelta >  TRACK_RATE_CLAMP) rateDelta =  TRACK_RATE_CLAMP;
+            if (rateDelta < -TRACK_RATE_CLAMP) rateDelta = -TRACK_RATE_CLAMP;
+            samplesPerPix *= (1.0 + rateDelta);
+            // Large integer residual → also dump it into pxSkip so the
+            // image isn't left waiting for the integrator to converge.
+            if (std::abs(tr.subPxShift) > TRACK_HARD_SKIP_PX) {
+              pxSkip += int(std::lround(tr.subPxShift));
+            }
+          }
+        }
+        std::memcpy(prevRow, row, IMG_WIDTH);
+        prevRowValid = true;
+
+        rowSeq++;
+        pxIdx = 0;
+        if (++imgRows >= ROWS_PER_IMG) {
+          emit(std::string("{\"t\":\"image-end\",\"height\":") + std::to_string(imgRows) + "}");
+          imgRows = 0;
+          rowSeq = 0;
+          pxSkip = 0;
+          phasingObs.clear();
+          consecutiveNonPhasing = 0;
+          phasingLocked = false;
+          prevRowValid = false;
+          samplesPerPix = SAMPLES_PER_LINE_BASE / double(IMG_WIDTH);
+          emit_image_start();
+        }
+      }
+    }
+  }
+  return 0;
+}

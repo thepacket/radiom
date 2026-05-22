@@ -1,0 +1,41 @@
+{
+  "name": "radiom",
+  "private": true,
+  "version": "0.3.726",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:http": "RADIOM_HTTP=1 vite --port 5174 --strictPort",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "start": "node server.mjs",
+    "build:ft8": "bash decoders/ft8/build.sh",
+    "build:olivia": "bash decoders/olivia/build.sh",
+    "build:wefax": "bash decoders/wefax/build.sh",
+    "build:cw": "bash decoders/cw/build.sh",
+    "build:navtex": "bash decoders/navtex/build.sh",
+    "build:ale-2g": "bash decoders/ale-2g/build.sh",
+    "build:hfdl": "bash decoders/hfdl/build.sh",
+    "build:js8": "bash decoders/js8/build.sh",
+    "build:fst4": "bash decoders/fst4/build.sh",
+    "build:jt9": "bash decoders/jt9/build.sh",
+    "build:sstv": "bash decoders/sstv/build.sh",
+    "build:freedv": "bash decoders/freedv/build.sh",
+    "build:throb": "bash decoders/throb-fldigi/build.sh",
+    "build:selcal": "bash decoders/multimon/build.sh"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
+    "@types/http-proxy": "^1.17.17",
+    "@types/ws": "^8.18.1",
+    "http-proxy": "^1.18.1",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vite-plugin-mkcert": "^2.0.0",
+    "vite-plugin-pwa": "^0.20.0"
+  }
+}

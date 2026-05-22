@@ -1,0 +1,1893 @@
+:root {
+  --bg: #0d0d0d;
+  --panel: #1a1a1a;
+  --panel-2: #222;
+  --fg: #e8e8e8;
+  --muted: #9a9a9a;
+  --accent: #c0392b;
+  --led-bg: #e9a83a;
+  --led-fg: #000;
+  --border: #2a2a2a;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  height: 100%; overflow: hidden;
+  user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  /* Cap at the *small* viewport height so the bottom keypad row stays
+   * inside the visible area even when standalone-mode browser UI
+   * (Android gesture-bar, iOS home-indicator) overlays the page. svh
+   * is always ≤ dvh ≤ lvh, so this is the conservative choice — we
+   * lose a few pixels of waterfall in exchange for never truncating
+   * REC/PLAY/SCRIBE/FROM/TO. */
+  height: 100svh;
+  display: flex; flex-direction: column;
+  /* viewport-fit=cover (set in index.html) lets us pad by the system
+   * insets — Android Chrome reports a non-zero bottom inset for the
+   * gesture-nav strip when display=standalone; iOS reports the
+   * home-indicator strip. Left/right covers notch / dynamic-island
+   * in landscape. */
+  padding-left:   env(safe-area-inset-left);
+  padding-right:  env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+}
+
+/* ─── Topbar ─── */
+.topbar {
+  display: flex; gap: 8px; padding: 8px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.topbar button {
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px;
+  height: 40px; width: 48px; font-size: 18px;
+}
+.topbar .server {
+  flex: 1; min-width: 0;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px;
+  height: 40px; padding: 0 12px;
+  text-align: center; font-size: 14px; cursor: pointer;
+}
+.topbar .power { color: var(--accent); border-color: var(--accent); }
+.topbar .menu.installable {
+  border-color: #2ecc71;
+  color: #2ecc71;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(46, 204, 113, 0); }
+  50%      { box-shadow: 0 0 8px rgba(46, 204, 113, 0.6); }
+}
+
+main {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+main > * { flex-shrink: 0; }
+
+/* ─── FFT canvas ─── */
+.fft-wrap {
+  margin: 4px 8px;
+  border: 1px solid #555;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  /* min-height lowered from 60 → 40 so phones with aggressive Safari
+   * chrome (URL bar + tab bar = ~100 px eaten from dvh) can still fit
+   * every fixed row of the audio chain without clipping the bottom. */
+  flex: 1 1 0; min-height: 40px;
+  display: flex;
+  position: relative;   /* for the absolute banner */
+  box-shadow: 0 0 4px rgba(120, 120, 120, 0.18);
+}
+.fft {
+  display: block; width: 100%;
+  flex: 1; min-height: 0;
+  background: #000; image-rendering: pixelated;
+  touch-action: none;
+}
+
+/* ─── Function row ─── */
+.fnrow {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 4px; padding: 4px 6px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.fnbtn, .kpbtn {
+  background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 60%, #161616 100%);
+  color: var(--fg);
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    inset 0 -1px 0 rgba(0,0,0,0.4),
+    0 1px 0 rgba(0,0,0,0.5);
+  transition: filter 80ms ease, box-shadow 80ms ease;
+}
+.fnbtn:active, .kpbtn:active { filter: brightness(0.7); transform: translateY(1px); }
+.fnbtn { height: 27px; font-size: 12px; font-weight: 500; }
+.fnbtn[data-bw], #btnFilters { height: 17px; font-size: 11px; }
+.fnrow-half .fnbtn { height: 17px; font-size: 11px; }
+.fnrow.fnrow-half-7 { grid-template-columns: repeat(7, 1fr); }
+.fnrow.fnrow-half-8 { grid-template-columns: repeat(9, 1fr); }
+.fnrow.fnrow-half-9 { grid-template-columns: repeat(10, 1fr); }
+.fnrow.fnrow-half-10 { grid-template-columns: repeat(11, 1fr); }
+.fnrow.fnrow-half-11 { grid-template-columns: repeat(12, 1fr); }
+.fnrow.fnrow-half-12 { grid-template-columns: repeat(13, 1fr); }
+.fnbtn.fnbtn-half { height: 17px; font-size: 11px; }
+#btnTranscribe, #btnLangFrom, #btnLangTo, #btnRec, #btnRecordings, .fnrow-8 .fnbtn[data-mode="drm"] { height: 22px; font-size: 11px; }
+.fnrow.fnrow-7 { grid-template-columns: repeat(7, 1fr); }
+.fnrow.fnrow-8 { grid-template-columns: repeat(9, 1fr); }
+.fnrow.fnrow-9 { grid-template-columns: repeat(9, 1fr); }
+.fnbtn.active, .kpbtn.active {
+  border-color: var(--led-bg);
+  color: var(--led-bg);
+}
+
+/* ─── LED display ─── */
+.led {
+  background:
+    radial-gradient(ellipse at 30% 20%, #f3c466 0%, #e9a83a 60%, #b27e21 100%);
+  color: var(--led-fg);
+  margin: 6px 8px; border-radius: 10px; padding: 6px 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 700;
+  box-shadow:
+    inset 0 2px 4px rgba(0,0,0,0.25),
+    inset 0 -1px 2px rgba(0,0,0,0.15),
+    0 1px 2px rgba(0,0,0,0.6);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.15);
+}
+.led-status {
+  display: flex; gap: 10px; align-items: center;
+  font-size: 11px; font-weight: 700;
+}
+.led-dot { width: 9px; height: 9px; border-radius: 50%; background: #2ecc71; }
+
+.conn-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #555;
+  flex-shrink: 0;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+.conn-dot[data-state="connecting"] {
+  background: #e9a83a;
+  animation: conn-blink 1s ease-in-out infinite;
+  box-shadow: 0 0 6px rgba(233,168,58,0.8);
+}
+.conn-dot[data-state="on"] {
+  background: #2ecc71;
+  box-shadow: 0 0 8px rgba(46,204,113,0.85);
+}
+@keyframes conn-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.led-meter { margin-left: auto; letter-spacing: -1px; font-size: 11px; }
+.led-freq-row {
+  position: relative;
+  margin: 2px 0;
+}
+.led-utc {
+  position: absolute;
+  right: 0; top: 50%;
+  transform: translateY(-50%);
+  font-family: "DSEG7 Modern", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 15px; font-weight: 700;
+  letter-spacing: 1px;
+  text-align: right;
+  opacity: 0.85;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+.led-freq {
+  font-size: 34px; font-weight: 700; letter-spacing: 2px;
+  text-align: left;
+  font-family: "DSEG7 Modern", ui-monospace, "SF Mono", Menlo, monospace;
+}
+.led-freq small { font-size: 12px; font-weight: 700; vertical-align: middle; }
+.led-sub {
+  display: flex; justify-content: space-between;
+  font-size: 11px; font-weight: 700;
+}
+.led-users:empty { display: none; }
+.led-stats {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.2px;
+  margin-top: 2px;
+  opacity: 0.85;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.led-stats:empty { display: none; }
+.led-diag {
+  margin-top: 3px;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.2px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(192, 57, 43, 0.18);
+  border: 1px solid rgba(192, 57, 43, 0.6);
+  color: #5a1a10;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.led-diag.info {
+  background: rgba(46, 204, 113, 0.18);
+  border-color: rgba(46, 204, 113, 0.55);
+  color: #14391f;
+}
+.led-diag.warn {
+  background: rgba(243, 156, 18, 0.22);
+  border-color: rgba(243, 156, 18, 0.7);
+  color: #5a3a08;
+}
+.led-diag:empty { display: none; }
+
+/* ─── Knobs ─── */
+.knobs {
+  display: grid; grid-template-columns: repeat(8, 1fr) auto auto auto;
+  gap: 2px; padding: 2px 4px 6px;
+  align-items: end;
+}
+.knob-mini {
+  height: 18px; align-self: end;
+  font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  background: #1f1f1f; color: #cfcfcf;
+  border: 1px solid #3a3a3a; border-radius: 3px;
+  padding: 0 4px; cursor: pointer;
+  margin-bottom: 2px;
+}
+.knob-mini:active { filter: brightness(0.7); transform: translateY(1px); }
+.knob-mini.active { background: #2a4a1f; color: #d8ff90; border-color: #4f7f3f; }
+.knob {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px; touch-action: none;
+}
+.knob-label { font-size: 9px; color: var(--muted); }
+.knob-dial {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #3a3a3a, #181818);
+  position: relative; cursor: ns-resize;
+  border: 1px solid var(--border);
+}
+.knob-line {
+  position: absolute; left: 50%; bottom: 50%;
+  width: 1px; height: 9px; background: #e8e8e8;
+  transform-origin: 50% 100%;
+  margin-left: -0.5px;
+  transform: rotate(-135deg);
+}
+/* ─── Spectrum wrapper (FFT + waterfall) — anchor for transcript overlay ─── */
+.spectrum-wrap {
+  position: relative;
+  flex: 1 1 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+
+/* ─── Audio FFT overlay (Settings → AUDIO FFT) ─── */
+.audio-fft {
+  flex: 1 1 0; min-height: 60px;
+  margin: 4px 8px;
+  border: 1px solid #555;
+  border-radius: 10px;
+  background: #000;
+  display: block;
+  width: calc(100% - 16px);
+  touch-action: none;
+}
+.audio-fft-ext-btn {
+  position: absolute;
+  top: 8px; left: 14px;
+  z-index: 6;
+  height: 22px; padding: 0 8px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  color: #cfffa3;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+}
+.audio-fft-ext-btn.active { background: #2a4d1a; color: #cfffa3; }
+
+/* AUTO — one-shot histogram-optimize button. Same look-and-feel as
+ * the ext button but placed next to it. */
+.audio-fft-auto-btn {
+  position: absolute;
+  top: 8px; left: 60px;
+  z-index: 6;
+  height: 22px; padding: 0 8px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  color: #cfffa3;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+}
+.audio-fft-auto-btn:active { background: #2a4d1a; }
+.audio-fft-auto-btn.active { background: #2a4d1a; color: #cfffa3; }
+
+/* When ext mode is active, hide every row in main except .spectrum-wrap and
+ * the bottom-most .fnrow (digital mode row). All freed space goes to
+ * .spectrum-wrap, expanding the audio FFT to nearly the full screen height. */
+body.audio-fft-ext main > .freq-row,
+body.audio-fft-ext main > .knobs,
+body.audio-fft-ext main > .keypad,
+body.audio-fft-ext main > .fnrow:not(:last-of-type) { display: none; }
+
+/* IQ-VIEW ext: same idea — hide every row in main except .spectrum-wrap
+ * and the bottom-most fnrow, so the IQ constellation grows to almost
+ * full screen height while keeping its 1:1 aspect ratio. */
+body.iq-view-ext main > .freq-row,
+body.iq-view-ext main > .knobs,
+body.iq-view-ext main > .keypad,
+body.iq-view-ext main > .fnrow:not(:last-of-type) { display: none; }
+
+/* ACON ext — same near-fullscreen treatment as IQV ext, so the audio
+ * constellation panel grows to almost the full height of the page. */
+body.acon-ext main > .freq-row,
+body.acon-ext main > .knobs,
+body.acon-ext main > .keypad,
+body.acon-ext main > .fnrow:not(:last-of-type) { display: none; }
+
+.audio-fft-contrast {
+  position: absolute;
+  top: 8px; right: 14px;
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(255,255,255,0.15);
+  padding: 2px 6px;
+  border-radius: 6px;
+  z-index: 6;
+  pointer-events: auto;
+  color: #cfffa3;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+}
+.audio-fft-contrast .transcript-btn {
+  font-size: 13px;
+  padding: 0 7px;
+  line-height: 1.4;
+}
+
+.audio-fft-label {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.85);
+  color: #ffeb3b;
+  font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 6;
+  white-space: nowrap;
+}
+.audio-fft-label-lo,
+.audio-fft-label-hi {
+  pointer-events: auto;
+  cursor: pointer;
+  background: rgba(0,0,0,0.85);
+  color: #ffeb3b;
+  font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.25);
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  white-space: nowrap;
+  z-index: 7;
+}
+.audio-fft-label-lo:active,
+.audio-fft-label-hi:active { background: rgba(255,255,255,0.15); }
+.audio-fft-label-lo { left: 8px; transform: translateY(-50%); }
+.audio-fft-label-hi { left: auto; right: 14px; transform: translateY(-50%); }
+
+/* ─── WEFAX decoder panel ─── */
+.wefax-panel { padding: 0; overflow: hidden; }
+.wefax-canvas-wrap {
+  position: absolute;
+  inset: 28px 8px 8px 8px;
+  overflow: auto;
+  background: #000;
+  border: 1px solid #555;
+  border-radius: 6px;
+}
+/* Floating ext / clear / save controls pinned to the bottom-right of
+ * the canvas wrap. Translucent so the underlying image is still visible
+ * behind them. */
+.wefax-actions-overlay {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 6;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 3px 4px;
+  border-radius: 6px;
+}
+
+/* ext-mode: hide the bottom function rows (same as audio FFT's ext) and
+ * force the wefax canvas height to 2.083333× its rendered width. */
+body.wefax-ext main > .freq-row,
+body.wefax-ext main > .knobs,
+body.wefax-ext main > .keypad,
+body.wefax-ext main > .fnrow:not(:last-of-type) { display: none; }
+body.wefax-ext .wefax-canvas {
+  /* aspect-ratio: width / height = 1 / 2.083333 ≈ 0.48 */
+  aspect-ratio: 1 / 2.083333;
+  height: auto;
+  object-fit: contain;
+}
+
+.wefax-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  background: #000;
+}
+.fax-scan-bars {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+  background: rgba(0, 0, 0, 0.5);
+  /* Above the FFT cursor (z:5) so the 50%-opaque overlay dims it too. */
+  z-index: 6;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* ─── FT8 / FT4 decode panel ─── */
+.ft8-panel {
+  position: absolute;
+  inset: 0;
+  margin: 4px 8px;
+  background: #000;
+  border: 1px solid #555;
+  border-radius: 10px;
+  padding: 8px 12px;
+  z-index: 5;
+  display: flex; flex-direction: column; gap: 4px;
+  color: #cfffa3;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.ft8-status {
+  font-size: 11px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.ft8-actions {
+  position: absolute; top: 4px; right: 6px;
+  display: flex; gap: 4px;
+  z-index: 6;
+}
+.ft8-lines {
+  overflow-y: auto;
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ft8-header { color: var(--led-bg); font-size: 10px; margin-top: 4px; }
+.ft8-line { white-space: pre; }
+.cw-text { white-space: pre-wrap; word-break: break-word; }
+
+/* ─── SCOPE panel — trigger-level slider + readout ─── */
+.scope-level {
+  width: 120px; vertical-align: middle; accent-color: #cfffa3;
+}
+.scope-level-readout {
+  font-size: 11px; color: var(--muted); min-width: 36px; text-align: right;
+}
+#scopePanel .ft8-actions { gap: 6px; align-items: center; }
+
+/* WSPR panel: pin its copy/clear actions to the bottom-right corner so
+ * they don't compete with the long status line at the top. */
+#wsprPanel .ft8-actions { top: auto; bottom: 4px; }
+/* RFI panel: same bottom-right override — the long-running emitter
+ * list runs from the top down, so the copy button stays out of the way
+ * at the bottom. */
+#rfiPanel .ft8-actions { top: auto; bottom: 4px; }
+/* IQ View panel: pin its CLK/baud/ext controls to the bottom-right so the
+ * full canvas is unobstructed at the top. */
+#iqViewPanel .iq-view-actions { top: auto; bottom: 6px; right: 8px; }
+
+/* IQ-view CLK toggle + baud-rate selector. */
+.iq-clock-baud {
+  background: #111; color: var(--fg);
+  border: 1px solid #555; border-radius: 4px;
+  font-size: 10px; font-family: ui-monospace, monospace;
+  padding: 2px 4px;
+}
+#iqClockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
+/* ACON — audio-derived constellation panel. */
+#aconPanel .acon-actions { top: auto; bottom: 6px; right: 8px; display: flex; gap: 4px; align-items: center; }
+#aconLockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
+.acon-preset {
+  background: #111; color: var(--fg);
+  border: 1px solid #555; border-radius: 4px;
+  font-size: 10px; font-family: ui-monospace, monospace;
+  padding: 2px 4px;
+  max-width: 110px;
+}
+.acon-label { font-size: 10px; opacity: 0.7; font-family: ui-monospace, monospace; }
+.acon-input {
+  width: 56px;
+  background: #111; color: var(--fg);
+  border: 1px solid #555; border-radius: 4px;
+  font-size: 10px; font-family: ui-monospace, monospace;
+  padding: 2px 4px;
+}
+.acon-input::-webkit-inner-spin-button,
+.acon-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ─── AUTO classifier — slim bottom strip that doesn't cover the
+       spectrum/waterfall, so the operator can still tune while the
+       classifier runs in the background. ─── */
+.auto-panel {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 4px;
+  max-height: 96px;
+  background: rgba(0, 0, 0, 0.78);
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 4px 10px;
+  z-index: 5;
+  display: flex; flex-direction: column; gap: 2px;
+  color: #cfffa3;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.auto-panel .ft8-lines { max-height: 60px; font-size: 11px; line-height: 1.3; }
+
+/* ─── Live transcription panel — opaque overlay covering FFT + waterfall ─── */
+.transcript {
+  position: absolute;
+  inset: 0;
+  margin: 4px 8px;
+  background: #000;
+  border: 1px solid #555;
+  border-radius: 10px;
+  padding: 8px 12px;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #fff;
+  display: flex; flex-direction: column; gap: 4px;
+  /* Above the waterfall cursor (z-index 5) so the red tuning line
+   * doesn't bleed through the panel. */
+  z-index: 6;
+}
+.transcript-status {
+  font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.transcript-actions {
+  position: absolute; top: 4px; right: 6px;
+  display: flex; gap: 4px;
+  pointer-events: auto;
+  z-index: 5;
+}
+.transcript-btn {
+  font: inherit;
+  font-size: 10px; line-height: 1;
+  padding: 3px 6px;
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.transcript-btn:active { background: rgba(255,255,255,0.18); }
+.cw-param {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: #cfffa3;
+  margin-left: 4px;
+}
+.cw-param input {
+  width: 52px;
+  font: inherit;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px;
+  padding: 2px 4px;
+  appearance: textfield; -moz-appearance: textfield;
+}
+.cw-param input::-webkit-outer-spin-button,
+.cw-param input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.transcript-lines {
+  overflow-y: auto;
+  flex: 1;
+}
+.transcript-line {
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.transcript-line:last-child { color: #fff; font-weight: 500; }
+.transcript-line.transcript-error { color: #ff8a7a; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; }
+
+/* ─── FFT visible-range labels ─── */
+.fft-freq-label {
+  position: absolute; top: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px; line-height: 1;
+  color: rgba(255,255,255,0.75);
+  background: rgba(0,0,0,0.4);
+  padding: 2px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 3;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+.fft-freq-lo { left: 6px; }
+.fft-freq-hi { right: 6px; }
+
+/* Waterfall visible-range labels — same layout as the FFT labels but
+ * pinned inside the .wf-wrap and slightly translucent so they don't
+ * obscure the live spectrum below them. */
+.wf-freq-label {
+  position: absolute; top: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 16px; line-height: 1;
+  color: #fff;
+  background: rgba(0,0,0,0.4);
+  padding: 2px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0.8;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+.wf-freq-lo { left: 6px; }
+.wf-freq-hi { right: 6px; }
+
+.wf-tools {
+  position: absolute; bottom: 6px;
+  display: flex; gap: 4px; z-index: 3;
+}
+.wf-tools-l { left: 6px; }
+.wf-tools-r { right: 6px; }
+.wf-tools .knob-mini { margin-bottom: 0; }
+
+/* Off-screen tuning indicators — when the freq cursor would land
+ * outside the visible waterfall, a chevron pinned at the relevant
+ * edge shows the direction + distance. Tap to recenter. */
+.wf-chev {
+  position: absolute;
+  top: 50%; transform: translateY(-50%);
+  height: 36px; min-width: 60px;
+  padding: 0 10px;
+  background: rgba(240, 78, 58, 0.55);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+  z-index: 4;
+  opacity: 0.9;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.copy-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.copy-overlay-card {
+  background: #1f1f1f; color: #e0e0e0;
+  border: 1px solid #4a4a4a; border-radius: 6px;
+  max-width: 90vw; max-height: 80vh;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.copy-overlay-hint { font-size: 12px; opacity: 0.85; }
+.copy-overlay-text {
+  flex: 1; min-height: 200px; min-width: 60vw;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; line-height: 1.4;
+  background: #000; color: #cfffa3;
+  border: 1px solid #3a3a3a; border-radius: 3px;
+  padding: 6px;
+  resize: none;
+}
+.copy-overlay-close {
+  align-self: flex-end;
+  font-size: 12px; padding: 4px 12px;
+  background: #333; color: #e0e0e0;
+  border: 1px solid #555; border-radius: 3px;
+  cursor: pointer;
+}
+.no-data-label {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 14px; line-height: 1.2;
+  color: #ff9090;
+  background: rgba(0,0,0,0.7);
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 80, 80, 0.6);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+}
+.scan-label {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px; line-height: 1.2;
+  color: #ffe27a;
+  background: rgba(0,0,0,0.6);
+  padding: 6px 12px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 4;
+  white-space: nowrap;
+  max-width: 90%; overflow: hidden; text-overflow: ellipsis;
+}
+.kpbtn.active[data-cmd="scan"] { background: #2a4a1f; }
+.kpbtn.paused[data-cmd="scan"] { background: #4a3a1f; }
+.wf-chev-l { left: 4px; }
+.wf-chev-r { right: 4px; }
+.wf-chev:active { background: rgba(240, 78, 58, 0.85); }
+
+/* ─── Banner (transient status overlaid on the FFT) ─── */
+.fft-wrap { position: relative; }
+.banner {
+  position: absolute; left: 8px; right: 8px; top: 6px;
+  padding: 6px 12px;
+  background: rgba(192, 57, 43, 0.92);
+  color: #fff;
+  font-size: 12px; font-weight: 600;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 5;
+}
+.banner.show { opacity: 1; transform: translateY(0); }
+
+/* ─── Waterfall ─── */
+.wf-wrap {
+  position: relative;
+  flex: 1 1 0; min-height: 40px;
+  display: flex;
+  margin: 0 8px 4px;
+  border: 1px solid #555;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 4px rgba(120, 120, 120, 0.18);
+}
+
+/* Time-windowed averaged-FFT strip ("heatmap") — sits between FFT and
+ * waterfall. Hidden by default; the live FFT + waterfall already cover
+ * the same information and the strip eats vertical space. */
+.fft-avg-wrap {
+  display: none;
+  position: relative;
+  flex: 0 0 auto;
+  height: 18px;
+  margin: 0 8px 2px;
+  border: 1px solid #555;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+}
+.fft-avg {
+  display: block;
+  width: 100%; height: 100%;
+}
+.fft-avg-sel {
+  position: absolute;
+  right: 4px; top: 50%; transform: translateY(-50%);
+  height: 14px;
+  font: 600 9px ui-monospace, "SF Mono", Menlo, monospace;
+  background: rgba(0,0,0,0.7);
+  color: #cfffa3;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 3px;
+  padding: 0 2px;
+  z-index: 2;
+  appearance: none; -webkit-appearance: none;
+}
+.wf-wrap .wf { flex: 1; min-height: 0; }
+
+/* SCG / SCC busy state — button turns green from tap until the AI reply
+ * is received, so the user can see which provider is still working. */
+.fnbtn.busy {
+  background: #1f6b34;
+  color: #eaffea;
+  border-color: #2ecc71;
+}
+.fnbtn.busy:active { background: #29914a; }
+
+/* ─── FL / FR signal-edge cursors (dashed) ─── */
+.sig-marker {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 0;
+  border-left: 1px dashed;
+  pointer-events: none;
+  opacity: 1;
+  z-index: 6;
+}
+.sig-marker-l { border-color: #e74c3c; }
+.sig-marker::before,
+.sig-marker::after {
+  position: absolute;
+  left: 3px;
+  font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  color: inherit;
+  text-shadow: 0 0 2px rgba(0,0,0,0.9);
+}
+.sig-marker::before { top: 2px; }
+.sig-marker::after  { bottom: 2px; }
+.sig-marker-l::before, .sig-marker-l::after { content: "F2"; color: #e74c3c; }
+
+/* "Selected" state on the FL / F / FR buttons — the one that responds
+ * to waterfall touches. Distinct from the existing .active style so
+ * both states can coexist (a button can be visible-but-not-selected). */
+.fnbtn.selected {
+  background: #1f6b34;
+  color: #eaffea;
+  border-color: #2ecc71;
+}
+
+/* Top-centre "bw = X kHz" readout when both SL/SR markers are set. */
+.sig-bw-label {
+  position: absolute;
+  top: 4px;
+  left: 50%; transform: translateX(-50%);
+  font: 400 16px ui-monospace, "SF Mono", Menlo, monospace;
+  color: #fff;
+  background: rgba(0,0,0,0.4);
+  padding: 2px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 4;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+
+/* ─── SC — Gemini / ChatGPT reply ─── */
+
+.sig-overlay {
+  position: absolute;
+  left: 12px; right: 12px;
+  top: 12px;
+  max-height: calc(100% - 24px);
+  overflow: auto;                    /* both axes — horizontal scroll on long lines */
+  padding: 10px 14px;
+  background: rgba(20, 20, 25, 0.92);
+  color: #e8f7ff;
+  border: 1px solid #3f8fc4;
+  border-radius: 8px;
+  font: 500 13px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre;                  /* no wrapping — long lines scroll horizontally */
+  word-break: normal;
+  z-index: 8;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+  cursor: pointer;
+}
+.sig-overlay-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sig-overlay-copy {
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  background: #2a3a4a;
+  color: #cfffa3;
+  border: 1px solid #3f8fc4;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.sig-overlay-copy:active { background: #3f8fc4; color: #fff; }
+.sig-overlay-verdict { color: #fff; font-weight: 700; }
+.sig-overlay-close {
+  font: 700 16px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1;
+  background: #2a3a4a;
+  color: #e8f7ff;
+  border: 1px solid #3f8fc4;
+  border-radius: 4px;
+  padding: 1px 8px 3px;
+  cursor: pointer;
+}
+.sig-overlay-close:active { background: #c0392b; color: #fff; border-color: #c0392b; }
+.sig-overlay-markdown {
+  white-space: normal;
+  font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.sig-overlay-markdown h1,
+.sig-overlay-markdown h2,
+.sig-overlay-markdown h3 {
+  color: #cfffa3;
+  margin: 14px 0 6px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.sig-overlay-markdown h1 { font-size: 16px; border-bottom: 1px solid #3f8fc4; padding-bottom: 4px; }
+.sig-overlay-markdown h2 { font-size: 14px; color: #9be0ff; }
+.sig-overlay-markdown h3 { font-size: 13px; color: #9be0ff; }
+.sig-overlay-markdown p { margin: 6px 0; color: #e8f7ff; }
+.sig-overlay-markdown blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid #3f8fc4;
+  background: rgba(63, 143, 196, 0.08);
+  color: #cfe8f7;
+}
+.sig-overlay-markdown pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(63, 143, 196, 0.3);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.sig-overlay-markdown pre code,
+.sig-overlay-markdown code {
+  font: 500 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  color: #d6f5ff;
+  white-space: pre;
+}
+.sig-overlay-markdown :not(pre) > code {
+  padding: 1px 4px;
+  background: rgba(63, 143, 196, 0.18);
+  border-radius: 3px;
+}
+.sig-overlay-markdown strong { color: #fff; }
+.sig-overlay-markdown em { color: #cfe8f7; font-style: italic; }
+.wf {
+  display: block; width: 100%;
+  background: #000; image-rendering: pixelated;
+  touch-action: none;  /* let pointermove fire continuously during drag */
+}
+/* On-waterfall pan buttons (mid-height, edge-pinned). */
+.wf-pan {
+  position: absolute;
+  top: 50%; transform: translateY(-50%);
+  width: 28px; height: 36px;
+  padding: 0;
+  background: rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  color: #e8e8e8;
+  font-size: 18px; font-weight: 600;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 4;
+  opacity: 0.6;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.wf-pan-l { left: 4px; }
+.wf-pan-r { right: 4px; }
+.wf-pan:active { background: rgba(0,0,0,0.7); }
+
+/* Pitch bar — overlay on the audio spectrum. +/− move the existing yellow
+   horizontal cursor (audioFftCursorHz) by 1 Hz; "set" commits its current
+   value to audio_freq_cursor. */
+.pitch-bar {
+  position: absolute;
+  bottom: 8px; right: 14px;
+  display: flex; gap: 4px;
+  z-index: 6;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(255,255,255,0.15);
+  padding: 2px 6px;
+  border-radius: 6px;
+  pointer-events: auto;
+}
+.pitch-btn {
+  height: 22px; min-width: 26px; padding: 0 6px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 4px;
+  color: #cfffa3;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+}
+.pitch-btn:active { background: rgba(255,255,255,0.1); }
+
+.wf-cursor {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 0;
+  border-left: 1px dashed #ffffff;
+  pointer-events: none;
+  transform: translateX(-1px);   /* center the line on its position */
+  display: none;                 /* shown via JS when in view */
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.6));
+  opacity: 1;
+  z-index: 5;
+}
+/* "F" labels — one at the top of the wfCursor line and a matching
+ * one at the bottom so the operator can see the cursor identity from
+ * either edge of the waterfall. */
+#wfCursor::before,
+#wfCursor::after {
+  content: "F";
+  position: absolute;
+  left: 3px;
+  font: 600 10px ui-monospace, "SF Mono", Menlo, monospace;
+  color: #ffffff;
+  text-shadow: 0 0 2px rgba(0,0,0,0.9);
+}
+#wfCursor::before { top: 2px; }
+#wfCursor::after  { bottom: 2px; }
+
+/* ─── Keypad ─── */
+.keypad {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 5px 6px; background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+/* Page-specific buttons — slots 4..6 of each kprow (numbers + SET on
+ * page 1, decoder buttons on pages 2..4). Dim yellow text marks them
+ * as "page content" distinct from the fixed mode columns (1-3, white)
+ * and the PAGE/BAND/BW/DEL system controls (col 7). */
+.kprow:not(.freq-row) > .kpbtn:nth-child(n+4):nth-child(-n+6) {
+  color: var(--led-bg);
+}
+/* Buttons that share the same "page content" role as the n+3..n+5
+ * cluster but live in different DOM positions because of hidden
+ * siblings (WUSB/WLSB pushed ZOOM out of the colorable range). */
+#btnDlds, #btnKurt { color: var(--led-bg); }
+/* ZOOM moved to the bottom fnrow info-tool group — neutral white when
+ * idle, amber LED when its panel is active. */
+#btnZoom { color: #fff; }
+#btnZoom.active { color: var(--led-bg); }
+
+/* AI panel — allow both axes to scroll so wide markdown tables and
+ * long code lines stay readable. cw-text's word-break is overridden
+ * inside markdown so tables don't collapse on narrow viewports. */
+#aiPanel #aiText { overflow: auto; }
+#aiPanel .ai-markdown { word-break: normal; }
+#aiPanel .ai-markdown table,
+#aiPanel .ai-markdown pre { max-width: none; }
+
+/* AI panel — separators and markdown report blocks. */
+#aiPanel .ai-separator {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; color: #888;
+  padding: 4px 6px;
+}
+#aiPanel .ai-markdown {
+  font-size: 12px; line-height: 1.45; color: #ddd;
+  padding: 2px 8px 6px;
+}
+#aiPanel .ai-markdown h1,
+#aiPanel .ai-markdown h2,
+#aiPanel .ai-markdown h3,
+#aiPanel .ai-markdown h4 {
+  color: var(--led-bg); margin: 8px 0 4px;
+  font-size: 13px;
+}
+#aiPanel .ai-markdown h1 { font-size: 15px; }
+#aiPanel .ai-markdown h2 { font-size: 14px; }
+#aiPanel .ai-markdown p { margin: 4px 0; }
+#aiPanel .ai-markdown ul,
+#aiPanel .ai-markdown ol { margin: 4px 0 4px 18px; padding: 0; }
+#aiPanel .ai-markdown li { margin: 2px 0; }
+#aiPanel .ai-markdown strong { color: #fff; }
+#aiPanel .ai-markdown em { color: #cfc; }
+#aiPanel .ai-markdown code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  background: #0a0a0a; padding: 0 4px; border-radius: 2px;
+  color: #cfffa3;
+}
+#aiPanel .ai-markdown pre {
+  background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: 3px;
+  padding: 6px 8px; margin: 4px 0; overflow-x: auto;
+}
+#aiPanel .ai-markdown pre code { background: transparent; padding: 0; }
+#aiPanel .ai-markdown blockquote {
+  border-left: 2px solid var(--led-bg); margin: 4px 0;
+  padding: 2px 8px; color: #aaa;
+}
+#aiPanel .ai-markdown table {
+  border-collapse: collapse; margin: 6px 0;
+  font-size: 11px;
+}
+#aiPanel .ai-markdown th,
+#aiPanel .ai-markdown td {
+  border: 1px solid #2a2a2a; padding: 3px 8px; text-align: left;
+}
+#aiPanel .ai-markdown th { background: #161616; color: var(--led-bg); }
+
+/* Memory log panel — list of rows sorted by freq asc, time desc, with
+ * an in-panel search filter. */
+.mem-list { padding: 4px 6px; overflow: auto; }
+.mem-empty { color: #888; font-size: 12px; padding: 8px; text-align: center; }
+.mem-search {
+  flex: 1;
+  min-width: 0;
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  color: #ddd;
+  font-size: 11px;
+  padding: 2px 6px;
+  margin: 0 4px;
+}
+.mem-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
+  border-bottom: 1px solid #1c1c1c;
+}
+.mem-row-title { font-size: 12px; color: #ddd; }
+.mem-row-mode {
+  font-size: 10px;
+  color: #888;
+  margin-left: 4px;
+}
+.mem-row-name,
+.mem-row-notes {
+  width: calc(100% - 4px);
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  color: #ddd;
+  font-size: 11px;
+  padding: 2px 4px;
+  margin-top: 2px;
+}
+.mem-row-sub { font-size: 10px; color: #666; margin-top: 2px; }
+.mem-row-actions { display: flex; flex-direction: column; gap: 2px; }
+.kprow {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px;
+}
+/* Row variant with an extra (7th) column. Applied to keypad rows 1-3
+ * to expose space for additional analog-DSP / utility buttons. Row 4
+ * keeps the default 6-column layout. */
+.kprow.kprow-7 { grid-template-columns: repeat(7, 1fr); }
+.kpbtn { height: 27px; font-size: 12px; font-weight: 500; }
+/* PAGE button — text color matches the LCD display background so it
+ * reads as a "system" / page-cycle control distinct from mode buttons. */
+.kpbtn[data-cmd="dec"] { color: var(--led-bg); }
+.kpbtn.disabled, .kpbtn:disabled { opacity: 0.4; filter: grayscale(0.6); }
+/* Empty filler in the decoder keypad — keeps the 6-col grid square but
+ * stays invisible / unclickable. */
+.kpbtn.kpbtn-empty,
+.fnbtn.fnbtn-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* Aux 7th-column placeholder — visible but dim/disabled. Single "·"
+ * label hints "reserved slot" without implying any specific feature. */
+.kpbtn.kpbtn-aux {
+  color: #555;
+  pointer-events: none;
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Frequency-step row sits above the LCD display. */
+.freq-row {
+  padding: 4px 6px 0;
+  background: var(--bg);
+}
+.freq-row .kpbtn {
+  /* Match the standard .kpbtn font (12 px, weight 500, no letter spacing,
+   * default text colour). Earlier these used a larger 18 px bold style
+   * inherited from the old "<<<" / ">>>" arrow buttons. */
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+.kpbtn.k { font-size: 16px; font-weight: 600; }
+
+/* Mode-section vertical pair — each grid cell in cols 1-3 contains two
+ * half-height buttons stacked vertically. Total height ≈ 27 px so the
+ * surrounding numeric keypad layout doesn't shift. */
+.kpbtn-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kpbtn.kpbtn-half {
+  height: 12px;
+  font-size: 10px;
+  padding: 0;
+  line-height: 12px;
+  letter-spacing: 0;
+}
+
+/* ─── Debug log ─── */
+.debug {
+  margin: 0 8px 8px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px;
+  font: 11px/1.4 ui-monospace, monospace; color: var(--muted);
+}
+.debug summary { cursor: pointer; user-select: none; }
+.debug button {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; font-size: 12px;
+}
+#log {
+  margin-top: 8px; max-height: 30vh; overflow: auto;
+  white-space: pre-wrap;
+  user-select: text; -webkit-user-select: text;
+}
+#log * { user-select: text; -webkit-user-select: text; }
+
+/* ─── Server-list modal (kept from earlier) ─── */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: stretch; justify-content: stretch;
+  z-index: 1000;
+}
+
+.modal-card { background: var(--bg); width: 100%; display: flex; flex-direction: column; }
+.modal-bar {
+  display: flex; gap: 8px; padding: 8px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0;
+}
+.srv-search {
+  flex: 1; min-width: 0;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 0 12px; height: 40px; font-size: 14px;
+}
+.modal-bar button {
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 0 14px; height: 40px; font-size: 14px;
+}
+.modal-bar .btn-favs.active {
+  border-color: var(--led-bg);
+  color: var(--led-bg);
+}
+.srv-list { flex: 1; overflow: auto; padding: 8px; }
+.srv-row {
+  display: flex; gap: 10px; padding: 12px;
+  background: var(--panel); border-radius: 10px; margin-bottom: 8px;
+  border: 1px solid var(--border);
+  align-items: flex-start; cursor: pointer;
+}
+.srv-fav { background: transparent; border: 0; color: var(--fg); font-size: 22px; line-height: 1; padding: 0; min-width: 28px; }
+.srv-meta { flex: 1; min-width: 0; }
+.srv-title { font-size: 15px; margin-bottom: 4px; }
+.srv-sub { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.srv-del {
+  margin-top: 6px; background: transparent; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 6px;
+  padding: 4px 8px; font-size: 12px;
+}
+.srv-empty { color: var(--muted); padding: 16px; text-align: center; }
+
+/* ─── Settings page (full-screen modal) ─── */
+.settings-modal {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 1000;
+  display: flex; flex-direction: column;
+  overflow: auto;
+  color: var(--fg);
+}
+.settings-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--bg); z-index: 1;
+}
+.settings-bar h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.settings-version {
+  margin-left: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  opacity: 0.6;
+}
+.settings-bar .btn-close {
+  background: transparent; border: 0; color: var(--fg);
+  font-size: 22px; line-height: 1; padding: 4px 8px;
+}
+.settings-body { padding: 12px 16px 32px; }
+.settings-section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section:last-child { border-bottom: 0; }
+.settings-section-title {
+  font-size: 16px; font-weight: 500;
+  color: var(--fg); margin-bottom: 12px;
+}
+.settings-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.settings-row > span { flex: 1; }
+.settings-row input[type="text"], .settings-row input[type="number"] {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 14px;
+  width: 110px;
+  text-align: right;
+}
+.settings-row.toggle-row { justify-content: space-between; }
+.settings-row input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 44px; height: 24px;
+  background: #444; border-radius: 12px;
+  position: relative; cursor: pointer;
+  transition: background 120ms ease;
+}
+.settings-row input[type="checkbox"]::after {
+  content: ''; position: absolute;
+  top: 2px; left: 2px;
+  width: 20px; height: 20px;
+  background: #fff; border-radius: 50%;
+  transition: left 120ms ease;
+}
+.settings-row input[type="checkbox"]:checked { background: #2196f3; }
+.settings-row input[type="checkbox"]:checked::after { left: 22px; }
+.settings-btn {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ─── Band overlay ─── */
+.band-modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent;        /* no full-screen tint */
+  z-index: 1000;
+  animation: bandFadeIn 140ms ease;
+}
+@keyframes bandFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.eq-card {
+  background: rgba(20, 20, 25, 0.94);
+  border: 1px solid #3f8fc4;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  font: 500 12px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+  color: #e8f7ff;
+}
+.eq-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #cfffa3;
+  text-align: center;
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+.eq-grid {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.eq-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.eq-val {
+  min-width: 44px;
+  text-align: center;
+  font-size: 10px;
+  color: #cfffa3;
+}
+.eq-slider {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 28px;
+  height: 160px;
+  accent-color: #3f8fc4;
+}
+.eq-freq {
+  font-size: 11px;
+  color: #9be0ff;
+  font-weight: 600;
+}
+.eq-bar {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.eq-flat, .eq-close {
+  background: #2a3a4a;
+  color: #cfffa3;
+  border: 1px solid #3f8fc4;
+  border-radius: 6px;
+  padding: 4px 14px;
+  font: 600 11px ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+}
+.eq-flat:active, .eq-close:active { background: #3f8fc4; color: #fff; }
+.band-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  /* Transparent — the fuzzy look comes from the backdrop-filter blurring
+     whatever's behind the card. */
+  background: rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  width: calc(100% - 24px); max-width: 720px;
+}
+.band-btn {
+  height: 60px;
+  font-size: 18px; font-weight: 600;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--fg);
+  background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 60%, #161616 100%);
+  border: 2px solid #2a2a2a;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.5),
+    0 2px 8px rgba(0,0,0,0.4);
+  transition: filter 80ms ease;
+}
+.band-btn:active { filter: brightness(0.7); }
+.band-btn[data-khz] { height: 44px; font-size: 13px; padding: 4px 6px; }
+.ftx-picker .band-grid { grid-template-columns: repeat(4, 1fr); max-width: 480px; }
+.rtty-picker .band-grid { grid-template-columns: repeat(3, 1fr); max-width: 380px; }
+.srch-picker .band-grid { grid-template-columns: repeat(3, 1fr); max-width: 320px; }
+
+/* LISTS picker — unified searchable view across every frequency
+ * picker. Wide modal with a sticky search bar and a tall scrollable
+ * result list. */
+.lists-picker .lists-card {
+  width: calc(100% - 24px); max-width: 720px;
+  max-height: 80vh; display: flex; flex-direction: column;
+  background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 6px;
+  overflow: hidden;
+}
+.lists-picker .lists-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; background: #0e0e0e; border-bottom: 1px solid #2a2a2a;
+}
+.lists-picker .lists-search {
+  flex: 1; min-width: 0;
+  background: #050505; border: 1px solid #2a2a2a; border-radius: 3px;
+  color: #ddd; font-size: 13px; padding: 4px 8px;
+}
+.lists-picker .lists-count { color: #888; font-size: 11px; }
+.lists-picker .lists-close {
+  background: transparent; border: 0; color: #ddd; font-size: 18px;
+  cursor: pointer; padding: 0 6px;
+}
+.lists-picker .lists-result { overflow: auto; padding: 4px; }
+.lists-picker .lists-row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 8px;
+  align-items: baseline;
+  width: 100%; padding: 6px 8px; margin-bottom: 2px;
+  background: #161616; border: 1px solid #232323; border-radius: 4px;
+  color: #ddd; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: left; cursor: pointer;
+}
+.lists-picker .lists-row.active { border-color: var(--led-bg); }
+.lists-picker .lists-row:hover { background: #1f1f1f; }
+.lists-picker .lists-row-freq {
+  font-size: 13px; color: var(--led-bg); white-space: nowrap;
+}
+.lists-picker .lists-row-unit { font-size: 10px; color: #888; }
+.lists-picker .lists-row-meta {
+  font-size: 11px; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+}
+.lists-picker .lists-row-mode {
+  font-size: 10px; color: #aaa; background: #0e0e0e;
+  border: 1px solid #2a2a2a; border-radius: 3px; padding: 0 4px;
+}
+.lists-picker .lists-row-picker {
+  font-size: 10px; color: var(--led-bg); background: #0e0e0e;
+  border: 1px solid #4a3a1a; border-radius: 3px; padding: 0 4px;
+}
+.lists-picker .lists-row-label { color: #ddd; }
+.lists-picker .lists-row-note { color: #888; }
+.lists-picker .lists-overflow { color: #666; font-size: 11px; padding: 8px; text-align: center; }
+.rtty-picker .rtty-list {
+  width: calc(100% - 24px); max-width: 480px; max-height: 70vh;
+  overflow-y: auto;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+}
+.rtty-row {
+  display: block; width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 60%, #161616 100%);
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+}
+.rtty-row.active {
+  border-color: var(--led-bg);
+  color: var(--led-bg);
+}
+.rtty-row:active { filter: brightness(0.7); }
+.rtty-row-name { font-size: 13px; font-weight: 600; }
+.rtty-row-meta { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+
+/* PSK fldigi mode picker — compact 3-col grid of short buttons. */
+.psk-mode-picker .rtty-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-width: 320px;
+}
+.psk-mode-picker .rtty-row {
+  display: flex; align-items: center; justify-content: center;
+  padding: 12px 6px;
+  margin: 0;
+  text-align: center;
+}
+.psk-mode-picker .rtty-row-name { font-size: 13px; }
+
+/* MODES picker — grouped grid of audio-sample buttons. */
+.modes-picker .rtty-list {
+  max-width: 360px;
+}
+.modes-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  padding: 8px 4px 4px;
+}
+.modes-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.modes-picker .rtty-row {
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px 6px;
+  margin: 0;
+  text-align: center;
+}
+.modes-picker .rtty-row-name { font-size: 12px; }
+.modes-picker .rtty-row.active {
+  border-color: var(--led-bg);
+  color: var(--led-bg);
+}
+.freq-picker .rtty-list { max-width: 380px; }
+
+.modes-toolbar {
+  display: flex; gap: 16px;
+  padding: 6px 4px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 4px;
+}
+.modes-opt {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+.modes-opt input[type="checkbox"] { margin: 0; }
+
+/* PSK pitch input shown in the PSK31B panel header. */
+.psk-pitch-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--fg);
+  margin-right: 8px;
+}
+.psk-pitch-input {
+  width: 56px;
+  background: rgba(0,0,0,0.3);
+  color: var(--fg);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font: inherit;
+  text-align: right;
+}
+
+/* Language picker — denser variant of the band modal. */
+.lang-grid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 12px;
+  max-width: 420px;
+}
+.lang-btn {
+  height: 40px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.band-btn.active {
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 0 0 1px rgba(192, 57, 43, 0.55),
+    0 0 12px rgba(240, 78, 58, 0.7),
+    0 2px 8px rgba(0,0,0,0.4);
+}
+@media (max-width: 520px) {
+  .band-grid { gap: 8px; }
+  .band-btn { height: 50px; font-size: 15px; border-radius: 10px; }
+}
+
+/* ─── Stats viewer (Settings → Show Kiwi Stats) ─── */
+.stats-modal { z-index: 1100; }
+.stats-card {
+  width: calc(100% - 24px); max-width: 560px; max-height: 80vh;
+  display: flex; flex-direction: column;
+  background: rgba(10,10,10,0.95);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.7);
+  color: var(--fg);
+}
+.stats-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.stats-bar h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.stats-close {
+  background: transparent; border: 0; color: var(--fg);
+  font-size: 18px; line-height: 1; padding: 4px 8px; cursor: pointer;
+}
+.stats-list {
+  overflow-y: auto;
+  padding: 6px 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+.stats-row {
+  display: grid; grid-template-columns: 180px 1fr;
+  gap: 8px; padding: 3px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.stats-key { color: var(--led-bg); }
+.stats-val { color: #ddd; word-break: break-all; }
+.stats-empty { padding: 18px 12px; opacity: 0.7; font-size: 12px; }
+
+/* ─── Console-logs viewer (Settings → Show Console Logs) ─── */
+.logs-modal .stats-card { max-width: 720px; }
+.logs-list { font-size: 11px; }
+.logs-row {
+  display: grid;
+  grid-template-columns: 64px 48px 1fr;
+  gap: 6px;
+  padding: 2px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.logs-ts { color: rgba(200,200,200,0.55); }
+.logs-lvl { color: var(--led-bg); text-transform: uppercase; font-size: 10px; align-self: center; }
+.logs-msg { color: #ddd; word-break: break-all; white-space: pre-wrap; }
+.logs-row.logs-warn .logs-msg { color: #ffd07a; }
+.logs-row.logs-error .logs-msg { color: #ff8a7a; }
+.logs-row.logs-debug .logs-msg { color: #9bc7ff; }
+
+/* ─── Recordings modal ─── */
+.recordings-modal .stats-card { max-width: 600px; }
+.rec-list { overflow-y: auto; padding: 8px; }
+.rec-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: rgba(255,255,255,0.02);
+}
+.rec-meta { grid-column: 1; grid-row: 1; }
+.rec-title { font-size: 13px; font-weight: 500; }
+.rec-sub { font-size: 11px; opacity: 0.65; }
+.rec-audio { grid-column: 1 / -1; grid-row: 2; width: 100%; height: 30px; }
+.rec-del {
+  grid-column: 2; grid-row: 1;
+  background: rgba(192,57,43,0.2);
+  border: 1px solid rgba(192,57,43,0.5);
+  color: #f5b7b1;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.rec-del:hover { background: rgba(192,57,43,0.4); }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 3D HARDWARE BUTTON LOOK — REVERTABLE BLOCK
+ * Delete everything between this banner and the matching END banner to
+ * revert all buttons to their original flat appearance.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+.fnbtn, .kpbtn, .band-btn, .lang-btn, .settings-btn {
+  background:
+    linear-gradient(180deg,
+      #4a4a4a 0%,
+      #303030 45%,
+      #1d1d1d 80%,
+      #131313 100%);
+  border: 1px solid #0a0a0a;
+  border-top-color: #5a5a5a;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.22),
+    inset 0 -2px 3px rgba(0,0,0,0.55),
+    inset 0 0 0 1px rgba(255,255,255,0.04),
+    0 2px 0 #0a0a0a,
+    0 3px 4px rgba(0,0,0,0.65),
+    0 0 1px rgba(0,0,0,0.8);
+  text-shadow: 0 -1px 0 rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.06);
+  transition: transform 60ms ease, box-shadow 60ms ease, filter 60ms ease;
+}
+
+.fnbtn:active, .kpbtn:active, .band-btn:active, .lang-btn:active, .settings-btn:active {
+  filter: none;
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 2px 4px rgba(0,0,0,0.7),
+    inset 0 -1px 0 rgba(255,255,255,0.04),
+    0 0 1px rgba(0,0,0,0.8);
+}
+
+.fnbtn.active, .kpbtn.active, .band-btn.active {
+  /* Same face as inactive — border + text light up amber. */
+  border-color: var(--led-bg) !important;
+  border-top-color: var(--led-bg) !important;
+  color: var(--led-bg);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.22),
+    inset 0 -2px 3px rgba(0,0,0,0.55),
+    inset 0 0 0 1px rgba(255,255,255,0.04),
+    0 2px 0 #0a0a0a,
+    0 3px 4px rgba(0,0,0,0.65),
+    0 0 0 1px var(--led-bg);
+}
+
+/* ─── END 3D HARDWARE BUTTON LOOK ─── */
+
+/* ─── Help / decoder-reference modal ─── */
+.help-modal { align-items: flex-start; padding-top: 24px; }
+.help-content {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  width: calc(100% - 24px); max-width: 720px;
+  max-height: calc(100vh - 48px);
+  display: flex; flex-direction: column;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.help-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px; font-weight: 600;
+}
+.help-title { letter-spacing: 0.5px; }
+.help-close {
+  background: transparent; border: 0; color: var(--fg);
+  font-size: 22px; line-height: 1; cursor: pointer;
+  padding: 0 8px;
+}
+.help-close:hover { color: #ffb27a; }
+.help-search {
+  margin: 10px 14px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  padding: 7px 10px;
+  outline: none;
+}
+.help-list {
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+  flex: 1;
+}
+.help-row {
+  display: grid; grid-template-columns: 64px 1fr; gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+.help-row-wide {
+  grid-template-columns: max-content 1fr;
+}
+.help-row:last-child { border-bottom: 0; }
+.help-label {
+  font-weight: 700; color: #ffb27a;
+  white-space: nowrap;
+}
+.help-desc { color: #cfd5db; line-height: 1.45; }
+
+/* ─── DECOD picker (sorted decoder list, tap-to-toggle) ─── */
+.menu.decod {
+  width: auto;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.decod-row {
+  display: grid; grid-template-columns: 24px 64px 1fr; gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 8px 6px;
+  border: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: transparent;
+  color: inherit; font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.decod-row:hover { background: rgba(255, 178, 122, 0.06); }
+.decod-row:last-child { border-bottom: 0; }
+.decod-row.active { background: rgba(255, 178, 122, 0.10); }
+.decod-row.active .help-label { color: #ffd6a8; }
+.decod-dot {
+  font-size: 13px; line-height: 1;
+  color: #5a6066;
+  width: 24px; text-align: center;
+}
+.decod-row.active .decod-dot { color: #ffb27a; }
