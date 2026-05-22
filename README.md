@@ -12,27 +12,76 @@ running on a small Node backend.
 
 See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full gallery.
 
-### Decoder library (~40 modes)
+### Decoder library (~40 protocols)
 
-| Category               | Modes |
-|------------------------|-------|
-| Morse / RTTY           | CW, MCW, RTTY |
-| MFSK / OFDM voice-band | MFSK, Olivia, Contestia (CTSA), MT63, DominoEX (DOMEX), THOR, Throb (THRB), FSQ, PI4 |
-| PSK                    | PSK (PSK31 / variants) |
-| WSJT-X family          | FT8, FT4, JT4, JT9, JT65, Q65, FST4, FST4W, WSPR, WSPR-15 (W15) |
-| JS8                    | JS8 (via js8call binary) |
-| Imaging                | WEFAX (FAX), SSTV, Hellschreiber (HELL) |
-| Maritime / aero        | NAVTEX, SITOR-B, HFDL, SELCAL (SELC) |
-| Aircraft + mil         | ALE 2G (LinuxALE), ARDOP |
-| Voice                  | FreeDV (FDV) |
-| Time / standards       | WWV |
-| Visual / DSP-only      | iSB (independent-sideband demod), ECSS, QRSS |
-| Detector-only          | STANAG 4285 (S4285), STANAG 4539 (S4539) — lock detection, not payload decoding |
-| RSID                   | autonomous mode-ID decoder running alongside the heuristic AUTO classifier; auto-switches the active decoder when it identifies a transmission |
-| HF packet              | AX.25 / APRS on 30 m (direwolf), 300-baud |
+| Protocol            | Vendored from         | Presets / variants available in-app |
+|---------------------|-----------------------|-------------------------------------|
+| CW                  | from-scratch          | Single decoder, adjustable WPM bias |
+| MCW                 | AM + CW chain         | — (uses the CW decoder) |
+| RTTY                | fldigi rtty           | 17 presets: 170 Hz amateur (45.45 / 75 baud, low / mid / high pitch), 50 / 60 / 75 / 100 baud commercial, UK 200/50, Russian 200/100 + 250/75 + 450/75, DWD 425 weather, TASS 425 press, 850 Hz, 1000 Hz custom |
+| PSK (BPSK)          | fldigi psk            | PSK31, 63, 63F, 125, 250, 500, 1000, PSK125R / 250R / 500R / 1000R |
+| QPSK                | fldigi psk            | QPSK31, 63, 125, 250, 500 |
+| 8PSK                | fldigi psk            | 125 / 125FL / 125F, 250 / 250FL / 250F, 500 / 500F, 1000 / 1000F, 1200F |
+| MFSK                | fldigi mfsk           | MFSK4, 8, 11, 16, 22, 31, 32, 64, 128 |
+| Olivia              | fldigi olivia         | 18 (tones × bandwidth) presets: 4/125 … 64/2000 |
+| Contestia (CTSA)    | fldigi contestia      | Same (tones × bandwidth) grid as Olivia |
+| MT63                | fldigi mt63           | 500S, 500L, 1000S, 1000L, 2000S, 2000L |
+| DominoEX (DOMEX)    | fldigi dominoex       | DEX 4, 5, 7-8, 8, 11, 11-FEC, 16, 22 |
+| THOR                | fldigi thor           | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
+| Throb (THRB)        | fldigi throb (v2)     | Throb 1, 2, 4 + Throb-X variants |
+| PI4                 | fldigi pi4 (v2)       | Single mode (beacon ID) |
+| FSQ                 | fldigi fsq            | FSQ 1.5 / 3 / 4.5 / 6 baud |
+| FT8                 | from-scratch ft8/ft4  | 15-s slot decoder |
+| FT4                 | from-scratch ft8/ft4  | 7.5-s slot decoder |
+| JT4                 | WSJT-X jt9 -4         | sub-modes A–G |
+| JT9                 | WSJT-X jt9 -9         | — |
+| JT65                | WSJT-X jt9 -65        | — |
+| Q65                 | WSJT-X jt9 -q         | Q65-A, B, C, D, E |
+| FST4                | WSJT-X fst4d          | TR 60 / 120 / 300 / 900 / 1800 s |
+| FST4W               | WSJT-X fst4d -W       | TR 60 / 120 / 300 / 900 / 1800 s |
+| WSPR                | WSJT-X wsprd          | 2-min slots, 11 standard sub-bands |
+| WSPR-15 (W15)       | WSJT-X wsprd -m       | 15-min slots (LF / MF), aligned to :00/:15/:30/:45 UTC |
+| JS8                 | js8call               | Normal, Slow, Fast, Turbo, Ultra |
+| ARDOP               | pflarue/ardopcf       | 200 / 500 / 1000 / 2000 Hz BW |
+| HF packet (PKT)     | direwolf              | 300-baud AX.25 / APRS on 30 m |
+| HFDL                | szpajder/dumphfdl     | KiwiSDR IQ-mode, configurable channel |
+| NAVTEX              | fldigi navtex         | SITOR-B FEC broadcast |
+| SITOR               | fldigi navtex (B)     | Same engine, free-tuned dial |
+| WEFAX (FAX)         | fldigi wefax          | IOC 576 / 288, multiple LPM (60/90/120/240), B&W / colour |
+| SSTV                | sjlongland/slowrxd    | Robot, Martin (M1/M2), Scottie (S1/S2/DX), PD, MP, MR, BW, multiple sub-modes per family |
+| Hellschreiber (HELL)| from-scratch (AM)     | Feld-Hell (AM-only render) |
+| FreeDV (FDV)        | drowe67/codec2        | 700C / 700D / 700E / 1600 / 2020 (codec2 freedv_rx default selection) |
+| ALE 2G              | LinuxALE              | MIL-STD-188-141A/B |
+| SELCAL (SELC)       | EliasOenal/multimon-ng | Aircraft 4-char SELCAL — same binary also handles POCSAG / FLEX / EAS / ZVEI / DTMF / FMSFSK |
+| WWV                 | fldigi wwv            | WWV / WWVH minute-tick decoder |
+| iSB                 | client-side IQ        | Independent-sideband stereo demod (LSB → L, USB → R) |
+| ECSS                | client-side IQ        | Exalted-carrier SSB (PLL-locked AM demod) |
+| QRSS                | client-side audio FFT | Very-slow CW grabber (visual decoder) |
+| STANAG 4285         | from-scratch detector | Lock detection only (no payload) |
+| STANAG 4539         | from-scratch detector | Lock detection only (no payload) |
+| RSID                | fldigi RSID           | Autonomous mode-ID decoder; auto-switches the active decoder when an RSID-bearing transmission identifies the mode in use |
 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
+
+### Integrated signal generator (GEN button)
+
+Every shipped decoder can be exercised without a live HF signal via the
+**GEN** button in the function row. It opens a categorised picker
+(`openModesPicker`) of curated test samples — synthesized reference
+transmissions plus a handful of real off-air recordings — covering CW,
+RTTY (every shift / baud combination listed above), all BPSK / QPSK /
+8PSK rates, every MFSK / Olivia / Contestia / MT63 / DominoEX / THOR /
+Throb variant, FSQ, FT4 / FT8 / FST4 / WSPR / JS8 / JT9 / JT65,
+NAVTEX, WEFAX, SSTV, Hellschreiber, ALE, packet, IFKP, and WWV.
+
+The selected sample is decoded to a 12 kHz mono Int16 buffer via
+`OfflineAudioContext` (proper anti-aliased resampling, not linear
+interp), then routed through the active decoder using the same audio
+fan-out path as live KiwiSDR audio. This is the canonical regression
+test for any decoder change — the inject path is one of the things the
+in-tree audio samples (`audio/<mode>/*.mp3|wav`) were captured / generated
+for.
 
 ### UI
 
