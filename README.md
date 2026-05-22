@@ -10,53 +10,7 @@ running on a small Node backend.
 
 ## Screenshots
 
-<p align="center">
-  <img src="docs/screenshots/Screenshot_20260522_024236_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024329_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024409_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024535_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024641_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024649_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024732_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_024944_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_025021_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_025522_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_025547_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_025605_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_025849_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030006_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030103_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030732_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030738_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030813_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030834_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030855_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030905_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_030930_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031023_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031039_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031225_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031406_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031501_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031632_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031640_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031753_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_031909_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032039_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032052_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032106_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032146_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032219_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032251_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032400_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032417_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032549_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032559_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_032816_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_033138_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_033217_Chrome.jpg" width="32%"/>
-  <img src="docs/screenshots/Screenshot_20260522_033602_Chrome.jpg" width="32%"/>
-</p>
+See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full gallery.
 
 ### Decoder library (~40 modes)
 
