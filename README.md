@@ -8,26 +8,55 @@ The browser app connects to any [KiwiSDR](https://kiwisdr.com) server, streams
 audio + waterfall, and routes the audio through a fleet of decoder bridges
 running on a small Node backend.
 
-## Features
+## Screenshots
 
-### Reception
-
-- KiwiSDR client supporting AM / AMN / SAM / LSB / USB / CW / NBFM / IQ modes.
-- Custom passband per mode plus low-cut / high-cut knobs (LoW / HiW).
-- AGC with fast / medium / slow / off presets and a manual-gain fallback.
-- Client-side squelch (stock KiwiSDR firmware ignores its own `SET squelch`;
-  gating is applied in the player after decoder fan-out, so decoders keep
-  seeing signal while the speakers go silent).
-- Antenna-switch extension (slot 1..N on kiwis with the antenna switch
-  configured).
-- 3-band EQ + voice-track gain (anti-formant enhancer for SSB voice).
-- AM notch filter, anti-carrier subtraction, and `SSB filtered` clean-up mode.
-- Session recording (REC) to local WAV.
-- KiwiSDR **v1.817+ bot-detector workarounds** — binary-frame SET commands,
-  exact init order, `Origin: null`, HTTP-touch preflight (`/api/kiwi-touch`)
-  for HTTPS pages talking to plain-HTTP kiwis, and `mod=` re-send after
-  `rx_chan` is known. Without these, modern kiwis silently refuse to start
-  the audio loop.
+<p align="center">
+  <img src="docs/screenshots/Screenshot_20260522_024236_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024329_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024409_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024535_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024641_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024649_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024732_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_024944_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_025021_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_025522_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_025547_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_025605_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_025849_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030006_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030103_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030732_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030738_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030813_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030834_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030855_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030905_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_030930_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031023_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031039_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031225_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031406_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031501_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031632_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031640_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031753_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_031909_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032039_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032052_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032106_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032146_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032219_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032251_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032400_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032417_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032549_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032559_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_032816_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_033138_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_033217_Chrome.jpg" width="32%"/>
+  <img src="docs/screenshots/Screenshot_20260522_033602_Chrome.jpg" width="32%"/>
+</p>
 
 ### Decoder library (~40 modes)
 
@@ -50,52 +79,6 @@ running on a small Node backend.
 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
-
-### Auto-classification
-
-- **AUTO** — heuristic classifier on the audio stream (bandwidth + symbol-rate
-  + tonality fingerprints) suggests likely modes in real time.
-- **RSID** — fldigi's Reed-Solomon ID decoder, vendored RX-only. When an
-  RSID-bearing transmission is received, the active decoder is switched
-  automatically to match.
-
-### Visualizers
-
-- **Audio-domain** (page 6): EYE (eye diagram), SCOPE, S-METER, SPEC
-  (spectrogram), SPLOT (S-plot strip), VECT (vectorscope), GRAY (grayscale
-  waterfall variant), IQ VIEW (constellation), FMNT (formant tracker).
-- **IQ-domain** (page 5, requires `mode=iq`): ANTC (anti-carrier subtraction),
-  DOPP (Doppler-vs-time strip), OTHR (OTH-radar / chirp classifier), PPMC
-  (kiwi clock self-calibration against a time-station carrier), RFI
-  (switching-supply / RFI emitter sniffer), SFRC (sferic / lightning monitor),
-  ZOOM (sub-Hz spectrogram via a long FFT).
-
-### Waterfall
-
-- WF1–8 row duplication with linear interpolation — fills the waterfall
-  faster on low-FPS kiwis without producing visible duplicated bands.
-- AUTO / DARK / DARK+ percentile-based auto-stretch (5/99, 30/99, 55/99.5)
-  driven by a rolling histogram, smoothed by an EMA.
-- 10-second no-data watchdog — surfaces a banner and drops the connection
-  if neither audio nor waterfall frames arrive for >10 s.
-- Click / tap to tune; drag to retune; long-press `+` to zoom to max.
-
-### Frequency pickers + SCAN
-
-- Per-decoder frequency pickers (long-press a decoder button to open a
-  curated list of frequencies for that mode).
-- Generic band pickers (page 8): broadcast (BCONS), military (MILV), maritime
-  (MRINE), scientific (SCIEN), time stations (TIME), VLF beacons (VLFB),
-  volunteer-monitored (VOLM).
-- **Picker-driven SCAN** — the SCAN button cycles through the most-recently
-  opened picker's list. Long-press starts; short-tap pauses / resumes.
-  Per-frequency dwell is settable (1–60 s).
-
-### Transcription
-
-- Live-transcription of SSB voice using OpenAI's Whisper API (BYO API key,
-  stored only in browser localStorage).
-- Optional auto-translation to a target language.
 
 ### UI
 
