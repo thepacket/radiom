@@ -8,19 +8,6 @@ The browser app connects to any [KiwiSDR](https://kiwisdr.com) server, streams
 audio + waterfall, and routes the audio through a fleet of decoder bridges
 running on a small Node backend.
 
-## Screenshots
-
-![radiom — waterfall, FFT, and an active decoder panel](docs/screenshots/hero.png)
-
-<p align="center">
-  <img src="docs/screenshots/decoders.png" alt="Decoder variety — WEFAX, SSTV, HFDL" width="49%"/>
-  <img src="docs/screenshots/iq-visualizers.png" alt="Page-5 IQ visualizers — SFRC, DOPP, ZOOM" width="49%"/>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/mobile.png" alt="Touch-first keypad UI on a phone" width="40%"/>
-</p>
-
 ## Quick start
 
 ```bash
