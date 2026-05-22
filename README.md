@@ -8,6 +8,12 @@ The browser app connects to any [KiwiSDR](https://kiwisdr.com) server, streams
 audio + waterfall, and routes the audio through a fleet of decoder bridges
 running on a small Node backend.
 
+> **Status: actively being tested.** radiom is an advanced mobile-first HF
+> receiver with a large surface area — many features still need real-world
+> validation across kiwis, bands, and propagation conditions, and more
+> decoders / visualizers are on the way. Bug reports and on-air results are
+> very welcome (see [Getting in touch](#getting-in-touch)).
+
 ## Screenshots
 
 See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full gallery.
