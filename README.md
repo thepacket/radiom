@@ -208,8 +208,8 @@ that lands in the upstream codebase will be implemented from there.
 
 Every line of application code in this repository was written by
 [Claude Code](https://claude.com/claude-code) (Anthropic) under the direction
-of Andre Paquette — design decisions, decoder selection, debugging strategy,
-and on-air validation were human-driven; the actual TypeScript, C/C++ glue,
+of Andre Paquette — design decisions, decoder selection, and on-air
+validation were human-driven; the actual TypeScript, C/C++ glue,
 build scripts, and server code are the assistant's work.
 
 Third-party decoder sources vendored under `decoders/<name>/` retain their
