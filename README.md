@@ -13,6 +13,8 @@ running on a small Node backend.
 > validation across kiwis, bands, and propagation conditions, and more
 > decoders / visualizers are on the way. Bug reports and on-air results are
 > very welcome (see [Getting in touch](#getting-in-touch)).
+>
+> **This README is a draft** and does not list every shipped feature.
 
 ## Screenshots
 
