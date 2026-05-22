@@ -179,6 +179,17 @@ either type it into **Settings → Backend Access → Server token**, or open a
 share-link like `https://your-app.fly.dev/#token=…` and the token gets stored
 + stripped from the URL on first load.
 
+## Getting in touch
+
+- **[Issues](https://github.com/thepacket/radiom/issues)** — bug reports,
+  feature requests, decoder problems, build failures.
+- **[Discussions](https://github.com/thepacket/radiom/discussions)** — open
+  questions, "how do I…", on-air results, ideas you want to talk through
+  before opening an issue.
+- **Security** — for anything sensitive, please use GitHub's private
+  [security advisories](https://github.com/thepacket/radiom/security/advisories/new)
+  rather than a public issue.
+
 ## Contributing
 
 radiom is a personal project that I'm opening up for others to learn from,
