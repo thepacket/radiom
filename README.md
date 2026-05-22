@@ -54,12 +54,8 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full gallery.
 | ALE 2G              | LinuxALE              | MIL-STD-188-141A/B |
 | SELCAL (SELC)       | EliasOenal/multimon-ng | Aircraft 4-char SELCAL — same binary also handles POCSAG / FLEX / EAS / ZVEI / DTMF / FMSFSK |
 | WWV                 | fldigi wwv            | WWV / WWVH minute-tick decoder |
-| iSB                 | client-side IQ        | Independent-sideband stereo demod (LSB → L, USB → R) |
-| ECSS                | client-side IQ        | Exalted-carrier SSB (PLL-locked AM demod) |
-| QRSS                | client-side audio FFT | Very-slow CW grabber (visual decoder) |
 | STANAG 4285         | from-scratch detector | Lock detection only (no payload) |
 | STANAG 4539         | from-scratch detector | Lock detection only (no payload) |
-| RSID                | fldigi RSID           | Autonomous mode-ID decoder; auto-switches the active decoder when an RSID-bearing transmission identifies the mode in use |
 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
