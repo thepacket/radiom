@@ -100,8 +100,6 @@ for.
 
 - Single Node `server.mjs` serves the static front-end on port 8080 plus all
   `/ws/decode/*` decoder-bridge endpoints.
-- KiwiSDR HTTP/WS pass-through proxy (`/api/kiwi-*`) for the v1.817+
-  HTTPS-to-HTTP touch handshake.
 - Optional bearer-token auth (`RADIOM_TOKEN`) + Origin allow-list on every
   WS endpoint.
 - Per-IP and global concurrency limits for decoder WS connections.
