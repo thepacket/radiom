@@ -198,11 +198,13 @@ share-link like `https://your-app.fly.dev/#token=…` and the token gets stored
 
 ## Contributing
 
-radiom is a personal project that I'm opening up for others to learn from,
-fork, and improve. Bug reports, patches, and new-decoder pull requests are
-welcome — please open an issue first for anything larger than a small fix so
-we can agree on scope. By submitting a contribution you agree to license it
-under the same terms as the rest of the project (GPL-3.0-or-later).
+radiom is a personal project, open-sourced so others can read the code,
+learn from it, and fork it for their own use. **Pull requests are not
+accepted** — the codebase stays solo-authored. Bug reports, on-air
+results, and ideas are very welcome through
+[Issues](https://github.com/thepacket/radiom/issues) and
+[Discussions](https://github.com/thepacket/radiom/discussions); anything
+that lands in the upstream codebase will be implemented from there.
 
 ## Authorship
 
