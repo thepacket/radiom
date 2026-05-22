@@ -16,7 +16,7 @@ running on a small Node backend.
 
 ## Screenshots
 
-See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for the full gallery.
+See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset of the features.
 
 ### Decoder library (~40 protocols)
 
