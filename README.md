@@ -24,46 +24,46 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset o
 
 | Protocol            | Vendored from         | Presets / variants available in-app |
 |---------------------|-----------------------|-------------------------------------|
-| CW                  | from-scratch          | Single decoder, adjustable WPM bias |
-| MCW                 | AM + CW chain         | — (uses the CW decoder) |
-| RTTY                | fldigi rtty           | 17 presets: 170 Hz amateur (45.45 / 75 baud, low / mid / high pitch), 50 / 60 / 75 / 100 baud commercial, UK 200/50, Russian 200/100 + 250/75 + 450/75, DWD 425 weather, TASS 425 press, 850 Hz, 1000 Hz custom |
-| PSK (BPSK)          | fldigi psk            | PSK31, 63, 63F, 125, 250, 500, 1000, PSK125R / 250R / 500R / 1000R |
-| QPSK                | fldigi psk            | QPSK31, 63, 125, 250, 500 |
 | 8PSK                | fldigi psk            | 125 / 125FL / 125F, 250 / 250FL / 250F, 500 / 500F, 1000 / 1000F, 1200F |
-| MFSK                | fldigi mfsk           | MFSK4, 8, 11, 16, 22, 31, 32, 64, 128 |
-| Olivia              | fldigi olivia         | 18 (tones × bandwidth) presets: 4/125 … 64/2000 |
+| ALE 2G              | LinuxALE              | MIL-STD-188-141A/B |
+| ARDOP               | pflarue/ardopcf       | 200 / 500 / 1000 / 2000 Hz BW |
 | Contestia (CTSA)    | fldigi contestia      | Same (tones × bandwidth) grid as Olivia |
-| MT63                | fldigi mt63           | 500S, 500L, 1000S, 1000L, 2000S, 2000L |
+| CW                  | from-scratch          | Single decoder, adjustable WPM bias |
 | DominoEX (DOMEX)    | fldigi dominoex       | DEX 4, 5, 7-8, 8, 11, 11-FEC, 16, 22 |
-| THOR                | fldigi thor           | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
-| Throb (THRB)        | fldigi throb (v2)     | Throb 1, 2, 4 + Throb-X variants |
-| PI4                 | fldigi pi4 (v2)       | Single mode (beacon ID) |
+| FreeDV (FDV)        | drowe67/codec2        | 700C / 700D / 700E / 1600 / 2020 (codec2 freedv_rx default selection) |
 | FSQ                 | fldigi fsq            | FSQ 1.5 / 3 / 4.5 / 6 baud |
-| FT8                 | from-scratch ft8/ft4  | 15-s slot decoder |
-| FT4                 | from-scratch ft8/ft4  | 7.5-s slot decoder |
-| JT4                 | WSJT-X jt9 -4         | sub-modes A–G |
-| JT9                 | WSJT-X jt9 -9         | — |
-| JT65                | WSJT-X jt9 -65        | — |
-| Q65                 | WSJT-X jt9 -q         | Q65-A, B, C, D, E |
 | FST4                | WSJT-X fst4d          | TR 60 / 120 / 300 / 900 / 1800 s |
 | FST4W               | WSJT-X fst4d -W       | TR 60 / 120 / 300 / 900 / 1800 s |
-| WSPR                | WSJT-X wsprd          | 2-min slots, 11 standard sub-bands |
-| WSPR-15 (W15)       | WSJT-X wsprd -m       | 15-min slots (LF / MF), aligned to :00/:15/:30/:45 UTC |
-| JS8                 | js8call               | Normal, Slow, Fast, Turbo, Ultra |
-| ARDOP               | pflarue/ardopcf       | 200 / 500 / 1000 / 2000 Hz BW |
+| FT4                 | from-scratch ft8/ft4  | 7.5-s slot decoder |
+| FT8                 | from-scratch ft8/ft4  | 15-s slot decoder |
+| Hellschreiber (HELL)| from-scratch (AM)     | Feld-Hell (AM-only render) |
 | HF packet (PKT)     | direwolf              | 300-baud AX.25 / APRS on 30 m |
 | HFDL                | szpajder/dumphfdl     | KiwiSDR IQ-mode, configurable channel |
+| JS8                 | js8call               | Normal, Slow, Fast, Turbo, Ultra |
+| JT4                 | WSJT-X jt9 -4         | sub-modes A–G |
+| JT65                | WSJT-X jt9 -65        | — |
+| JT9                 | WSJT-X jt9 -9         | — |
+| MCW                 | AM + CW chain         | — (uses the CW decoder) |
+| MFSK                | fldigi mfsk           | MFSK4, 8, 11, 16, 22, 31, 32, 64, 128 |
+| MT63                | fldigi mt63           | 500S, 500L, 1000S, 1000L, 2000S, 2000L |
 | NAVTEX              | fldigi navtex         | SITOR-B FEC broadcast |
-| SITOR               | fldigi navtex (B)     | Same engine, free-tuned dial |
-| WEFAX (FAX)         | fldigi wefax          | IOC 576 / 288, multiple LPM (60/90/120/240), B&W / colour |
-| SSTV                | sjlongland/slowrxd    | Robot, Martin (M1/M2), Scottie (S1/S2/DX), PD, MP, MR, BW, multiple sub-modes per family |
-| Hellschreiber (HELL)| from-scratch (AM)     | Feld-Hell (AM-only render) |
-| FreeDV (FDV)        | drowe67/codec2        | 700C / 700D / 700E / 1600 / 2020 (codec2 freedv_rx default selection) |
-| ALE 2G              | LinuxALE              | MIL-STD-188-141A/B |
+| Olivia              | fldigi olivia         | 18 (tones × bandwidth) presets: 4/125 … 64/2000 |
+| PI4                 | fldigi pi4 (v2)       | Single mode (beacon ID) |
+| PSK (BPSK)          | fldigi psk            | PSK31, 63, 63F, 125, 250, 500, 1000, PSK125R / 250R / 500R / 1000R |
+| Q65                 | WSJT-X jt9 -q         | Q65-A, B, C, D, E |
+| QPSK                | fldigi psk            | QPSK31, 63, 125, 250, 500 |
+| RTTY                | fldigi rtty           | 17 presets: 170 Hz amateur (45.45 / 75 baud, low / mid / high pitch), 50 / 60 / 75 / 100 baud commercial, UK 200/50, Russian 200/100 + 250/75 + 450/75, DWD 425 weather, TASS 425 press, 850 Hz, 1000 Hz custom |
 | SELCAL (SELC)       | EliasOenal/multimon-ng | Aircraft 4-char SELCAL — same binary also handles POCSAG / FLEX / EAS / ZVEI / DTMF / FMSFSK |
-| WWV                 | fldigi wwv            | WWV / WWVH minute-tick decoder |
+| SITOR               | fldigi navtex (B)     | Same engine, free-tuned dial |
+| SSTV                | sjlongland/slowrxd    | Robot, Martin (M1/M2), Scottie (S1/S2/DX), PD, MP, MR, BW, multiple sub-modes per family |
 | STANAG 4285         | from-scratch detector | Lock detection only (no payload) |
 | STANAG 4539         | from-scratch detector | Lock detection only (no payload) |
+| THOR                | fldigi thor           | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
+| Throb (THRB)        | fldigi throb (v2)     | Throb 1, 2, 4 + Throb-X variants |
+| WEFAX (FAX)         | fldigi wefax          | IOC 576 / 288, multiple LPM (60/90/120/240), B&W / colour |
+| WSPR                | WSJT-X wsprd          | 2-min slots, 11 standard sub-bands |
+| WSPR-15 (W15)       | WSJT-X wsprd -m       | 15-min slots (LF / MF), aligned to :00/:15/:30/:45 UTC |
+| WWV                 | fldigi wwv            | WWV / WWVH minute-tick decoder |
 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.

@@ -405,7 +405,9 @@
       "Bash(awk 'NR==9758,/^\\\\];/' /Users/andrepaquette/mradio/src/ui/shell.ts)",
       "Bash(sed -i '' '9716,9852d' /Users/andrepaquette/mradio/src/ui/shell.ts)",
       "Bash(sed -n '9714,9720p' /Users/andrepaquette/mradio/src/ui/shell.ts)",
-      "Bash(curl -s http://localhost:5174/src/ui/shell.ts)"
+      "Bash(curl -s http://localhost:5174/src/ui/shell.ts)",
+      "Bash(python3 -c \"from PIL import Image, ImageDraw; print\\('PIL OK'\\)\")",
+      "Bash(rsvg-convert --version)"
     ]
   }
 }
