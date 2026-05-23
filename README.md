@@ -2,7 +2,7 @@
 
 A KiwiSDR-based web HF receiver with a large built-in decoder library
 (CW, RTTY, FT8/FT4, WSPR, JT9/JT65, FST4, JS8, NAVTEX, WEFAX, HFDL, ALE 2G,
-SSTV, FreeDV, Olivia, MFSK, MT63, Throb, and ~30 others).
+Olivia, MFSK, MT63, Throb, and ~30 others).
 
 The browser app connects to any [KiwiSDR](https://kiwisdr.com) server, streams
 audio + waterfall, and routes the audio through a fleet of decoder bridges
@@ -30,7 +30,6 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset o
 | Contestia (CTSA)    | fldigi contestia      | Same (tones × bandwidth) grid as Olivia |
 | CW                  | from-scratch          | Single decoder, adjustable WPM bias |
 | DominoEX (DOMEX)    | fldigi dominoex       | DEX 4, 5, 7-8, 8, 11, 11-FEC, 16, 22 |
-| FreeDV (FDV)        | drowe67/codec2        | 700C / 700D / 700E / 1600 / 2020 (codec2 freedv_rx default selection) |
 | FSQ                 | fldigi fsq            | FSQ 1.5 / 3 / 4.5 / 6 baud |
 | FST4                | WSJT-X fst4d          | TR 60 / 120 / 300 / 900 / 1800 s |
 | FST4W               | WSJT-X fst4d -W       | TR 60 / 120 / 300 / 900 / 1800 s |
@@ -55,7 +54,6 @@ See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset o
 | RTTY                | fldigi rtty           | 17 presets: 170 Hz amateur (45.45 / 75 baud, low / mid / high pitch), 50 / 60 / 75 / 100 baud commercial, UK 200/50, Russian 200/100 + 250/75 + 450/75, DWD 425 weather, TASS 425 press, 850 Hz, 1000 Hz custom |
 | SELCAL (SELC)       | EliasOenal/multimon-ng | Aircraft 4-char SELCAL — same binary also handles POCSAG / FLEX / EAS / ZVEI / DTMF / FMSFSK |
 | SITOR               | fldigi navtex (B)     | Same engine, free-tuned dial |
-| SSTV                | sjlongland/slowrxd    | Robot, Martin (M1/M2), Scottie (S1/S2/DX), PD, MP, MR, BW, multiple sub-modes per family |
 | STANAG 4285         | from-scratch detector | Lock detection only (no payload) |
 | STANAG 4539         | from-scratch detector | Lock detection only (no payload) |
 | THOR                | fldigi thor           | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
@@ -77,7 +75,7 @@ transmissions plus a handful of real off-air recordings — covering CW,
 RTTY (every shift / baud combination listed above), all BPSK / QPSK /
 8PSK rates, every MFSK / Olivia / Contestia / MT63 / DominoEX / THOR /
 Throb variant, FSQ, FT4 / FT8 / FST4 / WSPR / JS8 / JT9 / JT65,
-NAVTEX, WEFAX, SSTV, Hellschreiber, ALE, packet, IFKP, and WWV.
+NAVTEX, WEFAX, Hellschreiber, ALE, packet, IFKP, and WWV.
 
 The selected sample is decoded to a 12 kHz mono Int16 buffer via
 `OfflineAudioContext` (proper anti-aliased resampling, not linear
