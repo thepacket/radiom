@@ -2710,6 +2710,18 @@ export function renderMarkdown(src: string): string {
       out.push(`<li>${inline(olItem[1])}</li>`);
       continue;
     }
+    // Continuation of a list item — a non-blank line that begins with
+    // whitespace while a list is open is appended onto the previous
+    // <li>. Without this, wrapped text underneath a bullet renders as
+    // a separate paragraph and the list visually breaks open.
+    if (listKind && /^\s+\S/.test(raw) && para.length === 0) {
+      const last = out[out.length - 1];
+      if (last && last.startsWith('<li>') && last.endsWith('</li>')) {
+        const inner = last.slice(4, -5);
+        out[out.length - 1] = `<li>${inner} ${inline(line.trim())}</li>`;
+        continue;
+      }
+    }
     if (line.trim() === '') { flushAll(); continue; }
     flushList();
     para.push(line);

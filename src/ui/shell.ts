@@ -203,7 +203,7 @@ export class Shell {
     (() => { const n = parseFloat(localStorage.getItem('radiom.vtg') ?? '9'); return Number.isFinite(n) ? n : 9; })();
   /** Currently-active page-5 IQ visualizer panel, or null. Only one open
    *  at a time; opening any of the 7 closes whichever was active. */
-  private iq5Active: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | null = null;
+  private iq5Active: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk' | null = null;
   private iq5Raf: number | null = null;
   /** SFRC sferic monitor — rolling per-second strike counts. */
   private sfrcCounts: number[] = [];
@@ -221,6 +221,108 @@ export class Shell {
   private doppFreqHz = 0;          // current locked-frequency offset (Hz)
   private doppAlpha = 0.05;        // PLL gain
   private doppHistory: Array<{ t: number; hz: number }> = [];
+  /** Instantaneous Frequency Trace — d/dt(arg z(t)) of the raw IQ
+   *  stream, computed as the phase of z[n]·conj(z[n-1]) (an FM
+   *  discriminator), decimated to a screen-friendly rate and held in
+   *  a rolling ring buffer for line plotting. */
+  private static readonly IFRQ_DECIM = 48;         // 12 kHz IQ → 250 Hz IF samples
+  private static readonly IFRQ_HIST_LEN = 1024;    // ≈4 s of trace at 250 Hz
+  private ifrqHist = new Float32Array(Shell.IFRQ_HIST_LEN);
+  private ifrqHistWrite = 0;
+  private ifrqHistFilled = 0;
+  private ifrqPrevI = 0;
+  private ifrqPrevQ = 0;
+  private ifrqHasPrev = false;     // false until first IQ pair seeds the previous-sample state
+  private ifrqDecimAccum = 0;      // running sum of IFs within the current decimation block
+  private ifrqDecimCount = 0;
+  /** Allan Deviation Plot — overlapping σ_y(τ) of a PLL-tracked
+   *  carrier. The PLL is the same single-pole NCO + LMS form used by
+   *  DOPP; its output frequency is sampled at a fixed 10 Hz (τ₀=0.1 s)
+   *  into a ring buffer, from which σ_y is computed at log-spaced τ. */
+  private static readonly ALDV_TAU0_SAMPLES = 1200;        // 0.1 s at 12 kHz IQ
+  private static readonly ALDV_HIST_LEN = 2048;            // ≈3.4 min of history at 10 Hz
+  /** τ steps (in multiples of τ₀=0.1 s) plotted on the log-log axes. */
+  private static readonly ALDV_M_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+  private aldvHist = new Float32Array(Shell.ALDV_HIST_LEN);
+  private aldvHistWrite = 0;
+  private aldvHistFilled = 0;
+  private aldvPhase = 0;
+  private aldvFreqHz = 0;
+  private aldvAlpha = 0.05;        // PLL gain (same as DOPP)
+  private aldvSamplesSinceEmit = 0;
+  /** Cyclostationary CAF heatmap. For each lag τ in CAF_TAU_SET, we
+   *  compute r_n = x[n]·conj(x[n−τ]) over a length-CAF_FFT window and
+   *  FFT it: peaks of |R(α, τ)| reveal cyclic-stationary structure of
+   *  the IQ stream (digital-mode symbol rates). */
+  private static readonly CAF_FFT = 2048;
+  private static readonly CAF_ALPHA_MAX_HZ = 1500;
+  /** Dyadic τ set in samples (at 12 kHz IQ → 0.33 ms to 42.7 ms). */
+  private static readonly CAF_TAU_SET = [4, 8, 16, 32, 64, 128, 256, 512];
+  private static readonly CAF_RENDER_EVERY_N = 8;          // ≈7.5 Hz at 60 fps; the FFT pass is heavy
+  private cafBufI = new Float32Array(Shell.CAF_FFT * 2);    // double-sized so we can window an aligned slice
+  private cafBufQ = new Float32Array(Shell.CAF_FFT * 2);
+  private cafBufWrite = 0;
+  private cafBufFilled = 0;
+  private cafHeat: Float32Array | null = null;              // TAU_COUNT × ALPHA_BINS, row-major (row 0 = smallest τ)
+  private cafAlphaBins = 0;
+  private cafMaxMag = 0;
+  private cafRafTick = 0;
+  // Scratch buffers.
+  private cafFftRe: Float32Array | null = null;
+  private cafFftIm: Float32Array | null = null;
+  private cafOffCanvas: HTMLCanvasElement | null = null;
+  private cafOffImage: ImageData | null = null;
+  /** Channel-Sounder Echo Profile — autocorrelation of the IQ power
+   *  envelope |z(t)|² vs lag τ in ms. Computed via Wiener-Khinchin:
+   *  R(τ) = IFFT(|FFT(e(t) − mean(e))|²). Secondary peaks at non-zero
+   *  τ are multipath / skywave echo arrivals. The display is averaged
+   *  over consecutive frames so noisy bins smooth out and steady
+   *  echoes accumulate. */
+  private static readonly ECHO_N = 4096;                  // ≈340 ms window at 12 kHz
+  private static readonly ECHO_FFT = 8192;                // zero-padded to 2N for linear (not circular) autocorrelation
+  private static readonly ECHO_MAX_MS = 50;
+  private static readonly ECHO_AVG = 0.85;                // per-frame EWMA weight for R(τ)
+  private static readonly ECHO_RENDER_EVERY_N = 6;        // ≈10 Hz at 60 fps
+  private echoBufI = new Float32Array(Shell.ECHO_N);
+  private echoBufQ = new Float32Array(Shell.ECHO_N);
+  private echoBufWrite = 0;
+  private echoBufFilled = 0;
+  private echoAvg: Float32Array | null = null;            // running R(τ) for τ = 0..lagBins-1
+  private echoAvgCount = 0;
+  private echoRafTick = 0;
+  // Scratch buffers.
+  private echoFftRe: Float32Array | null = null;
+  private echoFftIm: Float32Array | null = null;
+  /** Symbol Clock Recovery Scope — detect dominant symbol-clock line
+   *  in the IQ envelope spectrum (|z|² FFT), then run a 1st-order PLL
+   *  that tracks it. Plots symbol-rate (Hz) and PLL phase error (rad)
+   *  vs time on two stacked strip charts. Useful for telling whether
+   *  a digital-mode soft demodulator is sync'd to the right symbol
+   *  clock and whether the line is stable enough to lock to. */
+  private static readonly SCLK_FFT = 4096;                 // ≈340 ms detection window (12 kHz)
+  private static readonly SCLK_HIST_LEN = 512;             // ~50 s at 10 Hz render
+  private static readonly SCLK_MIN_HZ = 10;                // ignore lines below 10 Hz (DC creep)
+  private static readonly SCLK_MAX_HZ = 1500;              // top of typical amateur baud rates
+  private static readonly SCLK_RENDER_EVERY_N = 6;         // ≈10 Hz at 60 fps
+  private sclkBufI = new Float32Array(Shell.SCLK_FFT);
+  private sclkBufQ = new Float32Array(Shell.SCLK_FFT);
+  private sclkBufWrite = 0;
+  private sclkBufFilled = 0;
+  private sclkSymHz = 0;                                   // detected / tracked symbol rate
+  private sclkNcoPhase = 0;
+  private sclkPllAlpha = 0.08;                             // PLL frequency-update gain
+  private sclkLastErr = 0;
+  private sclkPeakConfidence = 0;                          // peak / median ratio from FFT
+  private sclkRateHist = new Float32Array(Shell.SCLK_HIST_LEN);
+  private sclkErrHist = new Float32Array(Shell.SCLK_HIST_LEN);
+  private sclkHistWrite = 0;
+  private sclkHistFilled = 0;
+  private sclkSampleAccum = 0;
+  private sclkSampleCount = 0;
+  private sclkRafTick = 0;
+  // Scratch buffers (no per-frame allocs).
+  private sclkFftRe: Float32Array | null = null;
+  private sclkFftIm: Float32Array | null = null;
   /** ZOOM long-FFT ring buffer. */
   private zoomRingI = new Float32Array(32768);
   private zoomRingQ = new Float32Array(32768);
@@ -444,6 +546,7 @@ export class Shell {
     });
     pickerObserver.observe(document.body, { childList: true });
     this.installVizCloseChip();
+    this.wireViewHelp();
     this.refreshSourceButtonState();
     this.spectrum = new SpectrumView(
       this.$('fft') as HTMLCanvasElement,
@@ -888,6 +991,22 @@ export class Shell {
             <canvas id="envpCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
 
+          <div id="cepsPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="cepsClear" type="button" title="Clear the pitch-contour history">clear</button>
+            </div>
+            <div class="ft8-status" id="cepsStatus">Cepstrum / Pitch Contour —</div>
+            <canvas id="cepsCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="mhumPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="mhumClear" type="button" title="Clear the mains-hum waterfall">clear</button>
+            </div>
+            <div class="ft8-status" id="mhumStatus">Mains-Hum Tracker —</div>
+            <canvas id="mhumCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
           <div id="qrssPanel" class="ft8-panel" style="display:none">
             <div class="ft8-actions">
               <button class="transcript-btn" id="qrssMode3"  type="button" title="QRSS3 — 3 s per Morse dot (fast scroll, ~0.25 s/col)">Q3</button>
@@ -931,6 +1050,41 @@ export class Shell {
             </div>
             <div class="ft8-status" id="doppStatus">DOPP — carrier Doppler vs time</div>
             <canvas id="doppCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="ifrqPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="ifrqClear" type="button" title="Clear the IF trace history">clear</button>
+            </div>
+            <div class="ft8-status" id="ifrqStatus">IFRQ — instantaneous frequency trace</div>
+            <canvas id="ifrqCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="aldvPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="aldvClear" type="button" title="Clear the Allan-deviation history">clear</button>
+            </div>
+            <div class="ft8-status" id="aldvStatus">ALDV — Allan deviation σ_y(τ)</div>
+            <canvas id="aldvCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="cafPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="cafClear" type="button" title="Clear the CAF accumulator">clear</button>
+            </div>
+            <div class="ft8-status" id="cafStatus">CAF — cyclostationary heatmap</div>
+            <canvas id="cafCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="echoPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="echoClear" type="button" title="Clear the echo-profile averager">clear</button>
+            </div>
+            <div class="ft8-status" id="echoStatus">ECHO — channel-sounder echo profile</div>
+            <canvas id="echoCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="sclkPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="sclkClear" type="button" title="Clear the clock-recovery history">clear</button>
+            </div>
+            <div class="ft8-status" id="sclkStatus">SCLK — symbol-clock recovery</div>
+            <canvas id="sclkCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
           <div id="zoomPanel" class="ft8-panel" style="display:none">
             <div class="ft8-status" id="zoomStatus">ZOOM — sub-Hz spectrogram</div>
@@ -1289,6 +1443,8 @@ export class Shell {
           <button class="kpbtn" id="btnThd" style="display:none" title="AFFT — high-resolution (16384 pt) audio FFT 0–6 kHz of the demodulated signal. Finer frequency resolution than SPEC for analyzing narrow tones, harmonics, and THD.">AFFT</button>
           <button class="kpbtn" id="btnPersist" style="display:none" title="Persistence Spectrum — 2D histogram (freq × amplitude → density). Each FFT frame increments a bin at (freq, dB level); old frames decay exponentially. Always-on carriers leave bright horizontal lines; transient noise spreads thinly across many amplitudes. Best tool for revealing weak persistent signals buried in noise.">PERS</button>
           <button class="kpbtn" id="btnEnvp" style="display:none" title="Envelope PDF — probability density of the analytic-signal envelope |x + jH{x}| of the demodulated audio. Pure noise → Rayleigh-shaped curve. Carrier + noise → Rician (shifted Rayleigh). Speech → long-tailed asymmetric. FSK / two-tone → bimodal. One glance tells you the signal class.">ENVP</button>
+          <button class="kpbtn" id="btnCeps" style="display:none" title="Cepstrum / Pitch Contour — real cepstrum (FFT of log-magnitude spectrum) of the demodulated audio. Peaks at the quefrency that equals the dominant period: vocal-tract pitch, MFSK tone spacing, echo delays. Top half plots the current cepstrum; bottom half scrolls the dominant-peak pitch estimate over time.">CEPS</button>
+          <button class="kpbtn" id="btnMhum" style="display:none" title="Mains-Hum Tracker — narrow audio FFT + scrolling waterfall over 0–250 Hz, the band where 50 / 60 Hz mains hum and its harmonics live. Reference lines highlight 50 / 60 / 100 / 120 / 150 / 180 / 200 / 240 Hz. Useful for ground-loop diagnosis and finding intentional low-freq carriers near power-line frequency.">MHUM</button>
           <!-- DSD (dsd-fme) digital-voice decoders. Hidden stash; the
                DEC list picker is the only access path. Each button
                drives the same DsdDecoder with a different mode flag. -->
@@ -1504,7 +1660,7 @@ export class Shell {
               INFO: 'INFO — open the live / derived lookup matrix: EIBI shortwave schedule, PSKR PSKReporter spots, NETS active ham nets, WNET WSPRnet, GRAY gray-line propagation, SRCH search-all-frequency-lists, SID signal-ID lookup.',
               FREQ: 'FREQ — open the frequency-list picker: every curated static dial-frequency list (BCON, NDB, VLFB, MILV, MARN, AERO, VOLM, TIME, SCI, NUM, DXCL, DGPS, GMDS, HFDM, MEPT, MWDX, CB, LW, AFRC, ASIA, LATM, SWBC, CLND, DIPL, PIRA, AIDR, CAP, TNET, ECOM, SKYN, HFGC, MARS, MRSE, RUSM, MPAC, CSTV, CSCW).',
               VIEW: 'VIEW — open the visualization matrix (ANTC, DLDS, DOPP, EYE, FMNT, IQV, KURT, METR, OTHR, PPMC, RFI, SCOP, SFRC, VECT, ACON, SPEC, AFFT, ZOOM, SPLT)',
-              DECO: 'DECO — full decoder list (CW, RTTY, PSK, MFSK, WSJT-X, military & utility — everything in one scrollable help-style list). Tap a row to toggle; long-press for sub-mode/freq picker.',
+              DEC: 'DEC — full decoder list (CW, RTTY, PSK, MFSK, WSJT-X, military & utility — everything in one scrollable help-style list). Tap a row to toggle; long-press for sub-mode/freq picker.',
               GEN:  'GEN — inject a test sample for offline mode validation (moved to the DSP picker)',
               SID:  'SID — record 20 s of IQ and run the local DSP measurement pass',
               MEM:  'MEM — channel memory manager. Tap to open; long-press to save the current dial as a new memory channel.',
@@ -1534,7 +1690,7 @@ export class Shell {
             // Cols 0-1: picker buttons. Per-mode shortcuts removed in
             // favour of the unified MODE / DSP / INFO matrix pickers.
             const modeRows: string[][] = [
-              ['t:band:BAND',       'c:decAPicker:DECO' ],
+              ['t:band:BAND',       'c:decAPicker:DEC' ],
               ['c:modePicker:MODE', 'c:freqPicker:FREQ' ],
               ['c:filter:BW',       'c:dispPicker:VIEW' ],
               ['c:dspPicker:DSP',   'c:infoPicker:INFO' ],
@@ -1744,6 +1900,11 @@ export class Shell {
             <button class="kpbtn" id="btnAntc" title="ANTC — anti-carrier visualizer. Shows the residual carrier offset after the SAM PLL has locked (useful for tuning ECSS-style)">ANTC</button>
             <button class="kpbtn" id="btnDlds" title="Delay-Doppler scattering function — HF channel sounder">DLDS</button>
             <button class="kpbtn" id="btnDopp" title="DOPP — Doppler tracker. Displays frequency-drift slope of the strongest in-band signal vs time (HF DX rising / falling fade)">DOPP</button>
+            <button class="kpbtn" id="btnIfrq" style="display:none" title="IFRQ — instantaneous frequency trace. Plots d/dt(arg z(t)) of the raw IQ stream against time. Steady carrier → flat line at the offset. FM voice → squiggly band. Chirped radar → ramps. Drift → slope. Complements the DOPP tracker by showing every freq component, not just one locked carrier.">IFRQ</button>
+            <button class="kpbtn" id="btnAldv" style="display:none" title="ALDV — Allan deviation σ_y(τ) of a PLL-tracked carrier. Plots overlapping σ_y on log-log axes for τ = 0.1 .. 200 s. Tells you whether the receiver / source is white-noise-limited (slope −1), flicker-limited (flat), random-walk-FM (slope +0.5), or drifting (slope +1). Lab-grade stability metric — point at a stable carrier and let it sit for a few minutes.">ALDV</button>
+            <button class="kpbtn" id="btnCaf" style="display:none" title="CAF — cyclic autocorrelation heatmap. |R(α, τ)| of the IQ stream over a 2D grid of cyclic frequency α (X axis, 0..1500 Hz) and lag τ (Y axis, set of dyadic lags). Symbol rates of digital modes appear as bright vertical stripes at α = baud × N: PSK31 → 31.25 Hz, RTTY → 45.45 Hz, FT8 → 6.25 Hz, MT63 → 1000 Hz. Works even when the signal is buried in noise.">CAF</button>
+            <button class="kpbtn" id="btnEcho" style="display:none" title="ECHO — channel-sounder echo profile. Autocorrelation of |z(t)|² (instantaneous IQ power) plotted vs lag τ in milliseconds. Secondary peaks reveal multipath / skywave hop delays — ionospheric F-layer hops typically 1–10 ms apart, sporadic-E ~3 ms, multi-hop paths out to 30+ ms. Look at the peaks above the noise floor to read echo delays directly.">ECHO</button>
+            <button class="kpbtn" id="btnSclk" style="display:none" title="SCLK — symbol-clock recovery scope. Finds the dominant spectral line in |z|² (the symbol clock) via short-time FFT, runs a 1st-order PLL on it, and plots both the tracked symbol-rate (top half) and the loop's phase-error signal (bottom half). Locked PLL → flat error band near zero. Sliding / drifting → ramping or scattered error. Useful diagnostic for telling whether a soft demodulator is sync'd to the right symbol clock.">SCLK</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
@@ -2427,6 +2588,80 @@ export class Shell {
       if (this.envpHist) this.envpHist.fill(0);
       this.envpMaxCount = 0;
       this.envpFrames = 0;
+    });
+    this.$('btnCeps').addEventListener('click', () => {
+      if (this.cepsOn) { this.toggleCeps(); return; }
+      this.exclusiveActivate('ceps');
+      this.toggleCeps();
+    });
+    this.$('cepsClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.cepsPitchHist.fill(0);
+      this.cepsPitchHistWrite = 0;
+      this.cepsPitchHistFilled = 0;
+    });
+    this.$('btnMhum').addEventListener('click', () => {
+      if (this.mhumOn) { this.toggleMhum(); return; }
+      this.exclusiveActivate('mhum');
+      this.toggleMhum();
+    });
+    this.$('mhumClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.mhumWaterfallRow = 0;
+      this.mhumWaterfallFilled = 0;
+      if (this.mhumWaterfall) this.mhumWaterfall.fill(0);
+    });
+    this.$('ifrqClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.ifrqHist.fill(0);
+      this.ifrqHistWrite = 0;
+      this.ifrqHistFilled = 0;
+      this.ifrqHasPrev = false;
+      this.ifrqDecimAccum = 0;
+      this.ifrqDecimCount = 0;
+    });
+    this.$('aldvClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.aldvHist.fill(0);
+      this.aldvHistWrite = 0;
+      this.aldvHistFilled = 0;
+      this.aldvPhase = 0;
+      this.aldvFreqHz = 0;
+      this.aldvSamplesSinceEmit = 0;
+    });
+    this.$('cafClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.cafBufI.fill(0);
+      this.cafBufQ.fill(0);
+      this.cafBufWrite = 0;
+      this.cafBufFilled = 0;
+      if (this.cafHeat) this.cafHeat.fill(0);
+      this.cafMaxMag = 0;
+    });
+    this.$('echoClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.echoBufI.fill(0);
+      this.echoBufQ.fill(0);
+      this.echoBufWrite = 0;
+      this.echoBufFilled = 0;
+      if (this.echoAvg) this.echoAvg.fill(0);
+      this.echoAvgCount = 0;
+    });
+    this.$('sclkClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.sclkBufI.fill(0);
+      this.sclkBufQ.fill(0);
+      this.sclkBufWrite = 0;
+      this.sclkBufFilled = 0;
+      this.sclkRateHist.fill(0);
+      this.sclkErrHist.fill(0);
+      this.sclkHistWrite = 0;
+      this.sclkHistFilled = 0;
+      this.sclkSymHz = 0;
+      this.sclkNcoPhase = 0;
+      this.sclkSampleAccum = 0;
+      this.sclkSampleCount = 0;
+      this.sclkPeakConfidence = 0;
     });
     this.$('btnGray').addEventListener('click', () => {
       if (this.grayOn) { this.toggleGray(); return; }
@@ -3363,7 +3598,7 @@ export class Shell {
     });
     this.$('btnSDial').addEventListener('click', () => this.toggleSDial());
 // Page-5 IQ visualizers — single state machine, one panel open at a time.
-    for (const k of ['sfrc','dopp','zoom','antc','ppmc','rfi','wusb','wlsb','dlds','kurt'] as const) {
+    for (const k of ['sfrc','dopp','zoom','antc','ppmc','rfi','wusb','wlsb','dlds','kurt','ifrq','aldv','caf','echo','sclk'] as const) {
       const btn = this.root.querySelector('#btn' + k.charAt(0).toUpperCase() + k.slice(1));
       btn?.addEventListener('click', () => this.toggleIq5(k));
     }
@@ -4102,6 +4337,11 @@ export class Shell {
       { label: 'Anti-Carrier', selector: '#btnAntc' },
       { label: 'Delay-Doppler Scattering', selector: '#btnDlds' },
       { label: 'Doppler Tracker', selector: '#btnDopp' },
+      { label: 'Instantaneous Frequency Trace', selector: '#btnIfrq' },
+      { label: 'Allan Deviation Plot', selector: '#btnAldv' },
+      { label: 'Cyclostationary CAF Heatmap', selector: '#btnCaf' },
+      { label: 'Channel-Sounder Echo Profile', selector: '#btnEcho' },
+      { label: 'Symbol Clock Recovery Scope', selector: '#btnSclk' },
       { label: 'Eye Diagram',  selector: '#btnEye' },
       { label: 'Voice Formant Tracker (exp)', selector: '#btnFmnt' },
       { label: 'IQ Constellation',  selector: '#btnIqView' },
@@ -4120,6 +4360,8 @@ export class Shell {
       // shell.ts / player.ts so we can re-enable by uncommenting:
       // { label: 'Persistence Spectrum', selector: '#btnPersist' },
       { label: 'Envelope PDF', selector: '#btnEnvp' },
+      { label: 'Cepstrum / Pitch Contour', selector: '#btnCeps' },
+      { label: 'Mains-Hum Tracker', selector: '#btnMhum' },
       { label: 'Carrier Zoom', selector: '#btnZoom' },
       { label: 'Signal over Time Plot', selector: '#btnSPlot' },
     ];
@@ -4494,9 +4736,9 @@ export class Shell {
   // entries — anything new added to DISP must land here too, or
   // BACK won't close it.
   private static readonly VIZ_BUTTON_IDS = [
-    'btnAntc','btnDlds','btnDopp','btnEye','btnFmnt','btnIqView','btnKurt',
-    'btnSDial','btnOthr','btnPpmc','btnRfi','btnScope','btnSfrc','btnVect',
-    'btnAcon','btnAudioFft','btnThd','btnPersist','btnEnvp','btnZoom','btnSPlot',
+    'btnAntc','btnAldv','btnCaf','btnDlds','btnDopp','btnEcho','btnEye','btnFmnt','btnIfrq','btnIqView','btnKurt',
+    'btnSDial','btnOthr','btnPpmc','btnRfi','btnScope','btnSclk','btnSfrc','btnVect',
+    'btnAcon','btnAudioFft','btnThd','btnPersist','btnEnvp','btnCeps','btnMhum','btnZoom','btnSPlot',
   ];
 
   /** Every decoder button reachable from DECA / DECB. Used by the BACK
@@ -4613,6 +4855,899 @@ export class Shell {
       this.closeForegroundOverlay();
       refresh();
     });
+  }
+
+  /** Detailed long-press help for the recent batch of analysis views.
+   *  Each button's `__longPress` hook opens a sig-overlay carrying the
+   *  markdown instructions; bindPickerLongPress in the DISP picker
+   *  dispatches there on ≥500 ms press of the row. */
+  private wireViewHelp(): void {
+    const helps: Record<string, string> = {
+      // ── Pre-existing audio-domain views ────────────────────────────
+      btnThd:
+`# Audio FFT
+
+High-resolution audio spectrum from 0 to 6 kHz. Much finer frequency
+resolution than the regular Audio Spectrogram, so it's the right tool
+for measuring narrow tones, harmonics, and small drift.
+
+## Display
+
+- **X axis** — audio frequency 0 to 6 kHz
+- **Y axis** — relative power in dB
+- The trace is a running average — quick transients smooth out, steady
+  tones pop above the noise floor
+- Hover anywhere on the plot to read out the exact frequency and
+  amplitude under the pointer
+
+## Status line
+
+Reports the FFT size, the Hz-per-bin resolution, the displayed range,
+and how many frames are in the running average. With your pointer over
+the plot the cursor freq and dB readout are appended.
+
+## Use it for
+
+- Measuring CW pitch / BFO offset to the nearest Hz
+- Identifying harmonic structure of a tone (carrier + multiples)
+- Counting how many distinct tones an MFSK signal carries and what
+  their exact spacing is
+- Looking at carrier hum / mains hum at low frequencies
+- Spotting weak whistles buried in noise that the wider Audio
+  Spectrogram smears over`,
+
+      btnScope:
+`# Audio Scope
+
+Triggered oscilloscope on the demodulated audio. Shows the time-domain
+waveform — peaks, troughs, zero crossings.
+
+## Controls (along the bottom of the panel)
+
+- **auto / shot** toggle
+  - \`auto\` — free-running, refreshes continuously
+  - \`shot\` — single-shot. Arms once you tap **run**, captures the next triggered frame, then freezes the trace
+- **run** — arms a single-shot capture
+- **↑ / ↓** — trigger polarity (rising or falling edge)
+- **Trigger level slider** — −1.0 to +1.0; the trace locks when the audio crosses this level in the chosen direction
+
+## Reading the trace
+
+- **Bright green trace** — locked, the scope found a trigger edge
+- **Dim green trace** — free-running, no edge found (e.g. silence)
+- Centerline = 0; dashed line shows the current trigger level
+
+## Use it for
+
+- Checking whether a CW tone looks like a clean sinewave or has clicks
+- Eye-balling modulation depth of an AM signal
+- Capturing one-shot transients (key clicks, pulse bursts)
+- Verifying SSB audio doesn't clip the rails`,
+
+      btnAudioFft:
+`# Audio Spectrogram
+
+Scrolling waterfall of the demodulated audio. Time flows downward;
+frequency runs across.
+
+## Controls
+
+- **AUTO** — toggles continuous histogram-based optimisation of the
+  colour scale (5th / 99th percentile, EMA-smoothed). On by default
+- **+ / −** — manual contrast adjustment when AUTO is off
+- **ext** — expands the panel to full-height view
+- Tap the **freq labels** at top / bottom edges to jump the audio
+  cursor by ±1 Hz; tap the cursor labels to step it
+- The **Hz** button (when the pitch bar is visible) sets the cursor
+  position from the current crosshair
+
+## Reading the waterfall
+
+- Bright vertical lines → steady carriers / tones
+- Bright horizontal lines → transient bursts spanning all freqs
+- Bright diagonal streaks → frequency drift / chirps
+- Faint dotted patterns → modulated digital traffic
+
+## Use it for
+
+- Finding weak narrow signals that don't show on the big waterfall
+- Reading MFSK / RTTY tone patterns and counting symbol rate visually
+- Spotting QSB cycles (signal levels rising / falling on a regular
+  beat)
+- Hunting CW carriers between SSB conversations`,
+
+      btnAcon:
+`# Audio Constellation
+
+Constellation diagram (I/Q scatter) built from the demodulated audio,
+quadrature-mixed at a chosen audio frequency f₀ and lowpassed at half
+the demod bandwidth.
+
+## Controls
+
+- **f₀ field** — centre of the quadrature mixer in Hz (the cursor
+  freq if you tap "Hz" while hovering)
+- **BW field** — lowpass cutoff (half-bandwidth), Hz
+- **LOCK / Custom** — toggle a Costas loop on the I/Q stream so
+  symbols snap to standard PSK constellations (BPSK / QPSK / 8PSK)
+- **ext** — expand the panel
+
+## Reading the scatter
+
+- **Single tight blob at origin** — noise only / no real signal at f₀
+- **Single bright dot off-centre** — pure tone at f₀
+- **2 dots opposite each other** — BPSK (Lock helps stabilise rotation)
+- **4 dots at corners of a square** — QPSK
+- **8 dots in a circle** — 8PSK
+- **Annulus / ring** — FM or PM where phase changes but amplitude
+  doesn't
+- **Streaks / smears** — symbol transitions plus noise; the cleaner
+  the dots, the higher the SNR
+
+## Use it for
+
+- Confirming you've tuned a PSK signal correctly (constellation snaps
+  into a clean N-gon)
+- Distinguishing BPSK / QPSK / 8PSK without running a decoder
+- Watching how much phase noise / jitter the channel adds
+- A/B-testing receiver AGC settings (clean blob vs smeared blob)`,
+
+      btnVect:
+`# Vector / Lissajous Plot
+
+Plots audio sample x(t) against a delayed copy x(t−τ). The delay
+slider τ runs from 1 to 3000 samples (about 0.08 ms to 250 ms at
+12 kHz audio rate).
+
+## Choosing τ
+
+For a sinewave of frequency f, picking τ = 1/(4·f) makes the trace
+draw a perfect circle (90° phase shift). So the slider doubles as a
+visual frequency estimator — slide until the dominant component
+locks into a closed figure, then read off the equivalent frequency
+from its position.
+
+## Reading the shape
+
+| Shape | Meaning |
+|---|---|
+| Clean circle | Pure single tone (CW, BFO, dial whistle) |
+| Tilted ellipse | Phase-coherent tone with mismatched τ |
+| Filled disc / fuzzy cloud | Noise (empty SSB channel, no carrier) |
+| Figure-eight / pretzel | Two harmonically related tones (e.g. CW + key clicks, distorted AM) |
+| Rotating spiral | Frequency drift / fading |
+| Banded / dotted ring | Modulated carrier — AM gives radial pulses, FM gives angular pulses |
+| Sharp vertical or horizontal streaks | Discontinuities — clicks, blanker artifacts, ADC clipping |
+
+## Use it for
+
+- Quick visual symmetry check on a CW tone (clean circle = clean
+  signal)
+- Measuring AM modulation depth (ratio of radius variation)
+- Diagnosing audio distortion (smooth curves go sharp-cornered when
+  the chain clips)
+- Finding the period of an unknown periodic component`,
+
+      btnFmnt:
+`# Voice Formant Tracker (exp)
+
+Tracks the first three vocal-tract resonance frequencies (F1, F2, F3)
+of speech audio. Vowel sounds have characteristic formant
+constellations that this panel surfaces in real time.
+
+## Display
+
+Three traces scrolling left-to-right, one each for F1, F2, F3. Time
+flows from left (oldest) to right (newest). F1 typically sits
+200–900 Hz, F2 around 1000–2500 Hz, F3 around 2500–3500 Hz.
+
+## Reading the formants
+
+- **Steady horizontal trio** — sustained vowel sound
+- **Quick vertical jumps in F2** — transitions between vowels
+- **F1 high + F2 high** — open front vowels (English "ee", "i")
+- **F1 high + F2 low** — open back vowels ("a" in "father")
+- **F1 low + F2 high** — close front vowels ("ee" in "feet")
+- **F1 low + F2 low** — close back vowels ("oo" in "boot")
+
+## Use it for
+
+- Voice / language identification heuristics
+- Checking whether a noisy SSB transmission is intelligible speech
+  (formants present + moving) vs. data tones
+- Watching pitch-up / pitch-down inversions on encrypted voice scramblers
+
+The "(exp)" tag flags this as experimental — the tracker can lose
+lock on noisy / faint signals.`,
+
+      // ── Pre-existing signal-strength / spectrum panels ─────────────
+      btnSDial:
+`# Signal Meter
+
+Analog-style S-meter dial. Shows RSSI in dBm and equivalent S-units.
+
+## Reading the dial
+
+- The S-unit scale runs S0..S9 then **+10 / +20 / +30 / +40 / +60 dB**
+  for over-S9 signals (the "+60 dB" reading is the strongest the meter
+  will read on most receivers)
+- Standard: S9 = −73 dBm above 30 MHz, S9 = −93 dBm below
+- On HF, casual conversations are usually S5–S9; DX rare ones often
+  S2–S6
+- Anything redlining above +20 dB on a quiet band is a local or
+  intentionally strong signal
+
+## Use it for
+
+- Knowing whether a signal is strong enough to decode reliably
+- Tuning antenna direction by signal-strength
+- Casual reception reporting ("you're 5-9 here")
+- Comparing two Kiwi servers at different locations on the same band`,
+
+      btnSPlot:
+`# Signal over Time Plot
+
+RSSI (received signal strength, dBm) plotted vs time. Strip chart for
+the last 60 seconds plus a full-session capture available via the
+copy button.
+
+## Display
+
+- **X axis** — time, with the newest sample on the right
+- **Y axis** — RSSI in dBm, auto-scaled
+- A horizontal line shows the rolling noise floor
+- Spikes above the floor are real signals; gaps below are squelched /
+  fades
+
+## Use it for
+
+- Tracking QSB (fading cycles) — count peaks per minute, watch a slow
+  rise/fall during a band opening
+- Measuring transmitter ON/OFF cycles (digital modes often have a
+  ~10 s on-air / 5 s pause)
+- Confirming an antenna change improved the noise floor
+- Identifying impulse noise (sharp spikes that ride above continuous
+  carriers)
+- Exporting a long-session capture for offline analysis (the copy
+  button dumps the full timeline)`,
+
+      btnZoom:
+`# Carrier Zoom
+
+Sub-Hz resolution spectrogram of a very narrow slice around the dial
+frequency. Built from a long (~2.7 s) FFT window so the bin width is
+about 0.4 Hz — far finer than the regular waterfall.
+
+## Display
+
+- **X axis** — frequency offset from the dial, narrow span
+- **Y axis** — time (scrolling) or magnitude (depending on layout)
+- Refreshes once per frame, no scrolling history beyond the current
+  window — the panel shows you the current spectral slice as it drifts
+
+## Use it for
+
+- Measuring carrier drift to fractions of a Hz (warm-up of an oscillator)
+- Separating two CW signals less than 5 Hz apart
+- Reading WSPR / FT8 tone spacings exactly (6.25 Hz / 1.5625 Hz)
+- Watching a beacon's frequency stability over minutes
+- Spotting Doppler shifts that the regular waterfall blurs into one
+  fat trace`,
+
+      // ── Pre-existing IQ-domain views ───────────────────────────────
+      btnIqView:
+`# IQ Constellation
+
+Raw I-vs-Q scatter of the complex baseband. Auto-switches the receiver
+to IQ mode when opened.
+
+## Reading the scatter
+
+- **Filled disc centred at origin** — broadband noise
+- **Single bright dot off-centre** — strong carrier at that offset
+- **Several discrete dots** — coherent digital modulation (BPSK / QPSK /
+  PSK8 / etc.)
+- **Ring** — constant-envelope modulation (FM / FSK / GMSK)
+- **Smeared blob along an axis** — single-sideband suppressed-carrier
+  signal
+
+This is the "raw" cousin of the Audio Constellation: it sees the full
+complex baseband from the receiver rather than a frequency-extracted
+slice of demod audio.
+
+## Use it for
+
+- Confirming the receiver is delivering clean IQ (no DC offset, no
+  imaging)
+- Spotting strong nearby carriers as off-centre dots
+- Visual SNR check — clean dots = high SNR, smeared = low SNR
+- Recognising a modulation type at a glance before reaching for a
+  decoder`,
+
+      btnEye:
+`# Eye Diagram
+
+Folds the IQ stream into symbol-period slices and overlays them. A
+clean digital signal opens up an "eye" pattern; noise / phase jitter
+closes it.
+
+## Reading the eye
+
+- **Wide open eye** — clean signal, decoder will work well
+- **Eye almost closed at the edges** — symbol-clock recovery is off /
+  intersymbol interference is high
+- **Eye walls fuzzy** — additive noise / channel impairment
+- **Phase noise** — eye sample positions wobble horizontally
+- **No eye at all** — not a digital signal, or wrong symbol rate
+  assumption
+
+## Use it for
+
+- Verifying a digital decoder has the symbol rate right before
+  trusting its output
+- Comparing two receive setups on the same signal (best eye wins)
+- Diagnosing why a marginal decode fails (eye partially closed →
+  add more averaging or move the AGC)
+- Teaching demonstrations of what "good" vs "bad" digital reception
+  looks like`,
+
+      btnDopp:
+`# Doppler Tracker
+
+Locks a single-pole PLL onto the strongest in-band carrier and plots
+its frequency offset from the dial over time. History runs out to
+30 minutes.
+
+## Reading the trace
+
+- **Flat line** — stable carrier; the receiver and the transmitter
+  agree on frequency
+- **Slow downward / upward drift** — oscillator warm-up (yours or
+  theirs), thermal drift, or true Doppler shift
+- **Sawtooth pattern at ~24 h or ~12 h period** — diurnal temperature
+  cycling
+- **Sharp jumps** — different signal won the PLL competition (PLL
+  re-locked onto a stronger neighbour)
+- **Wandering ±50 Hz over seconds** — HF skywave path Doppler, multi-
+  path interference
+
+## Use it for
+
+- Measuring how stable a DX beacon's oscillator is
+- Watching a satellite pass (Doppler shifts ±5 kHz over a 10-min pass)
+- Confirming your receiver isn't drifting (point at a known-stable
+  WWV / time station; flat = good)
+- Tracking ionospheric path Doppler during disturbed conditions
+
+For raw "all frequency content at once" instead of one locked carrier,
+use the Instantaneous Frequency Trace.`,
+
+      btnAntc:
+`# Anti-Carrier
+
+Adaptive nulling of the dominant carrier within the IQ window. Shows
+what's "underneath" the loudest signal in the passband.
+
+## Display
+
+A waterfall or spectrum with the strongest carrier suppressed in real
+time. The notch tracks the carrier if it drifts.
+
+## Reading the result
+
+- **A bright line where the carrier was, suddenly dark** — null is
+  working
+- **Weak features now visible beside the original carrier** — those
+  were the signals the loud carrier was masking
+- **Residual fringes around the null** — narrow-band notch shape; the
+  immediate neighbours of the carrier are still partly suppressed
+
+## Use it for
+
+- Listening "through" a strong nearby broadcast carrier to weaker
+  signals on the same channel
+- Finding a digital sub-band hidden under an SSB conversation
+- Diagnosing in-band intermodulation products that hide near a
+  carrier`,
+
+      btnPpmc:
+`# Clock Drift
+
+Tracks the parts-per-million (ppm) offset of the receiver's clock
+relative to a stable reference carrier within the IQ window.
+
+## Display
+
+- **Numeric ppm readout** — current offset
+- **Strip chart** of ppm vs time so you can see drift over minutes
+
+## Reading the trace
+
+- **Steady value** — the receiver clock is stable; the number itself
+  is the calibration offset (some receivers are 2–5 ppm off out of the
+  box)
+- **Slow downward drift over 10–30 minutes** — warm-up of a free-
+  running oscillator
+- **Step changes** — temperature events (sun on the case, fan kicked
+  in / off)
+- **Sub-ppm noise floor** — what a GPSDO-disciplined receiver looks
+  like
+
+## Use it for
+
+- Calibrating an SDR's reference oscillator
+- Confirming a GPSDO or OCXO is keeping the receiver on frequency
+- Sanity-checking before doing precise frequency measurements (WSPR,
+  beacon monitoring, propagation studies)
+- Comparing receiver stability across different hardware`,
+
+      btnDlds:
+`# Delay-Doppler Scattering
+
+2D heatmap of the channel's scattering function — multipath delay on
+one axis, Doppler shift on the other. Bright spots mark the
+propagation paths active right now.
+
+## Display
+
+- **X axis** — Doppler shift in Hz (typically ±10 Hz on HF)
+- **Y axis** — propagation delay in ms (0 to tens of ms)
+- **Colour** — relative scattering power; brighter = stronger contribution
+
+## Reading the heatmap
+
+- **Single bright spot at (0 Hz, ~0 ms)** — clean direct path,
+  stable channel
+- **Two spots at different delays** — multipath; the delay separation
+  is the geometry of the two paths
+- **Spot smeared along the Doppler axis** — Doppler spread from a
+  moving / fluctuating ionosphere
+- **Spot smeared along the delay axis** — delay spread from a wide
+  reflecting region (e.g. spread-F ionospheric conditions)
+- **Multiple spots at integer-spaced delays** — repeated reflections
+
+## Use it for
+
+- Diagnosing why a digital mode is failing (high Doppler spread eats
+  PSK; high delay spread eats high-rate signals)
+- Watching ionospheric conditions during a magnetic storm
+- Confirming a band is single-hop vs. multi-hop right now
+- Choosing a robust mode (Olivia / MT63 for spread channels)`,
+
+      btnKurt:
+`# Kurtosis vs Time
+
+Tracks the 4th-order statistical moment (kurtosis) of the IQ amplitude
+distribution and plots it over time. Kurtosis measures how "peaky" or
+"flat" the distribution is compared to a normal Gaussian.
+
+## Reading the value
+
+| Kurtosis | Meaning |
+|---|---|
+| ≈ 3 | Gaussian noise — what an empty channel looks like |
+| < 3 (sub-Gaussian) | Sinusoidal carrier, or modulated signal with constant envelope |
+| > 3 (super-Gaussian) | Burst-like / impulsive — speech, RTTY mark-space, lightning, key clicks |
+| Very high (> 20) | Strong impulse noise present |
+
+The trace lets you watch kurtosis change in time. Steady value = stable
+channel character; spikes = bursts.
+
+## Use it for
+
+- Distinguishing carrier / noise / speech / digital at a glance
+- Detecting impulse-noise bursts (lightning, switching transients)
+- Confirming an empty channel really is just noise (kurtosis stays at 3)
+- Tracking when speech / data starts and stops (kurtosis rises above 3)`,
+
+      btnOthr:
+`# Over-The-Horizon Radar
+
+Slow waterfall tuned to expose the periodic FMCW or pulsed sweeps used
+by OTH radars (Russian Container, US ROTHR, Australian JORN, Chinese
+SeaSweep, etc.). Includes a classifier that estimates sweep rate and
+type.
+
+## Display
+
+- **Waterfall** of the IQ slice over tens of seconds
+- **On-canvas overlay** with classifier output:
+  - **class** — FMCW (slow / steady / fast), pulsed (ROTHR / dense / sparse)
+  - **slope** — FMCW chirp rate in kHz/s
+  - **SRF** — sweep repetition frequency in Hz
+  - **ridge fill** — how completely the chirp ridge is detected
+
+## Reading the patterns
+
+- **Diagonal stripes** — classic FMCW; the slope tells you the chirp rate
+- **Bright vertical bars repeating** — pulsed OTHR (Cuban / Russian
+  woodpecker family)
+- **Multiple parallel stripes** — multiple radars, often at different
+  ranges
+- **Fading in / out smoothly** — propagation; the radar's footprint
+  drifts as the ionosphere moves
+
+## Use it for
+
+- Identifying which OTH radar you're hearing (sweep rate is the
+  fingerprint)
+- Logging detection times for amateur OTH-monitoring projects
+- Distinguishing radar from RTTY / FAX / packet (all of which can
+  look bandy on a regular waterfall)
+
+A long-press on the OTHR row in the picker opens a curated freq list
+of known OTH radar centre frequencies.`,
+
+      btnRfi:
+`# RFI Visualizer
+
+Emitter cataloguer. Detects narrow tones in the IQ window over time,
+records their frequency, peak magnitude, and how recently they were
+heard. Builds a running list of local-RFI sources.
+
+## Display
+
+A growing table / waterfall of detected emitters:
+- **Offset Hz** — where in the IQ window the tone sits
+- **Peak magnitude** — how strong it is
+- **Last seen** — how recently it was detected
+
+## Reading the catalogue
+
+- **Many tones at integer multiples** — switching power supply
+  fundamental + harmonics (look for the strongest as the fundamental)
+- **Tones at ~50/60 Hz multiples** — mains-derived RFI
+- **Tones near 32.768 kHz × N** — clock oscillator harmonics from
+  computers / displays
+- **Tones drifting over time** — temperature-sensitive oscillators
+
+## Use it for
+
+- Locating local sources of RFI (turn off devices one at a time and
+  watch which lines disappear)
+- Cataloguing the "signature" of your receive environment to spot when
+  something new appears
+- Confirming an RFI-suppression effort actually reduced the count`,
+
+      btnSfrc:
+`# Sferic Lightning Visualizer
+
+Detects wideband impulse spikes — the signature of distant lightning
+discharges — and counts them per second over a rolling 60-second
+window.
+
+## Display
+
+- **60-bin bar chart** — strikes counted in each of the last 60 seconds.
+  Newest second on the right (or oldest first, wrap-aware)
+- **Colour code**
+  - Grey: 0 strikes
+  - Green: at least 1 strike
+  - Red: very active second (≥ 60 % of the busiest bin)
+- **HUD line** — total strikes / 60 s, peak strikes / sec, current
+  noise floor estimate
+
+## Reading the activity
+
+- **Steady background of 1–3 strikes/s** — distant thunderstorm somewhere
+  on the same continent
+- **Bursts of 5–30 strikes/s** — active storm within ~500 km
+- **Sustained ≥ 30 strikes/s** — local storm system (close enough for
+  your antenna to be at risk; consider disconnecting)
+- **Diurnal cycle** — strike rates peak in late afternoon / evening
+  during summer at temperate latitudes
+
+## Controls
+
+- **clear** — resets the rolling counter and re-arms a ~1 s warm-up
+  gate. Useful after the receiver gain / antenna changes so the EMA
+  noise floor adapts cleanly before counting resumes
+- **copy** — exports the 60-bin CSV snapshot to the clipboard
+
+## Use it for
+
+- Estimating how far away the active storm is (more distant = lower
+  rate)
+- Deciding whether to disconnect the antenna for safety
+- Long-term climate monitoring (count over hours / days)
+- Correlating "noise on HF" complaints with actual sferic activity`,
+
+      btnEnvp:
+`# Envelope PDF
+
+Probability density of the analytic-signal envelope **|x(t) + j·H{x(t)}|**
+of the demodulated audio (Hilbert transform via spectral zeroing).
+
+## Reading the shape
+
+| Curve | Interpretation |
+|---|---|
+| Smooth hump, peak ≈ 0.3–0.4, tail to 1 | **Rayleigh** — pure noise |
+| Peak shifted toward 0.7–1.0, narrow spread | **Rician** — carrier + noise; the dominant peak position tracks the carrier-to-noise ratio |
+| **Bimodal** (two peaks) | FSK / two-tone — mark + space at different envelope levels |
+| Long right-skewed tail | Speech / music — bursty envelope dynamics |
+| Narrow spike near x = 1.0 | Pure tone with AGC saturating |
+| Narrow spike near x = 0 | Low-energy / silence |
+
+## Status line
+
+\`mean / σ / mode\` plus a heuristic class label (Rayleigh, Rician,
+speech, narrow-spread tone, low-energy). The classifier looks at the
+coefficient of variation (σ / mean) and the position of the mode.
+
+## Technical
+
+- 2048-pt FFT window (~170 ms at 12 kHz)
+- 128 amplitude bins on [0, 1] normalised by per-frame peak
+- Histogram decays at 0.92/frame (~12 frame half-life ≈ 1 s)`,
+
+      btnCeps:
+`# Cepstrum / Pitch Contour
+
+Real cepstrum (\`FFT(log|FFT(x)|)\`) of the demodulated audio. Peaks at
+**quefrency q** (in seconds) reveal periodic components at frequency
+1/q Hz.
+
+## Top half — current cepstrum
+
+- X axis: pitch in Hz (mapped from quefrency \`q = sr/pitch\`)
+- Y axis: |cep[q]|, normalised to the local maximum
+- Search range: **50–500 Hz** (covers male / female / child vocal pitch + MFSK tone spacing)
+- Yellow vertical = peak; faint blue horizontal = the \`3× median\` confidence threshold
+- Tick labels at 500 / 300 / 200 / 150 / 100 / 75 / 50 Hz
+
+## Bottom half — pitch contour
+
+Scrolling log-scaled pitch history. Reference lines at 50 / 100 / 200 / 300 / 500 Hz. Unvoiced / no-confident-pitch frames leave gaps in the trace.
+
+## Reading the trace
+
+- Voice → contour bouncing between 80–180 Hz (men) or 165–255 Hz (women)
+- MFSK / Olivia → flat segments at the tone-spacing frequency
+- Echoes → secondary cepstral peak at the echo delay (in ms)
+- Steady tone (CW BFO) → single locked frequency`,
+
+      btnMhum:
+`# Mains-Hum Tracker
+
+High-resolution narrow-band audio FFT + scrolling waterfall over
+**0–250 Hz**, the band where mains hum and its harmonics live.
+
+## Layout
+
+- **Top section** — current spectrum (Hann-windowed 8192-pt FFT, ~1.46 Hz/bin). Yellow crosshair = dominant peak with parabolic sub-bin interpolation.
+- **Bottom section** — scrolling waterfall, ~25 s deep at 10 Hz refresh. Same colour ramp as Persistence Spectrum (black → blue → green → yellow → red).
+- **Reference lines** — vertical guides at 50 / 60 / 100 / 120 / 150 / 180 / 200 / 240 Hz. Cyan = 50-Hz family (Europe / Africa / much of Asia). Green = 60-Hz family (Americas / parts of Japan).
+
+## Status line
+
+\`peak xx.xx Hz @ −yy.y dB (class)\` where class is one of:
+\`50 Hz mains\`, \`60 Hz mains\`, \`100 Hz (50 × 2)\`, \`120 Hz (60 × 2)\`,
+\`150 Hz\`, \`180 Hz\`, \`off-mains carrier\`.
+
+## Use cases
+
+- Diagnose ground loops — strong 50/60 Hz + many harmonics
+- Find narrow-band carriers near power-line freq (railway signalling, induction stoves, etc.)
+- Distinguish 50 Hz vs 60 Hz region of a remote receiver`,
+
+      btnIfrq:
+`# Instantaneous Frequency Trace
+
+\`IF[n] = (fs / 2π) · arg(z[n] · conj(z[n−1]))\` — an FM-discriminator
+output on the raw IQ stream. The cross-product form gives the wrapped
+phase difference directly, so no explicit unwrap step.
+
+Decimated by 48× (12 kHz IQ → 250 Hz IF samples), 1024-sample ring
+buffer → **~4.1 s of history**.
+
+## Reading the trace
+
+| Pattern | Cause |
+|---|---|
+| Flat line at non-zero Y | Steady carrier offset Δf from dial |
+| Squiggly band around 0 | FM voice or NBFM signal |
+| Repeating ramp | Chirped radar / linear FMCW sweep |
+| Slow slope | Frequency drift (warm-up, Doppler) |
+| Wide noise band | No coherent signal — pure noise discriminator output |
+
+## Y-axis auto-scale
+
+Default ±2 kHz. Widens to ±4 / ±6 kHz automatically when excursions
+demand it (capped at the Kiwi audio Nyquist ±6 kHz).
+
+## Status line
+
+\`window 4.1 s · 250 Hz update · mean … σ … · range min…max · slope … Hz/s\`
+— the slope is a least-squares linear-trend fit over the visible window,
+useful for measuring slow drift.
+
+## Difference from DOPP
+
+DOPP locks one carrier with a PLL and tracks it. IFRQ shows the **raw**
+instantaneous frequency without locking — so all spectral content
+contributes. Use IFRQ when you don't know what to lock to, DOPP when
+you have a clean carrier to track.`,
+
+      btnAldv:
+`# Allan Deviation Plot σ_y(τ)
+
+Lab-grade frequency-stability metric, plotted on **log-log axes**.
+Computed from a single-pole PLL identical to DOPP, sampled at
+τ₀ = **0.1 s** into a 2048-sample ring (~3.4 min history).
+
+## Math
+
+Overlapping Allan deviation:
+
+  σ_y²(τ = mτ₀) = (1 / (2·(N_avg − 1))) · Σ (A_{i+m}(m) − A_i(m))²
+
+where A_i(m) is the average frequency offset over m consecutive samples
+starting at sample i.
+
+Plotted points at **τ = 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100 s**.
+Yellow dots on each τ that has enough samples; green line connects them.
+
+## Reading the slope
+
+| Slope on log-log | Noise type |
+|---|---|
+| −1 (10× drop per τ decade) | White phase noise (measurement-limited) |
+| −0.5 | White FM noise |
+| 0 (flat) | Flicker FM — the "1/f floor" |
+| +0.5 | Random-walk FM |
+| +1 | Frequency drift dominating |
+
+The bottom of the curve is the receiver / source noise floor. The
+"knee" τ tells you the integration time that minimises uncertainty.
+
+## Status line
+
+\`buffer xx.x s / 205 s · PLL Δf … Hz · σ_y(1 s) = … Hz\`. Wait for the
+buffer to fill if you want σ_y(τ=100 s) — need ≥ 200 s of data.`,
+
+      btnCaf:
+`# Cyclostationary CAF Heatmap
+
+|R(α, τ)| over a 2D grid of **cyclic frequency α** (X axis, 0–1500 Hz)
+and **lag τ** (Y axis, dyadic set). Symbol rates of digital modes
+appear as bright vertical stripes even when the signal is buried in
+noise.
+
+## Math
+
+For each τ ∈ {4, 8, 16, 32, 64, 128, 256, 512} samples:
+
+  r[n] = x[n] · conj(x[n − τ])
+  R(α, τ) = FFT(Hann · r)        →  magnitude across α
+
+## Reading the heatmap
+
+| α (X) bright at … | Mode |
+|---|---|
+| 6.25 Hz | FT8 / FT4 (slow MFSK) |
+| 31.25 Hz | PSK31 |
+| 45.45 Hz | RTTY (Baudot 45.45) |
+| 50 / 75 / 100 Hz | Various RTTY / MFSK variants |
+| 200 / 300 Hz | Higher-rate PSK / FSK |
+| 1000 Hz | MT63 |
+| 1200 Hz | AFSK1200 / APRS |
+
+The strongest stripe usually sits in a τ band that matches the symbol
+period (τ ≈ 1/baud × samples-per-second). Multiple integer multiples
+of the baud may also light up (harmonics of the cyclic frequency).
+
+## Status line
+
+\`peak α xx.x Hz @ τ=… · max …\` — gives you the detected symbol rate
+directly. Tuned to a known mode, this should match the table above.
+
+## Performance
+
+Throttled to ~7.5 Hz (every 8th rAF tick) because 8 × 2048-pt FFTs/frame
+is the heaviest viz in the app. All scratch buffers are cached.`,
+
+      btnEcho:
+`# Channel-Sounder Echo Profile
+
+Autocorrelation of the IQ power envelope |z(t)|² vs lag τ in ms.
+Secondary peaks reveal multipath / skywave hop delays.
+
+## Math
+
+  e[n] = I[n]² + Q[n]² (power envelope)
+  c[n] = e[n] − mean(e)
+  R(τ) = IFFT( |FFT(c)|² )           (Wiener–Khinchin)
+
+Computed on 4096-sample window (~340 ms), zero-padded to 8192 for
+linear (not circular) autocorrelation. Normalised by R(0) and EWMA-
+averaged (0.85 weight on past frame) so steady echoes accumulate while
+noise smooths out.
+
+## Layout
+
+- **X axis** — τ in ms (0, 5, 10, 15, 20, 25, 30, 40, 50)
+- **Y axis** — 10·log₁₀(|R(τ)/R(0)|) from 0 dB down to −50 dB
+- **Green trace** — echo profile (line plot)
+- **Yellow dots + labels** — automatically detected peaks ≥ 6 dB above the local noise floor (median of dB values past 30 ms)
+- First 0.5 ms blanked — sample-to-sample self-correlation isn't a real echo
+
+## Reading the peaks
+
+| τ (ms) | Likely cause |
+|---|---|
+| 1–5 | F-layer skywave, single hop |
+| 3 | Typical sporadic-E |
+| 8–15 | Multi-hop F2 |
+| 20–30 | Long-path / multi-hop on lower HF |
+| ≈ N · 16 ms | NTSC video field rate (rare; suggests TV intermod) |
+
+## Status line
+
+\`peaks: 3.4 ms (−12 dB), 7.1 ms (−18 dB), 14.2 ms (−25 dB)\` — top
+three peaks above the dynamically-estimated noise floor. "No echoes
+above floor + 6 dB" when nothing is detected.`,
+
+      btnSclk:
+`# Symbol Clock Recovery Scope
+
+Detect the symbol-clock spectral line in |z|², lock a 1st-order PLL
+onto it, and plot the loop's behaviour.
+
+## Detection (every ~1 s)
+
+4096-sample Hann-windowed |z|² → FFT → search 10–1500 Hz for the
+dominant peak. Parabolic sub-bin interpolation for accuracy. Confidence
+= peak / median magnitude. Locks only if ≥ 5× median.
+
+## Tracking (per IQ sample)
+
+Single-pole PLL:
+- NCO at the detected symbol-clock frequency f
+- Mix \`e[n] · cos(−φ)\` + \`e[n] · sin(−φ)\` and accumulate
+- Phase error = atan2(sumQ, sumI) → frequency error → integrate at gain 0.08
+
+## Layout
+
+- **Top half** — tracked symbol rate (Hz) vs time, auto-scaled
+- **Bottom half** — PLL phase error (rad) vs time, ±π range, dashed green zero line
+- 512-entry ring at 10 Hz → ~50 s of history
+
+## Reading the bottom trace
+
+| Pattern | Lock state |
+|---|---|
+| Flat band near 0 | **LOCKED** — clock recovered, error stays in ±0.3 rad |
+| Slow ramp | **tracking** — loop catching up to a drifting clock |
+| Scattered ±π excursions | **sliding** — wrong symbol rate, loop wraps |
+| Random walk | **searching** — no real symbol clock line in band |
+
+## Status line
+
+\`symbol rate … Hz · confidence … × median · err … rad · {LOCKED/tracking/sliding/searching}\`
+
+Lock state computed from the % of recent (last 50 samples) errors with
+|err| < 0.3 rad: > 70 % = LOCKED, > 30 % = tracking, else sliding.`,
+    };
+    for (const [id, md] of Object.entries(helps)) {
+      const btn = this.root.querySelector('#' + id) as HTMLElement | null;
+      if (!btn) continue;
+      (btn as HTMLElement & { __longPress?: () => void }).__longPress =
+        () => this.showViewHelpOverlay(id, md);
+    }
+  }
+
+  /** Render a markdown help blob into the standard sig-overlay slot.
+   *  The overlay's existing BACK / clear paths dismiss it the same way
+   *  they dismiss any INFO panel. */
+  private showViewHelpOverlay(id: string, markdown: string): void {
+    clearSigOverlay();
+    showSigOverlay(
+      this.$('wf').parentElement as HTMLElement,
+      markdown,
+      id.replace(/^btn/, '').toUpperCase(),
+      (m, ms) => this.banner(m, ms),
+    );
   }
 
   /** Close every band-modal picker currently on screen. Used as a
@@ -6181,6 +7316,8 @@ export class Shell {
     if (this.thdOn)        this.toggleThd();
     if (this.persistOn)    this.togglePersist();
     if (this.envpOn)       this.toggleEnvp();
+    if (this.cepsOn)       this.toggleCeps();
+    if (this.mhumOn)       this.toggleMhum();
     if (this.grayOn)       this.toggleGray();
     if (this.vectOn)       this.toggleVect();
     if (this.iqEyeOn)      this.toggleIqEye();
@@ -7478,6 +8615,55 @@ export class Shell {
   private envpFftRe: Float32Array | null = null;
   private envpFftIm: Float32Array | null = null;
   private envpEnvScratch: Float32Array | null = null;
+  /** Cepstrum / Pitch Contour — real cepstrum of the audio plus a
+   *  scrolling history of the dominant peak's pitch estimate. The
+   *  cepstrum is a second FFT applied to the log-magnitude spectrum:
+   *  peaks at quefrency q (in seconds) reveal periodic structure at
+   *  frequency 1/q Hz (vocal pitch, MFSK tone spacing, echo delays). */
+  private cepsOn = false;
+  private static readonly CEPS_FFT = 2048;                // ≈170 ms window at 12 kHz
+  private static readonly CEPS_PITCH_MIN_HZ = 50;          // upper quefrency edge (lowest pitch we'll detect)
+  private static readonly CEPS_PITCH_MAX_HZ = 500;         // lower quefrency edge (highest pitch we'll detect)
+  private static readonly CEPS_HIST_LEN = 512;             // scrolling pitch-contour buffer (~50 s at 10 Hz)
+  private static readonly CEPS_RENDER_EVERY_N = 6;         // ≈10 Hz at 60 fps
+  private cepsBuf = new Float32Array(Shell.CEPS_FFT);
+  private cepsBufWrite = 0;
+  /** Per-frame pitch history (Hz, 0 = no detection / silence). Ring
+   *  buffer; the draw routine wraps reads at `cepsPitchHistWrite`. */
+  private cepsPitchHist = new Float32Array(Shell.CEPS_HIST_LEN);
+  private cepsPitchHistWrite = 0;
+  private cepsPitchHistFilled = 0;
+  private cepsRaf: number | null = null;
+  private cepsRafTick = 0;
+  // Scratch buffers (no per-frame allocs).
+  private cepsFftRe: Float32Array | null = null;
+  private cepsFftIm: Float32Array | null = null;
+  private cepsLogMag: Float32Array | null = null;
+  private cepsCepReal: Float32Array | null = null;
+  /** Mains-Hum Tracker — high-resolution audio FFT over the 0–250 Hz
+   *  band (where 50/60 Hz hum + harmonics live) with a scrolling
+   *  waterfall and an annotated current-spectrum trace. */
+  private mhumOn = false;
+  private static readonly MHUM_FFT = 8192;                // ≈683 ms window at 12 kHz → 1.46 Hz/bin
+  private static readonly MHUM_MAX_HZ = 250;              // top of the displayed band
+  private static readonly MHUM_WF_ROWS = 256;             // waterfall depth (≈25 s at 10 Hz)
+  private static readonly MHUM_RENDER_EVERY_N = 6;        // ≈10 Hz at 60 fps
+  private mhumBuf = new Float32Array(Shell.MHUM_FFT);
+  private mhumBufWrite = 0;
+  /** Scrolling waterfall — Float32 row-major [rows × bins], values are
+   *  dB power per bin. The draw routine renders rows newest-first. */
+  private mhumWaterfall: Float32Array | null = null;
+  private mhumWaterfallRow = 0;       // next row index to write
+  private mhumWaterfallFilled = 0;
+  private mhumBins = 0;               // bins actually used (0 .. MHUM_MAX_HZ)
+  private mhumRaf: number | null = null;
+  private mhumRafTick = 0;
+  // Scratch buffers.
+  private mhumFftRe: Float32Array | null = null;
+  private mhumFftIm: Float32Array | null = null;
+  private mhumCurDb: Float32Array | null = null;
+  private mhumWfImage: ImageData | null = null;
+  private mhumOffCanvas: HTMLCanvasElement | null = null;
   /** Hover cursor X (CSS px from canvas left). Null when pointer is
    *  outside the canvas — no cursor drawn, status line shows defaults. */
   private thdCursorX: number | null = null;
@@ -11236,7 +12422,7 @@ export class Shell {
   /** Page-5 dispatcher. Opens `name`'s panel and starts its dedicated
    *  feed + render loop; closes whichever was previously active.
    *  Re-tapping the same button closes it. */
-  private toggleIq5(name: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt') {
+  private toggleIq5(name: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk') {
     // Same-button tap → close.
     if (this.iq5Active === name) {
       this.closeIq5();
@@ -11281,6 +12467,50 @@ export class Shell {
       this.dldsReset();
     } else if (name === 'kurt') {
       this.kurtReset();
+    } else if (name === 'ifrq') {
+      this.ifrqHist.fill(0);
+      this.ifrqHistWrite = 0;
+      this.ifrqHistFilled = 0;
+      this.ifrqPrevI = 0;
+      this.ifrqPrevQ = 0;
+      this.ifrqHasPrev = false;
+      this.ifrqDecimAccum = 0;
+      this.ifrqDecimCount = 0;
+    } else if (name === 'aldv') {
+      this.aldvHist.fill(0);
+      this.aldvHistWrite = 0;
+      this.aldvHistFilled = 0;
+      this.aldvPhase = 0;
+      this.aldvFreqHz = 0;
+      this.aldvSamplesSinceEmit = 0;
+    } else if (name === 'caf') {
+      this.cafBufI.fill(0);
+      this.cafBufQ.fill(0);
+      this.cafBufWrite = 0;
+      this.cafBufFilled = 0;
+      if (this.cafHeat) this.cafHeat.fill(0);
+      this.cafMaxMag = 0;
+    } else if (name === 'echo') {
+      this.echoBufI.fill(0);
+      this.echoBufQ.fill(0);
+      this.echoBufWrite = 0;
+      this.echoBufFilled = 0;
+      if (this.echoAvg) this.echoAvg.fill(0);
+      this.echoAvgCount = 0;
+    } else if (name === 'sclk') {
+      this.sclkBufI.fill(0);
+      this.sclkBufQ.fill(0);
+      this.sclkBufWrite = 0;
+      this.sclkBufFilled = 0;
+      this.sclkRateHist.fill(0);
+      this.sclkErrHist.fill(0);
+      this.sclkHistWrite = 0;
+      this.sclkHistFilled = 0;
+      this.sclkSymHz = 0;
+      this.sclkNcoPhase = 0;
+      this.sclkSampleAccum = 0;
+      this.sclkSampleCount = 0;
+      this.sclkPeakConfidence = 0;
     } else if (name === 'wusb' || name === 'wlsb') {
       this.weakInFill = 0;
       this.weakOverlap.fill(0);
@@ -11301,7 +12531,24 @@ export class Shell {
     this.updateWaterfallStream();
     const tick = () => {
       if (!this.iq5Active) { this.iq5Raf = null; return; }
-      this.renderIq5();
+      // CAF's per-frame work (8 × 2048-pt FFTs) is heavy enough to
+      // glitch audio at 60 fps; throttle it without affecting the
+      // other IQ-5 views.
+      if (this.iq5Active === 'caf') {
+        if ((this.cafRafTick++ % Shell.CAF_RENDER_EVERY_N) === 0) {
+          this.renderIq5();
+        }
+      } else if (this.iq5Active === 'echo') {
+        if ((this.echoRafTick++ % Shell.ECHO_RENDER_EVERY_N) === 0) {
+          this.renderIq5();
+        }
+      } else if (this.iq5Active === 'sclk') {
+        if ((this.sclkRafTick++ % Shell.SCLK_RENDER_EVERY_N) === 0) {
+          this.renderIq5();
+        }
+      } else {
+        this.renderIq5();
+      }
       this.iq5Raf = requestAnimationFrame(tick);
     };
     this.iq5Raf = requestAnimationFrame(tick);
@@ -11338,6 +12585,11 @@ export class Shell {
       case 'wlsb': this.feedWeak(iqBytes); break;
       case 'dlds': this.feedDlds(iqBytes); break;
       case 'kurt': this.feedKurt(iqBytes); break;
+      case 'ifrq': this.feedIfrq(iqBytes); break;
+      case 'aldv': this.feedAldv(iqBytes); break;
+      case 'caf':  this.feedCaf(iqBytes); break;
+      case 'echo': this.feedEcho(iqBytes); break;
+      case 'sclk': this.feedSclk(iqBytes); break;
       default: break;
     }
   }
@@ -11356,6 +12608,11 @@ export class Shell {
       case 'wlsb': this.renderWeak(); break;
       case 'dlds': this.renderDlds(); break;
       case 'kurt': this.renderKurt(); break;
+      case 'ifrq': this.renderIfrq(); break;
+      case 'aldv': this.renderAldv(); break;
+      case 'caf':  this.renderCaf(); break;
+      case 'echo': this.renderEcho(); break;
+      case 'sclk': this.renderSclk(); break;
     }
   }
 
@@ -11502,6 +12759,1104 @@ export class Shell {
       6 * dpr, 4 * dpr,
     );
     this.$('doppStatus').textContent = `DOPP — Δf ${this.doppFreqHz.toFixed(2)} Hz`;
+  }
+
+  /** Instantaneous Frequency Trace — FM-discriminator on the raw IQ:
+   *  IF[n] = (fs / 2π) · arg(z[n] · conj(z[n-1])). Decimates by ~48× so
+   *  each decimated sample is the mean of one block, then pushes into
+   *  a 1024-sample ring (≈4 s of history). The cross-product form gives
+   *  the wrapped phase difference directly so we don't need an explicit
+   *  unwrap step (it's continuous as long as |Δφ| < π between samples). */
+  private feedIfrq(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    if (nPairs === 0) return;
+    const fs = 12000;
+    const norm = fs / (2 * Math.PI);
+    let prevI = this.ifrqPrevI;
+    let prevQ = this.ifrqPrevQ;
+    let hasPrev = this.ifrqHasPrev;
+    let accum = this.ifrqDecimAccum;
+    let count = this.ifrqDecimCount;
+    const decim = Shell.IFRQ_DECIM;
+    const hist = this.ifrqHist;
+    let w = this.ifrqHistWrite;
+    let filled = this.ifrqHistFilled;
+    const HL = Shell.IFRQ_HIST_LEN;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false);
+      const Q = dv.getInt16(i * 4 + 2, false);
+      if (hasPrev) {
+        // z[n] · conj(z[n-1]) = (I + jQ)(prevI - j·prevQ)
+        //   real = I·prevI + Q·prevQ
+        //   imag = Q·prevI - I·prevQ
+        const realP = I * prevI + Q * prevQ;
+        const imagP = Q * prevI - I * prevQ;
+        // Skip near-zero-energy samples — atan2 on (0,0) returns 0 which
+        // would bias the average toward zero during silence.
+        if (realP * realP + imagP * imagP > 1) {
+          const ifHz = Math.atan2(imagP, realP) * norm;
+          accum += ifHz;
+          count++;
+          if (count >= decim) {
+            hist[w] = accum / count;
+            w = (w + 1) % HL;
+            if (filled < HL) filled++;
+            accum = 0;
+            count = 0;
+          }
+        }
+      }
+      prevI = I;
+      prevQ = Q;
+      hasPrev = true;
+    }
+    this.ifrqPrevI = prevI;
+    this.ifrqPrevQ = prevQ;
+    this.ifrqHasPrev = hasPrev;
+    this.ifrqDecimAccum = accum;
+    this.ifrqDecimCount = count;
+    this.ifrqHistWrite = w;
+    this.ifrqHistFilled = filled;
+  }
+
+  private renderIfrq() {
+    const cv = this.$('ifrqCanvas') as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = (cv.width  = Math.round(cv.clientWidth  * dpr));
+    const H = (cv.height = Math.round(cv.clientHeight * dpr));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 14 * dpr;
+    const plotL = pad, plotR = W - pad;
+    const plotT = pad, plotB = H - pad;
+    const plotW = plotR - plotL;
+    const plotH = plotB - plotT;
+    const hist = this.ifrqHist;
+    const HL = Shell.IFRQ_HIST_LEN;
+    const filled = this.ifrqHistFilled;
+
+    // Pick a Y range. Default ±2 kHz; widen if recent samples clearly
+    // exceed that. (Kiwi IQ Nyquist is ±6 kHz so we cap at 6 kHz too.)
+    let observedMax = 0;
+    for (let i = 0; i < filled; i++) {
+      const a = Math.abs(hist[i]);
+      if (a > observedMax) observedMax = a;
+    }
+    let yMax = 2000;
+    while (observedMax > yMax * 0.9 && yMax < 6000) yMax *= 2;
+    yMax = Math.min(6000, yMax);
+
+    // Gridlines + Y labels.
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#888';
+    const yForHz = (hz: number) =>
+      plotT + (1 - (hz + yMax) / (2 * yMax)) * plotH;
+    const grid: number[] = [];
+    // Reasonable tick spacing: 5 lines above and below zero.
+    const tickStep =
+      yMax >= 4000 ? 1000 :
+      yMax >= 2000 ? 500 :
+      yMax >= 1000 ? 250 : 100;
+    for (let hz = -yMax; hz <= yMax; hz += tickStep) grid.push(hz);
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (const hz of grid) {
+      const y = yForHz(hz);
+      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
+    }
+    ctx.stroke();
+    // Zero line emphasised.
+    ctx.strokeStyle = '#3a5';
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    ctx.beginPath();
+    const yZero = yForHz(0);
+    ctx.moveTo(plotL, yZero); ctx.lineTo(plotR, yZero);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Y labels.
+    ctx.fillStyle = '#888';
+    for (const hz of grid) {
+      if (hz === 0) continue;
+      const y = yForHz(hz);
+      const lbl = Math.abs(hz) >= 1000 ? `${(hz / 1000).toFixed(1)} k` : `${hz}`;
+      ctx.fillText(lbl, plotL + 2 * dpr, y);
+    }
+
+    // IF trace. Most-recent sample at the right edge; older to the left.
+    if (filled > 1) {
+      ctx.strokeStyle = '#cfffa3';
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < filled; i++) {
+        // Map history-from-oldest index → x.
+        const ageFromNewest = filled - 1 - i;
+        const idx = (this.ifrqHistWrite - 1 - ageFromNewest + HL) % HL;
+        const v = hist[idx];
+        const xN = i / Math.max(1, filled - 1);
+        const x = plotL + xN * plotW;
+        const yClamped = Math.max(-yMax, Math.min(yMax, v));
+        const y = yForHz(yClamped);
+        if (i === 0) ctx.moveTo(x, y);
+        else          ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Compute simple stats on the visible window for the status line.
+    let sum = 0, sum2 = 0, n = 0;
+    let minV = +Infinity, maxV = -Infinity;
+    for (let i = 0; i < filled; i++) {
+      const v = hist[i];
+      sum  += v;
+      sum2 += v * v;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+      n++;
+    }
+    const mean = n > 0 ? sum / n : 0;
+    const variance = n > 0 ? Math.max(0, sum2 / n - mean * mean) : 0;
+    const std = Math.sqrt(variance);
+    // Linear-trend slope (Hz/s) over the visible window. Indices are
+    // already decimated → time step = IFRQ_DECIM / fs seconds.
+    let slopeHzPerSec = 0;
+    if (n > 1) {
+      const dtPerSample = Shell.IFRQ_DECIM / 12000;
+      const xBar = (n - 1) / 2;
+      let num = 0, den = 0;
+      for (let i = 0; i < n; i++) {
+        const ageFromNewest = n - 1 - i;
+        const idx = (this.ifrqHistWrite - 1 - ageFromNewest + HL) % HL;
+        const dx = i - xBar;
+        num += dx * (hist[idx] - mean);
+        den += dx * dx;
+      }
+      const slopePerStep = den > 0 ? num / den : 0;
+      slopeHzPerSec = slopePerStep / dtPerSample;
+    }
+
+    const status = this.$('ifrqStatus');
+    if (status) {
+      const windowSec = (Shell.IFRQ_HIST_LEN * Shell.IFRQ_DECIM) / 12000;
+      status.textContent =
+        `IFRQ — window ${windowSec.toFixed(1)} s · ${(12000 / Shell.IFRQ_DECIM).toFixed(0)} Hz update`
+        + ` · mean ${mean.toFixed(1)} Hz · σ ${std.toFixed(1)} Hz`
+        + (n > 1
+            ? ` · range ${minV.toFixed(0)}…${maxV.toFixed(0)} Hz · slope ${slopeHzPerSec.toFixed(2)} Hz/s`
+            : '');
+    }
+  }
+
+  /** Allan Deviation — feed an internal DOPP-style PLL on the IQ
+   *  stream, then sample its locked-frequency output at τ₀=0.1 s into
+   *  the Allan history ring. The PLL implementation is intentionally
+   *  identical to feedDopp so both panels report the same physical
+   *  quantity, just at different time scales. */
+  private feedAldv(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    if (nPairs === 0) return;
+    const fs = 12000;
+    let phase = this.aldvPhase;
+    let f = this.aldvFreqHz;
+    const dt = 2 * Math.PI / fs;
+    let sumI = 0, sumQ = 0;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      phase += f * dt;
+      if (phase > Math.PI)  phase -= 2 * Math.PI;
+      if (phase < -Math.PI) phase += 2 * Math.PI;
+      const c = Math.cos(-phase), s = Math.sin(-phase);
+      const dI = I * c - Q * s;
+      const dQ = I * s + Q * c;
+      sumI += dI; sumQ += dQ;
+    }
+    const angle = Math.atan2(sumQ, sumI);
+    const errHz = (angle / (2 * Math.PI)) * (fs / nPairs);
+    f += errHz * this.aldvAlpha;
+    this.aldvPhase = phase;
+    this.aldvFreqHz = f;
+    // Decimate to τ₀-spaced Allan samples.
+    this.aldvSamplesSinceEmit += nPairs;
+    while (this.aldvSamplesSinceEmit >= Shell.ALDV_TAU0_SAMPLES) {
+      this.aldvSamplesSinceEmit -= Shell.ALDV_TAU0_SAMPLES;
+      this.aldvHist[this.aldvHistWrite] = this.aldvFreqHz;
+      this.aldvHistWrite = (this.aldvHistWrite + 1) % Shell.ALDV_HIST_LEN;
+      if (this.aldvHistFilled < Shell.ALDV_HIST_LEN) this.aldvHistFilled++;
+    }
+  }
+
+  /** Overlapping Allan deviation σ_y(τ=mτ₀) computed from N
+   *  consecutive frequency samples. Returns NaN when there aren't
+   *  enough samples for at least one (i, i+m, i+2m) triplet. */
+  private aldvSigma(y: Float32Array, N: number, m: number): number {
+    if (N < 2 * m + 1) return NaN;
+    let runA = 0, runB = 0;
+    for (let j = 0; j < m; j++) { runA += y[j]; runB += y[j + m]; }
+    let acc = 0, cnt = 0;
+    const upper = N - 2 * m;
+    for (let i = 0; i <= upper; i++) {
+      const diff = (runB - runA) / m;
+      acc += diff * diff;
+      cnt++;
+      if (i < upper) {
+        runA = runA - y[i] + y[i + m];
+        runB = runB - y[i + m] + y[i + 2 * m];
+      }
+    }
+    return cnt > 0 ? Math.sqrt(acc / (2 * cnt)) : NaN;
+  }
+
+  private renderAldv() {
+    const cv = this.$('aldvCanvas') as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = (cv.width  = Math.round(cv.clientWidth  * dpr));
+    const H = (cv.height = Math.round(cv.clientHeight * dpr));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 28 * dpr;
+    const plotL = pad, plotR = W - pad;
+    const plotT = pad, plotB = H - pad;
+    const plotW = plotR - plotL;
+    const plotH = plotB - plotT;
+
+    const HL = Shell.ALDV_HIST_LEN;
+    const filled = this.aldvHistFilled;
+    const tau0 = Shell.ALDV_TAU0_SAMPLES / 12000;   // seconds
+
+    // Linearise the ring buffer into a flat array (oldest→newest).
+    const lin = new Float32Array(filled);
+    for (let i = 0; i < filled; i++) {
+      const idx = (this.aldvHistWrite - filled + i + HL) % HL;
+      lin[i] = this.aldvHist[idx];
+    }
+
+    // Compute σ_y(τ) at each step that has enough samples.
+    const ms = Shell.ALDV_M_STEPS;
+    const pts: Array<{ tau: number; sigma: number }> = [];
+    for (const m of ms) {
+      const s = this.aldvSigma(lin, filled, m);
+      if (Number.isFinite(s) && s > 0) pts.push({ tau: m * tau0, sigma: s });
+    }
+
+    // Axis ranges (log-log). X spans τ₀..(HIST_LEN/2)·τ₀; Y auto-scales.
+    const tauMin = ms[0] * tau0;
+    const tauMax = ms[ms.length - 1] * tau0;
+    const xLogMin = Math.log10(tauMin);
+    const xLogMax = Math.log10(tauMax);
+    let yLogMin = -3, yLogMax = 3;   // default 1e-3 .. 1e3 Hz
+    if (pts.length > 0) {
+      let lo = +Infinity, hi = -Infinity;
+      for (const p of pts) {
+        const lg = Math.log10(p.sigma);
+        if (lg < lo) lo = lg;
+        if (lg > hi) hi = lg;
+      }
+      // Pad to nearest decade on each side; ensure at least 2 decades.
+      yLogMin = Math.floor(lo) - 0.3;
+      yLogMax = Math.ceil(hi) + 0.3;
+      if (yLogMax - yLogMin < 2) yLogMax = yLogMin + 2;
+    }
+    const xForTau = (tau: number) =>
+      plotL + ((Math.log10(tau) - xLogMin) / (xLogMax - xLogMin)) * plotW;
+    const yForSigma = (s: number) =>
+      plotT + (1 - (Math.log10(s) - yLogMin) / (yLogMax - yLogMin)) * plotH;
+
+    // Gridlines on decades.
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let lg = Math.ceil(xLogMin); lg <= Math.floor(xLogMax); lg++) {
+      const x = plotL + ((lg - xLogMin) / (xLogMax - xLogMin)) * plotW;
+      ctx.moveTo(x, plotT); ctx.lineTo(x, plotB);
+    }
+    for (let lg = Math.ceil(yLogMin); lg <= Math.floor(yLogMax); lg++) {
+      const y = plotT + (1 - (lg - yLogMin) / (yLogMax - yLogMin)) * plotH;
+      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
+    }
+    ctx.stroke();
+
+    // Axis labels.
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#888';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'center';
+    for (let lg = Math.ceil(xLogMin); lg <= Math.floor(xLogMax); lg++) {
+      const x = plotL + ((lg - xLogMin) / (xLogMax - xLogMin)) * plotW;
+      const v = Math.pow(10, lg);
+      const lbl = v >= 1 ? `${v.toFixed(0)} s` : `${v.toFixed(2)} s`;
+      ctx.fillText(lbl, x, plotB + 4 * dpr);
+    }
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let lg = Math.ceil(yLogMin); lg <= Math.floor(yLogMax); lg++) {
+      const y = plotT + (1 - (lg - yLogMin) / (yLogMax - yLogMin)) * plotH;
+      const v = Math.pow(10, lg);
+      const lbl = v >= 1 ? `${v.toFixed(0)} Hz`
+                          : v >= 0.001 ? `${(v * 1000).toFixed(0)} mHz`
+                                       : `${v.toExponential(0)} Hz`;
+      ctx.fillText(lbl, plotL - 4 * dpr, y);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    // Plot points + connecting line.
+    if (pts.length >= 2) {
+      ctx.strokeStyle = '#cfffa3';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const x = xForTau(p.tau);
+        const y = yForSigma(p.sigma);
+        if (i === 0) ctx.moveTo(x, y);
+        else          ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#fd5';
+    for (const p of pts) {
+      const x = xForTau(p.tau);
+      const y = yForSigma(p.sigma);
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5 * dpr, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    // Status — show filled count + the σ_y at τ=1s if available.
+    const status = this.$('aldvStatus');
+    if (status) {
+      const filledSec = filled * tau0;
+      const sigma1 = pts.find(p => Math.abs(p.tau - 1) < 0.05);
+      const tipTxt = sigma1
+        ? ` · σ_y(1 s) = ${sigma1.sigma.toFixed(3)} Hz`
+        : ` · waiting for τ = 1 s (need ≥${Math.round((2 * 10 + 1) * tau0)} s of data)`;
+      status.textContent =
+        `ALDV — buffer ${filledSec.toFixed(1)} s / ${(HL * tau0).toFixed(0)} s`
+        + ` · PLL Δf ${this.aldvFreqHz.toFixed(2)} Hz`
+        + tipTxt;
+    }
+  }
+
+  /** Cyclostationary CAF — ingest IQ bytes into a complex ring buffer
+   *  sized 2·CAF_FFT (so an aligned snapshot is always available even
+   *  if writes wrap mid-window). The render path does the heavy FFT
+   *  pass on a stable copy of the latest CAF_FFT samples. */
+  private feedCaf(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    if (nPairs === 0) return;
+    const bufI = this.cafBufI;
+    const bufQ = this.cafBufQ;
+    const N = bufI.length;
+    let w = this.cafBufWrite;
+    for (let i = 0; i < nPairs; i++) {
+      bufI[w] = dv.getInt16(i * 4, false) / 32768;
+      bufQ[w] = dv.getInt16(i * 4 + 2, false) / 32768;
+      w = (w + 1) % N;
+    }
+    this.cafBufWrite = w;
+    if (this.cafBufFilled < N) this.cafBufFilled = Math.min(N, this.cafBufFilled + nPairs);
+  }
+
+  /** Render the CAF heatmap. For each τ ∈ CAF_TAU_SET:
+   *    r[n] = x[n] · conj(x[n−τ])
+   *    R[α] = FFT(r) over the CAF_FFT-length window
+   *  Strong |R(α,τ)| at α = baud-rate × N reveals symbol-rate
+   *  cyclostationarity even when the underlying signal is buried in
+   *  noise. The display caps α at PERSIST_ALPHA_MAX (1.5 kHz) since
+   *  amateur / utility digital-mode baud rates rarely exceed that. */
+  private renderCaf() {
+    const cv = this.$('cafCanvas') as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = (cv.width  = Math.round(cv.clientWidth  * dpr));
+    const H = (cv.height = Math.round(cv.clientHeight * dpr));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 14 * dpr;
+
+    const N = Shell.CAF_FFT;
+    const fs = 12000;
+    const taus = Shell.CAF_TAU_SET;
+    const alphaBinHz = fs / N;
+    const alphaBins = Math.min(N >> 1, Math.floor(Shell.CAF_ALPHA_MAX_HZ / alphaBinHz) + 1);
+
+    // Allocate scratch + output heatmap on first draw or shape change.
+    if (!this.cafFftRe || this.cafFftRe.length !== N) {
+      this.cafFftRe = new Float32Array(N);
+      this.cafFftIm = new Float32Array(N);
+    }
+    if (!this.cafHeat || this.cafAlphaBins !== alphaBins) {
+      this.cafAlphaBins = alphaBins;
+      this.cafHeat = new Float32Array(taus.length * alphaBins);
+    }
+    const re = this.cafFftRe;
+    const im = this.cafFftIm!;
+    const heat = this.cafHeat;
+
+    // Wait until we have at least CAF_FFT + max(τ) samples in the ring.
+    const maxTau = taus[taus.length - 1];
+    const needed = N + maxTau;
+    if (this.cafBufFilled < needed) {
+      // Still warming up — show a placeholder status and bail.
+      const status = this.$('cafStatus');
+      if (status) status.textContent =
+        `CAF — buffering · ${this.cafBufFilled} / ${needed} samples`;
+      return;
+    }
+    // Snapshot the latest N+maxTau samples into linear scratch arrays.
+    // We keep two arrays — one indexed by n, one by n−τ — but since τ
+    // varies per row we instead linearise once and index with offsets.
+    const lin = needed;
+    // Reuse the FFT input as the "current n" buffer; allocate a small
+    // separate one-time linear copy for n−τ access. We use re/im as
+    // n-window for one row, then refill per τ.
+    // For convenience: copy the last `needed` samples into two
+    // small Float32Arrays (we already keep cafBufI/Q sized 2·N which
+    // is bigger than needed; just compute the start index).
+    const bufI = this.cafBufI;
+    const bufQ = this.cafBufQ;
+    const ringN = bufI.length;
+    const start = (this.cafBufWrite - needed + ringN) % ringN;
+
+    // Per-τ loop.
+    let globalMax = 0;
+    for (let ti = 0; ti < taus.length; ti++) {
+      const tau = taus[ti];
+      // Fill (re, im) with r[n] = x[n] · conj(x[n−τ]) for n = 0..N-1.
+      // Apply a Hann window in passing to keep spectral leakage tame.
+      const twoPiOverN = 2 * Math.PI / (N - 1);
+      for (let n = 0; n < N; n++) {
+        const nIdx     = (start + maxTau + n) % ringN;
+        const tauIdx   = (start + maxTau + n - tau + ringN) % ringN;
+        const xR = bufI[nIdx],     xI = bufQ[nIdx];
+        const yR = bufI[tauIdx],   yI = bufQ[tauIdx];     // x[n-τ]
+        // conj(y) = yR - j·yI; product x·conj(y):
+        //   real = xR·yR + xI·yI
+        //   imag = xI·yR − xR·yI
+        let rRe = xR * yR + xI * yI;
+        let rIm = xI * yR - xR * yI;
+        const w = 0.5 * (1 - Math.cos(twoPiOverN * n));
+        rRe *= w; rIm *= w;
+        re[n] = rRe;
+        im[n] = rIm;
+      }
+      this.fftInPlace(re, im);
+      // Magnitude across the displayed α bins.
+      const rowBase = ti * alphaBins;
+      for (let k = 0; k < alphaBins; k++) {
+        const mag = Math.hypot(re[k], im[k]);
+        heat[rowBase + k] = mag;
+        if (mag > globalMax) globalMax = mag;
+      }
+    }
+    // Running max for stable colour mapping.
+    this.cafMaxMag = Math.max(this.cafMaxMag * 0.95, globalMax);
+
+    // Render: heatmap (top ~80 %) + a thin annotated row of known
+    // baud-rate marks (bottom). Heatmap is alphaBins wide × taus.length
+    // tall, scaled with drawImage.
+    const labelStripH = 32 * dpr;
+    const heatTop = pad;
+    const heatBottom = H - labelStripH;
+    const heatL = pad, heatR = W - pad;
+    const heatH = heatBottom - heatTop;
+    const heatW = heatR - heatL;
+
+    if (!this.cafOffCanvas
+        || this.cafOffCanvas.width !== alphaBins
+        || this.cafOffCanvas.height !== taus.length) {
+      this.cafOffCanvas = document.createElement('canvas');
+      this.cafOffCanvas.width = alphaBins;
+      this.cafOffCanvas.height = taus.length;
+      this.cafOffImage = null;
+    }
+    const off = this.cafOffCanvas;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    if (!this.cafOffImage) {
+      this.cafOffImage = offCtx.createImageData(alphaBins, taus.length);
+    }
+    const img = this.cafOffImage!;
+    const data = img.data;
+    const norm = 1 / Math.max(1e-12, this.cafMaxMag);
+    for (let ti = 0; ti < taus.length; ti++) {
+      const rowBase = ti * alphaBins;
+      // dy = 0 at the TOP of the heatmap = smallest τ (first row of
+      // CAF_TAU_SET). Row map = identity.
+      const dy = ti;
+      for (let k = 0; k < alphaBins; k++) {
+        const t = Math.min(1, heat[rowBase + k] * norm);
+        let r = 0, g = 0, b = 0;
+        if (t > 0) {
+          if (t < 0.25)       { const u = t / 0.25;          r = 0;                       g = 0;                          b = Math.round(80 * u); }
+          else if (t < 0.55)  { const u = (t - 0.25) / 0.30; r = 0;                       g = Math.round(200 * u);        b = Math.round(80 * (1 - u)); }
+          else if (t < 0.85)  { const u = (t - 0.55) / 0.30; r = Math.round(220 * u);     g = 200 + Math.round(40 * u);   b = 0; }
+          else                 { const u = (t - 0.85) / 0.15; r = 220 + Math.round(35 * u); g = 240 - Math.round(140 * u); b = 0; }
+        }
+        const o = (dy * alphaBins + k) * 4;
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+      }
+    }
+    offCtx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, heatL, heatTop, heatW, heatH);
+
+    // Y-axis τ labels — printed inside each row band on the left.
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const rowH = heatH / taus.length;
+    for (let ti = 0; ti < taus.length; ti++) {
+      const y = heatTop + (ti + 0.5) * rowH;
+      const tau = taus[ti];
+      const tauMs = (tau / fs) * 1000;
+      ctx.fillText(`τ=${tau} (${tauMs.toFixed(1)} ms)`, heatL + 4 * dpr, y);
+    }
+
+    // X-axis label strip — known baud-rate markers + axis ticks.
+    const xForAlpha = (hz: number) => heatL + (hz / Shell.CAF_ALPHA_MAX_HZ) * heatW;
+    const xTicks = [31.25, 45.45, 50, 75, 100, 200, 300, 500, 800, 1000, 1200, 1500];
+    const xLabels: Record<number, string> = {
+      31.25: 'PSK31', 45.45: 'RTTY', 50: 'BAUD50', 75: 'B75',
+      100: '100', 200: '200', 300: 'B300', 500: '500', 800: '800',
+      1000: 'MT63 / 1k', 1200: '1.2k', 1500: '1.5k',
+    };
+    ctx.fillStyle = '#888';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'center';
+    ctx.strokeStyle = '#3f8fc4';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(heatL, heatBottom); ctx.lineTo(heatR, heatBottom);
+    ctx.stroke();
+    for (const hz of xTicks) {
+      if (hz > Shell.CAF_ALPHA_MAX_HZ) continue;
+      const x = xForAlpha(hz);
+      ctx.fillStyle = '#888';
+      ctx.fillRect(x, heatBottom, 1 * dpr, 4 * dpr);
+      ctx.fillStyle = '#cfffa3';
+      ctx.fillText(xLabels[hz] ?? `${hz}`, x, heatBottom + 6 * dpr);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    // Find the strongest cell globally and report it.
+    let bestTi = 0, bestK = 0, bestV = 0;
+    for (let ti = 0; ti < taus.length; ti++) {
+      const rowBase = ti * alphaBins;
+      // Skip the DC bin which always lights up for any non-zero signal.
+      for (let k = 2; k < alphaBins; k++) {
+        const v = heat[rowBase + k];
+        if (v > bestV) { bestV = v; bestTi = ti; bestK = k; }
+      }
+    }
+    const bestAlpha = bestK * alphaBinHz;
+    const bestTau = taus[bestTi];
+
+    const status = this.$('cafStatus');
+    if (status) {
+      status.textContent =
+        `CAF — ${N} pt · ${alphaBinHz.toFixed(1)} Hz/α-bin · 0–${Shell.CAF_ALPHA_MAX_HZ} Hz`
+        + ` · peak α ${bestAlpha.toFixed(1)} Hz @ τ=${bestTau}`
+        + ` · max ${this.cafMaxMag.toFixed(3)}`;
+    }
+  }
+
+  /** Channel-Sounder Echo Profile — append IQ samples into a 4096-pair
+   *  ring buffer. The autocorrelation is computed on the latest full
+   *  window inside renderEcho (not here) since it's an FFT-heavy job. */
+  private feedEcho(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    if (nPairs === 0) return;
+    const bufI = this.echoBufI;
+    const bufQ = this.echoBufQ;
+    const N = bufI.length;
+    let w = this.echoBufWrite;
+    for (let i = 0; i < nPairs; i++) {
+      bufI[w] = dv.getInt16(i * 4, false) / 32768;
+      bufQ[w] = dv.getInt16(i * 4 + 2, false) / 32768;
+      w = (w + 1) % N;
+    }
+    this.echoBufWrite = w;
+    if (this.echoBufFilled < N) this.echoBufFilled = Math.min(N, this.echoBufFilled + nPairs);
+  }
+
+  /** Compute and render the echo profile. We linearise the IQ ring,
+   *  compute power envelope e[n] = |z[n]|², subtract its mean (so the
+   *  autocorrelation reveals modulation / multipath rather than DC),
+   *  zero-pad to 2N to get LINEAR autocorrelation via Wiener-Khinchin
+   *  (FFT → |·|² → IFFT), then EWMA-average the result over frames so
+   *  steady echoes accumulate while noise smooths out. */
+  private renderEcho() {
+    const cv = this.$('echoCanvas') as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = (cv.width  = Math.round(cv.clientWidth  * dpr));
+    const H = (cv.height = Math.round(cv.clientHeight * dpr));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 14 * dpr;
+    const plotL = pad + 30 * dpr, plotR = W - pad;
+    const plotT = pad, plotB = H - pad - 18 * dpr;
+    const plotW = plotR - plotL;
+    const plotH = plotB - plotT;
+
+    const N = Shell.ECHO_N;
+    const fftN = Shell.ECHO_FFT;
+    const fs = 12000;
+    const lagBins = Math.min(N - 1, Math.floor((Shell.ECHO_MAX_MS / 1000) * fs));
+
+    // Wait until we have a full window of IQ samples.
+    if (this.echoBufFilled < N) {
+      const status = this.$('echoStatus');
+      if (status) status.textContent =
+        `ECHO — buffering · ${this.echoBufFilled} / ${N} samples`;
+      return;
+    }
+
+    // Allocate scratch + result on first draw.
+    if (!this.echoFftRe || this.echoFftRe.length !== fftN) {
+      this.echoFftRe = new Float32Array(fftN);
+      this.echoFftIm = new Float32Array(fftN);
+    }
+    if (!this.echoAvg || this.echoAvg.length !== lagBins) {
+      this.echoAvg = new Float32Array(lagBins);
+      this.echoAvgCount = 0;
+    }
+    const re = this.echoFftRe;
+    const im = this.echoFftIm!;
+    const avg = this.echoAvg!;
+
+    // Linearise the IQ ring (oldest → newest) and build the power
+    // envelope e[n] = I² + Q². Track its mean for centering.
+    const bufI = this.echoBufI;
+    const bufQ = this.echoBufQ;
+    const start = (this.echoBufWrite - N + N) % N;     // start of oldest sample in ring
+    let mean = 0;
+    re.fill(0);
+    im.fill(0);
+    for (let n = 0; n < N; n++) {
+      const idx = (start + n) % N;
+      const I = bufI[idx], Q = bufQ[idx];
+      const e = I * I + Q * Q;
+      re[n] = e;
+      mean += e;
+    }
+    mean /= N;
+    for (let n = 0; n < N; n++) re[n] -= mean;
+    // Zero-pad to 2N already done by re[N..fftN-1] = 0 (and im is 0).
+
+    // Wiener-Khinchin: FFT, |·|², IFFT.
+    this.fftInPlace(re, im);
+    for (let k = 0; k < fftN; k++) {
+      const mag2 = re[k] * re[k] + im[k] * im[k];
+      re[k] = mag2;
+      im[k] = 0;
+    }
+    // IFFT via conjugate trick: ifft(X) = conj(fft(conj(X)))/N.
+    for (let k = 0; k < fftN; k++) im[k] = -im[k];
+    this.fftInPlace(re, im);
+    const invFftN = 1 / fftN;
+    // R(τ) = re[τ] / fftN (im is ~0 by symmetry of even input). Also
+    // normalise by R(0) so the trace stays in [-1, +1] regardless of
+    // overall AGC level.
+    const R0 = re[0] * invFftN;
+    const norm = R0 > 1e-30 ? 1 / R0 : 1;
+    // EWMA blend.
+    const a = this.echoAvgCount === 0 ? 1 : (1 - Shell.ECHO_AVG);
+    for (let t = 0; t < lagBins; t++) {
+      const Rt = re[t] * invFftN * norm;
+      avg[t] = avg[t] * (1 - a) + Rt * a;
+    }
+    this.echoAvgCount++;
+
+    // Convert to dB |R/R0|. Floor at -50 dB.
+    const dbFloor = -50, dbCeil = 0;
+    const yForDb = (db: number) =>
+      plotT + (1 - (Math.max(dbFloor, Math.min(dbCeil, db)) - dbFloor) / (dbCeil - dbFloor)) * plotH;
+    const tauForX = (xN: number) => xN * (Shell.ECHO_MAX_MS / 1000) * fs;
+    const xForTau = (t: number) => plotL + (t / lagBins) * plotW;
+    const dbAt = (t: number) => {
+      const a = Math.abs(avg[t]);
+      return a > 1e-30 ? 10 * Math.log10(a) : dbFloor;
+    };
+
+    // Gridlines + Y labels (dB).
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#888';
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let db = 0; db >= dbFloor; db -= 10) {
+      const y = yForDb(db);
+      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
+    }
+    ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    for (let db = 0; db >= dbFloor; db -= 10) {
+      const y = yForDb(db);
+      ctx.fillText(`${db} dB`, plotL - 4 * dpr, y);
+    }
+    // X gridlines + tick labels (ms).
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.beginPath();
+    const msSteps = [0, 5, 10, 15, 20, 25, 30, 40, 50];
+    for (const ms of msSteps) {
+      if (ms > Shell.ECHO_MAX_MS) continue;
+      const t = (ms / 1000) * fs;
+      if (t > lagBins) continue;
+      const x = xForTau(t);
+      ctx.moveTo(x, plotT); ctx.lineTo(x, plotB);
+    }
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const ms of msSteps) {
+      if (ms > Shell.ECHO_MAX_MS) continue;
+      const t = (ms / 1000) * fs;
+      if (t > lagBins) continue;
+      ctx.fillStyle = '#888';
+      ctx.fillText(`${ms} ms`, xForTau(t), plotB + 4 * dpr);
+    }
+
+    // Echo trace (|R(τ)/R(0)| in dB).
+    ctx.strokeStyle = '#cfffa3';
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath();
+    let started = false;
+    for (let t = 1; t < lagBins; t++) {       // skip τ=0 (always 0 dB)
+      const x = xForTau(t);
+      const y = yForDb(dbAt(t));
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else            ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Peak detection: scan after a short blanking window past τ=0 so
+    // sample-self-correlation doesn't show up. Mark prominent peaks.
+    const blankSamples = Math.max(2, Math.round(0.0005 * fs));   // skip first 0.5 ms
+    // Estimate a noise-floor from the median of dB values past 30 ms.
+    const tail: number[] = [];
+    const tailStart = Math.min(lagBins - 1, Math.round(0.03 * fs));
+    for (let t = tailStart; t < lagBins; t++) tail.push(dbAt(t));
+    tail.sort((a, b) => a - b);
+    const floorDb = tail.length ? tail[Math.floor(tail.length / 2)] : -40;
+    const echoThreshold = floorDb + 6;       // peaks must be ≥6 dB above floor
+    // Local-maximum search.
+    const peaks: Array<{ tMs: number; db: number }> = [];
+    for (let t = blankSamples + 1; t < lagBins - 1; t++) {
+      const d = dbAt(t);
+      if (d < echoThreshold) continue;
+      if (d > dbAt(t - 1) && d > dbAt(t + 1)) {
+        peaks.push({ tMs: (t / fs) * 1000, db: d });
+      }
+    }
+    peaks.sort((a, b) => b.db - a.db);
+    // Draw + label the top few peaks.
+    ctx.fillStyle = '#fd5';
+    ctx.strokeStyle = '#fd5';
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'center';
+    for (let i = 0; i < Math.min(5, peaks.length); i++) {
+      const p = peaks[i];
+      const x = xForTau((p.tMs / 1000) * fs);
+      const y = yForDb(p.db);
+      ctx.beginPath();
+      ctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillText(`${p.tMs.toFixed(1)} ms`, x, y - 4 * dpr);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    // Status line.
+    const status = this.$('echoStatus');
+    if (status) {
+      const topTxt = peaks.length
+        ? ` · peaks ${peaks.slice(0, 3).map(p => `${p.tMs.toFixed(1)} ms (${p.db.toFixed(0)} dB)`).join(', ')}`
+        : ' · no echoes above floor + 6 dB';
+      status.textContent =
+        `ECHO — ${N} pt · ${(N / fs * 1000).toFixed(0)} ms window · floor ${floorDb.toFixed(0)} dB${topTxt}`;
+    }
+  }
+
+  /** SCLK — push IQ samples into the ring + run the PLL update path
+   *  inline (per-sample, so the loop tracks at audio rate). Symbol-rate
+   *  re-detection is done in renderSclk where the FFT is cheap to
+   *  schedule. */
+  private feedSclk(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    if (nPairs === 0) return;
+    const fs = 12000;
+    const bufI = this.sclkBufI;
+    const bufQ = this.sclkBufQ;
+    const N = bufI.length;
+    let w = this.sclkBufWrite;
+    let phase = this.sclkNcoPhase;
+    let f = this.sclkSymHz;
+    const dt = 2 * Math.PI / fs;
+    let sumI = 0, sumQ = 0;
+    let blockSamples = 0;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      bufI[w] = I;
+      bufQ[w] = Q;
+      w = (w + 1) % N;
+      // PLL drive: power envelope e = I²+Q² with DC removed approximately.
+      // Mix down by current NCO freq and accumulate.
+      if (f > 0) {
+        const e = I * I + Q * Q;
+        phase += f * dt;
+        if (phase > Math.PI)  phase -= 2 * Math.PI;
+        if (phase < -Math.PI) phase += 2 * Math.PI;
+        sumI += e * Math.cos(-phase);
+        sumQ += e * Math.sin(-phase);
+        blockSamples++;
+      }
+    }
+    this.sclkBufWrite = w;
+    if (this.sclkBufFilled < N) this.sclkBufFilled = Math.min(N, this.sclkBufFilled + nPairs);
+    if (f > 0 && blockSamples > 0) {
+      // Phase of integrated baseband vector → freq error (Hz).
+      const ang = Math.atan2(sumQ, sumI);
+      const errHz = (ang / (2 * Math.PI)) * (fs / blockSamples);
+      f = Math.max(Shell.SCLK_MIN_HZ, Math.min(Shell.SCLK_MAX_HZ, f + errHz * this.sclkPllAlpha));
+      this.sclkLastErr = ang;
+      this.sclkSymHz = f;
+      this.sclkNcoPhase = phase;
+      // Decimate one history sample per ~100 ms (= 1200 IQ pairs at 12 kHz).
+      this.sclkSampleCount += nPairs;
+      while (this.sclkSampleCount >= 1200) {
+        this.sclkSampleCount -= 1200;
+        this.sclkRateHist[this.sclkHistWrite] = f;
+        this.sclkErrHist[this.sclkHistWrite] = ang;
+        this.sclkHistWrite = (this.sclkHistWrite + 1) % Shell.SCLK_HIST_LEN;
+        if (this.sclkHistFilled < Shell.SCLK_HIST_LEN) this.sclkHistFilled++;
+      }
+    }
+  }
+
+  /** Render the SCLK panel and (every 8 frames) re-acquire the symbol-
+   *  rate line via |z|² FFT so the PLL doesn't lock onto a dead carrier
+   *  if the operator retunes. */
+  private sclkReacquireCounter = 0;
+  private renderSclk() {
+    const cv = this.$('sclkCanvas') as HTMLCanvasElement;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = (cv.width  = Math.round(cv.clientWidth  * dpr));
+    const H = (cv.height = Math.round(cv.clientHeight * dpr));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 14 * dpr;
+    const labelLeft = 56 * dpr;
+    const plotL = pad + labelLeft;
+    const plotR = W - pad;
+    const plotW = plotR - plotL;
+    const halfH = (H - 2 * pad) / 2;
+
+    const fs = 12000;
+    const N = Shell.SCLK_FFT;
+
+    // Periodic symbol-rate re-detection via |z|² FFT. Cheap to run
+    // every few frames; cheap not to run every frame.
+    if (this.sclkBufFilled >= N
+        && (this.sclkReacquireCounter++ % 8) === 0) {
+      if (!this.sclkFftRe || this.sclkFftRe.length !== N) {
+        this.sclkFftRe = new Float32Array(N);
+        this.sclkFftIm = new Float32Array(N);
+      }
+      const re = this.sclkFftRe;
+      const im = this.sclkFftIm!;
+      const start = (this.sclkBufWrite - N + N) % N;
+      // Build |z|² with Hann taper, subtract mean afterward.
+      let mean = 0;
+      const twoPiOverN = 2 * Math.PI / (N - 1);
+      for (let n = 0; n < N; n++) {
+        const idx = (start + n) % N;
+        const I = this.sclkBufI[idx], Q = this.sclkBufQ[idx];
+        const e = I * I + Q * Q;
+        re[n] = e;
+        mean += e;
+      }
+      mean /= N;
+      for (let n = 0; n < N; n++) {
+        const w = 0.5 * (1 - Math.cos(twoPiOverN * n));
+        re[n] = (re[n] - mean) * w;
+      }
+      im.fill(0);
+      this.fftInPlace(re, im);
+      const binHz = fs / N;
+      const kLo = Math.max(1, Math.floor(Shell.SCLK_MIN_HZ / binHz));
+      const kHi = Math.min(N >> 1, Math.floor(Shell.SCLK_MAX_HZ / binHz));
+      let peakK = -1, peakMag = 0, magSum = 0, magCount = 0;
+      for (let k = kLo; k <= kHi; k++) {
+        const m = re[k] * re[k] + im[k] * im[k];
+        magSum += m;
+        magCount++;
+        if (m > peakMag) { peakMag = m; peakK = k; }
+      }
+      const median = magCount > 0 ? magSum / magCount : 0;
+      this.sclkPeakConfidence = median > 0 ? peakMag / median : 0;
+      if (peakK > 0 && this.sclkPeakConfidence > 5) {
+        const detectedHz = peakK * binHz;
+        // Parabolic interpolation around the peak for sub-bin freq.
+        if (peakK > 1 && peakK < (N >> 1) - 1) {
+          const a = re[peakK - 1] * re[peakK - 1] + im[peakK - 1] * im[peakK - 1];
+          const b = peakMag;
+          const c = re[peakK + 1] * re[peakK + 1] + im[peakK + 1] * im[peakK + 1];
+          const denom = (a - 2 * b + c);
+          const delta = denom !== 0 ? 0.5 * (a - c) / denom : 0;
+          if (Math.abs(delta) <= 1) {
+            this.sclkSymHz = (peakK + delta) * binHz;
+          } else {
+            this.sclkSymHz = detectedHz;
+          }
+        } else {
+          this.sclkSymHz = detectedHz;
+        }
+      } else if (this.sclkSymHz === 0) {
+        // Still nothing to lock to — keep tracking 0 (PLL stays disarmed).
+        this.sclkSymHz = 0;
+      }
+    }
+
+    // Top half: tracked symbol-rate strip chart.
+    const topT = pad, topB = pad + halfH;
+    const botT = H - pad - halfH, botB = H - pad;
+    // Y range for rate: 0 .. max(observed, SCLK_MAX_HZ/4) so a low-baud
+    // PSK signal doesn't sit at the very bottom of the chart.
+    let rateMax = Shell.SCLK_MAX_HZ;
+    let rateObserved = 0;
+    for (let i = 0; i < this.sclkHistFilled; i++) {
+      if (this.sclkRateHist[i] > rateObserved) rateObserved = this.sclkRateHist[i];
+    }
+    if (rateObserved > 0) rateMax = Math.max(rateObserved * 1.5, 100);
+    rateMax = Math.min(Shell.SCLK_MAX_HZ, rateMax);
+
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#888';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    // Top-half gridlines + Y labels.
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let g = 0; g <= 4; g++) {
+      const y = topT + (g / 4) * halfH;
+      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
+    }
+    ctx.stroke();
+    for (let g = 0; g <= 4; g++) {
+      const y = topT + (g / 4) * halfH;
+      const v = rateMax * (1 - g / 4);
+      ctx.fillText(`${v.toFixed(0)} Hz`, plotL - 4 * dpr, y);
+    }
+    // Trace.
+    if (this.sclkHistFilled > 1) {
+      ctx.strokeStyle = '#cfffa3';
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < this.sclkHistFilled; i++) {
+        const ageFromNewest = this.sclkHistFilled - 1 - i;
+        const idx = (this.sclkHistWrite - 1 - ageFromNewest + Shell.SCLK_HIST_LEN) % Shell.SCLK_HIST_LEN;
+        const v = this.sclkRateHist[idx];
+        const xN = i / Math.max(1, this.sclkHistFilled - 1);
+        const x = plotL + xN * plotW;
+        const yN = 1 - Math.max(0, Math.min(1, v / rateMax));
+        const y = topT + yN * halfH;
+        if (i === 0) ctx.moveTo(x, y);
+        else          ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // Section divider.
+    ctx.strokeStyle = '#3f8fc4';
+    ctx.beginPath();
+    ctx.moveTo(0, (topB + botT) / 2); ctx.lineTo(W, (topB + botT) / 2);
+    ctx.stroke();
+
+    // Bottom half: phase-error strip chart, ±π.
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.beginPath();
+    for (let g = 0; g <= 4; g++) {
+      const y = botT + (g / 4) * halfH;
+      ctx.moveTo(plotL, y); ctx.lineTo(plotR, y);
+    }
+    ctx.stroke();
+    // Zero line emphasised (locked PLL → flat at 0).
+    ctx.strokeStyle = '#3a5';
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    ctx.beginPath();
+    const yZero = botT + halfH * 0.5;
+    ctx.moveTo(plotL, yZero); ctx.lineTo(plotR, yZero);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Y labels.
+    ctx.fillStyle = '#888';
+    for (let g = 0; g <= 4; g++) {
+      const y = botT + (g / 4) * halfH;
+      const v = Math.PI * (1 - g / 2);
+      ctx.fillText(`${v.toFixed(1)} rad`, plotL - 4 * dpr, y);
+    }
+    // Trace.
+    if (this.sclkHistFilled > 1) {
+      ctx.strokeStyle = '#fd5';
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < this.sclkHistFilled; i++) {
+        const ageFromNewest = this.sclkHistFilled - 1 - i;
+        const idx = (this.sclkHistWrite - 1 - ageFromNewest + Shell.SCLK_HIST_LEN) % Shell.SCLK_HIST_LEN;
+        const v = Math.max(-Math.PI, Math.min(Math.PI, this.sclkErrHist[idx]));
+        const xN = i / Math.max(1, this.sclkHistFilled - 1);
+        const x = plotL + xN * plotW;
+        const yN = (1 - (v + Math.PI) / (2 * Math.PI));
+        const y = botT + yN * halfH;
+        if (i === 0) ctx.moveTo(x, y);
+        else          ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Status.
+    const lockedFrac = (() => {
+      // % of recent error samples with |err| < 0.3 rad (loose lock).
+      const recentN = Math.min(this.sclkHistFilled, 50);
+      if (recentN < 5) return 0;
+      let inBand = 0;
+      for (let i = 0; i < recentN; i++) {
+        const idx = (this.sclkHistWrite - 1 - i + Shell.SCLK_HIST_LEN) % Shell.SCLK_HIST_LEN;
+        if (Math.abs(this.sclkErrHist[idx]) < 0.3) inBand++;
+      }
+      return inBand / recentN;
+    })();
+    const lockTxt = this.sclkSymHz <= 0
+      ? 'searching for symbol-clock line…'
+      : lockedFrac > 0.7 ? 'LOCKED'
+      : lockedFrac > 0.3 ? 'tracking'
+      : 'sliding';
+    const status = this.$('sclkStatus');
+    if (status) {
+      status.textContent =
+        `SCLK — symbol rate ${this.sclkSymHz.toFixed(2)} Hz`
+        + ` · confidence ${this.sclkPeakConfidence.toFixed(1)}× median`
+        + ` · err ${this.sclkLastErr.toFixed(2)} rad · ${lockTxt}`;
+    }
   }
 
   /** ZOOM — long-FFT (32k samples ≈ 2.7 s window) of the IQ stream gives
@@ -14055,6 +16410,520 @@ export class Shell {
     if (status) {
       status.textContent =
         `Envelope PDF — ${N} pt · ${bins} bins · mean ${mean.toFixed(2)} · σ ${std.toFixed(2)} · mode ${mode.toFixed(2)} · ${klass}`;
+    }
+  }
+
+  /** Real cepstrum of the audio + a scrolling pitch-contour display.
+   *  Peaks at quefrency q (in seconds) signal a periodic component at
+   *  1/q Hz — voice pitch, MFSK tone spacing, comb echoes. The dominant
+   *  peak inside the pitch search window (50–500 Hz) drives the
+   *  scrolling contour on the bottom half. */
+  private toggleCeps() {
+    this.cepsOn = !this.cepsOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnCeps');
+    const panel = this.$('cepsPanel');
+    btn.classList.toggle('active', this.cepsOn);
+    panel.style.display = this.cepsOn ? '' : 'none';
+    if (this.cepsOn) {
+      this.cepsBuf.fill(0);
+      this.cepsBufWrite = 0;
+      this.cepsPitchHist.fill(0);
+      this.cepsPitchHistWrite = 0;
+      this.cepsPitchHistFilled = 0;
+      this.player.onCeps = (s) => this.feedCeps(s);
+      this.cepsRafTick = 0;
+      const tick = () => {
+        if (!this.cepsOn) { this.cepsRaf = null; return; }
+        if ((this.cepsRafTick++ % Shell.CEPS_RENDER_EVERY_N) === 0) {
+          this.drawCeps();
+        }
+        this.cepsRaf = requestAnimationFrame(tick);
+      };
+      this.cepsRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onCeps = null;
+      if (this.cepsRaf != null) { cancelAnimationFrame(this.cepsRaf); this.cepsRaf = null; }
+    }
+  }
+
+  private feedCeps(samples: Int16Array) {
+    const buf = this.cepsBuf;
+    const N = buf.length;
+    let w = this.cepsBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.cepsBufWrite = w;
+  }
+
+  private drawCeps() {
+    const canvas = this.$('cepsCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.CEPS_FFT;
+    const half = N >> 1;
+    const sr = this.player.getInputRate() || 12000;
+
+    // Scratch alloc (once).
+    if (!this.cepsFftRe || this.cepsFftRe.length !== N) {
+      this.cepsFftRe = new Float32Array(N);
+      this.cepsFftIm = new Float32Array(N);
+      this.cepsLogMag = new Float32Array(N);
+      this.cepsCepReal = new Float32Array(N);
+    }
+    const re = this.cepsFftRe;
+    const im = this.cepsFftIm!;
+    const logMag = this.cepsLogMag!;
+    const cep = this.cepsCepReal!;
+
+    // Hann window + FFT of the latest N samples.
+    const buf = this.cepsBuf;
+    const wIdx = this.cepsBufWrite;
+    const twoPiOverN = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const v = buf[(wIdx + i) % N];
+      const w = 0.5 * (1 - Math.cos(twoPiOverN * i));
+      re[i] = v * w;
+    }
+    im.fill(0);
+    this.fftInPlace(re, im);
+
+    // Log magnitude spectrum, both sides (real-valued symmetric input
+    // → cepstrum needs full N-point input).
+    for (let k = 0; k < N; k++) {
+      const m = re[k] * re[k] + im[k] * im[k];
+      logMag[k] = m > 1e-30 ? 0.5 * Math.log(m) : -30;   // ln(magnitude)
+    }
+    // FFT of the log-magnitude → real cepstrum. Since logMag is real,
+    // ifft would suffice; for a real cepstrum we just take the real
+    // part of fft(logMag) / N (symmetry property).
+    for (let k = 0; k < N; k++) { re[k] = logMag[k]; im[k] = 0; }
+    this.fftInPlace(re, im);
+    const invN = 1 / N;
+    for (let q = 0; q < N; q++) cep[q] = re[q] * invN;
+
+    // Pitch search: peak of |cep[q]| inside the quefrency window
+    // corresponding to PITCH_MIN..PITCH_MAX Hz. We use abs because the
+    // sign of the real cepstrum can flip depending on phase response.
+    const qLo = Math.max(2, Math.floor(sr / Shell.CEPS_PITCH_MAX_HZ));
+    const qHi = Math.min(half - 1, Math.floor(sr / Shell.CEPS_PITCH_MIN_HZ));
+    let peakQ = -1;
+    let peakV = 0;
+    for (let q = qLo; q <= qHi; q++) {
+      const a = Math.abs(cep[q]);
+      if (a > peakV) { peakV = a; peakQ = q; }
+    }
+    // Convert to pitch (Hz) and append to the history ring.
+    // A weak / no-pitch result records 0 so the contour shows a gap.
+    const peakPitchHz = peakQ > 0 ? sr / peakQ : 0;
+    // Confidence threshold — only accept a pitch if the peak stands
+    // appreciably above the median cepstrum magnitude in the search
+    // window. Otherwise log a 0 (silence / unvoiced / no clear period).
+    let medianAbs = 0;
+    {
+      // Simple median-of-N via partial selection (the search window is
+      // tens of samples, full sort is fine).
+      const tmp: number[] = [];
+      for (let q = qLo; q <= qHi; q++) tmp.push(Math.abs(cep[q]));
+      tmp.sort((a, b) => a - b);
+      medianAbs = tmp.length ? tmp[Math.floor(tmp.length / 2)] : 0;
+    }
+    const confident = peakV > medianAbs * 3 && peakV > 0.01;
+    const loggedPitch = confident ? peakPitchHz : 0;
+    this.cepsPitchHist[this.cepsPitchHistWrite] = loggedPitch;
+    this.cepsPitchHistWrite = (this.cepsPitchHistWrite + 1) % Shell.CEPS_HIST_LEN;
+    if (this.cepsPitchHistFilled < Shell.CEPS_HIST_LEN) this.cepsPitchHistFilled++;
+
+    // ── Render ──
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    // Layout: top half cepstrum, bottom half pitch contour, divider line.
+    const halfH = H / 2;
+    const pad = 12 * dpr;
+
+    // Top half — cepstrum.
+    // X axis = quefrency in samples (or equivalently ms); we plot
+    // q = qLo .. qHi mapped to canvas width. Y = |cep[q]| relative to
+    // its own panel-local max.
+    let localMax = 1e-9;
+    for (let q = qLo; q <= qHi; q++) {
+      const a = Math.abs(cep[q]);
+      if (a > localMax) localMax = a;
+    }
+    // Faint horizontal "median × 3" guide so the operator can read
+    // the confidence threshold visually.
+    ctx.strokeStyle = '#1a2a3a';
+    ctx.lineWidth = 1 * dpr;
+    const guideY = halfH - pad - ((medianAbs * 3) / localMax) * (halfH - 2 * pad);
+    ctx.beginPath();
+    ctx.moveTo(pad, guideY); ctx.lineTo(W - pad, guideY); ctx.stroke();
+    // Cepstrum curve.
+    ctx.strokeStyle = '#cfffa3';
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath();
+    for (let q = qLo; q <= qHi; q++) {
+      const xN = (q - qLo) / Math.max(1, qHi - qLo);
+      const x = pad + xN * (W - 2 * pad);
+      const a = Math.abs(cep[q]) / localMax;
+      const y = halfH - pad - a * (halfH - 2 * pad);
+      if (q === qLo) ctx.moveTo(x, y);
+      else            ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Highlight the chosen peak.
+    if (peakQ > 0) {
+      const xN = (peakQ - qLo) / Math.max(1, qHi - qLo);
+      const x = pad + xN * (W - 2 * pad);
+      ctx.strokeStyle = confident ? '#fd5' : '#7a6a3a';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, pad); ctx.lineTo(x, halfH - pad);
+      ctx.stroke();
+    }
+    // X-axis tick labels — pitch (in Hz) corresponding to quefrency.
+    ctx.fillStyle = '#888';
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.textBaseline = 'top';
+    const ticks = [500, 300, 200, 150, 100, 75, 50];
+    for (const hz of ticks) {
+      const q = sr / hz;
+      if (q < qLo || q > qHi) continue;
+      const xN = (q - qLo) / Math.max(1, qHi - qLo);
+      const x = pad + xN * (W - 2 * pad);
+      ctx.fillRect(x, halfH - pad, 1 * dpr, 4 * dpr);
+      ctx.fillText(`${hz}`, x + 2 * dpr, halfH - pad - 12 * dpr);
+    }
+    // Divider.
+    ctx.strokeStyle = '#3f8fc4';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(0, halfH); ctx.lineTo(W, halfH); ctx.stroke();
+
+    // Bottom half — scrolling pitch contour. Y axis log-scaled between
+    // PITCH_MIN .. PITCH_MAX so an octave of voice (e.g. 100 → 200 Hz)
+    // takes the same vertical distance regardless of absolute pitch.
+    const ymin = Math.log(Shell.CEPS_PITCH_MIN_HZ);
+    const ymax = Math.log(Shell.CEPS_PITCH_MAX_HZ);
+    // Pitch reference lines + labels.
+    const refLines = [50, 100, 200, 300, 500];
+    ctx.fillStyle = '#888';
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    for (const hz of refLines) {
+      if (hz < Shell.CEPS_PITCH_MIN_HZ || hz > Shell.CEPS_PITCH_MAX_HZ) continue;
+      const yN = 1 - (Math.log(hz) - ymin) / (ymax - ymin);
+      const y = halfH + pad + yN * (halfH - 2 * pad);
+      ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke();
+      ctx.fillText(`${hz}`, pad, y - 11 * dpr);
+    }
+    // Plot history. Most-recent sample is at the right edge.
+    const hist = this.cepsPitchHist;
+    const HLEN = Shell.CEPS_HIST_LEN;
+    const filled = this.cepsPitchHistFilled;
+    if (filled > 1) {
+      ctx.strokeStyle = '#cfffa3';
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < filled; i++) {
+        // Most-recent (write-1) maps to x = W - pad; older = leftward.
+        const ageFromNewest = filled - 1 - i;
+        const idx = (this.cepsPitchHistWrite - 1 - ageFromNewest + HLEN) % HLEN;
+        const p = hist[idx];
+        const xN = i / Math.max(1, filled - 1);
+        const x = pad + xN * (W - 2 * pad);
+        if (p > 0) {
+          const yN = 1 - (Math.log(p) - ymin) / (ymax - ymin);
+          const y = halfH + pad + yN * (halfH - 2 * pad);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else            ctx.lineTo(x, y);
+        } else {
+          // Gap: stroke what we have and reset so the line doesn't
+          // jump across silence.
+          if (started) { ctx.stroke(); ctx.beginPath(); started = false; }
+        }
+      }
+      if (started) ctx.stroke();
+    }
+
+    // Status line.
+    const status = this.$('cepsStatus');
+    if (status) {
+      const peakMs = peakQ > 0 ? (peakQ / sr) * 1000 : 0;
+      status.textContent =
+        `Cepstrum / Pitch Contour — ${N} pt · search ${Shell.CEPS_PITCH_MIN_HZ}–${Shell.CEPS_PITCH_MAX_HZ} Hz`
+        + (confident
+            ? ` · pitch ${peakPitchHz.toFixed(1)} Hz (q ${peakMs.toFixed(2)} ms)`
+            : ` · no confident pitch (peak/median ${(medianAbs > 0 ? peakV / medianAbs : 0).toFixed(1)})`);
+    }
+  }
+
+  /** Mains-Hum Tracker — narrow-band high-resolution audio FFT over
+   *  0–250 Hz with a scrolling waterfall and an annotated current
+   *  spectrum trace. Reference lines at the canonical mains and
+   *  harmonic frequencies (50/60/100/120/150/180/200/240 Hz) so the
+   *  operator can read the dominant hum source at a glance. */
+  private toggleMhum() {
+    this.mhumOn = !this.mhumOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnMhum');
+    const panel = this.$('mhumPanel');
+    btn.classList.toggle('active', this.mhumOn);
+    panel.style.display = this.mhumOn ? '' : 'none';
+    if (this.mhumOn) {
+      this.mhumBuf.fill(0);
+      this.mhumBufWrite = 0;
+      // Bin count for 0..MHUM_MAX_HZ; populated lazily on first draw
+      // once we know the audio rate.
+      this.mhumBins = 0;
+      this.mhumWaterfall = null;
+      this.mhumWaterfallRow = 0;
+      this.mhumWaterfallFilled = 0;
+      this.player.onMhum = (s) => this.feedMhum(s);
+      this.mhumRafTick = 0;
+      const tick = () => {
+        if (!this.mhumOn) { this.mhumRaf = null; return; }
+        if ((this.mhumRafTick++ % Shell.MHUM_RENDER_EVERY_N) === 0) {
+          this.drawMhum();
+        }
+        this.mhumRaf = requestAnimationFrame(tick);
+      };
+      this.mhumRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onMhum = null;
+      if (this.mhumRaf != null) { cancelAnimationFrame(this.mhumRaf); this.mhumRaf = null; }
+    }
+  }
+
+  private feedMhum(samples: Int16Array) {
+    const buf = this.mhumBuf;
+    const N = buf.length;
+    let w = this.mhumBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.mhumBufWrite = w;
+  }
+
+  private drawMhum() {
+    const canvas = this.$('mhumCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.MHUM_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const bins = Math.min(N >> 1, Math.floor(Shell.MHUM_MAX_HZ / binHz) + 1);
+    // Allocate waterfall + scratch on first draw or rate change.
+    if (this.mhumBins !== bins || !this.mhumWaterfall) {
+      this.mhumBins = bins;
+      this.mhumWaterfall = new Float32Array(Shell.MHUM_WF_ROWS * bins);
+      this.mhumWaterfallRow = 0;
+      this.mhumWaterfallFilled = 0;
+    }
+    if (!this.mhumFftRe || this.mhumFftRe.length !== N) {
+      this.mhumFftRe = new Float32Array(N);
+      this.mhumFftIm = new Float32Array(N);
+    }
+    if (!this.mhumCurDb || this.mhumCurDb.length !== bins) {
+      this.mhumCurDb = new Float32Array(bins);
+    }
+    const re = this.mhumFftRe;
+    const im = this.mhumFftIm!;
+    const curDb = this.mhumCurDb;
+    const wf = this.mhumWaterfall!;
+
+    // Hann + FFT of latest N samples.
+    const buf = this.mhumBuf;
+    const wIdx = this.mhumBufWrite;
+    const twoPiOverN = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const v = buf[(wIdx + i) % N];
+      const w = 0.5 * (1 - Math.cos(twoPiOverN * i));
+      re[i] = v * w;
+    }
+    im.fill(0);
+    this.fftInPlace(re, im);
+
+    // Per-bin dB power across the displayed range.
+    for (let k = 0; k < bins; k++) {
+      const m = re[k] * re[k] + im[k] * im[k];
+      curDb[k] = m > 1e-30 ? 10 * Math.log10(m) : -120;
+    }
+    // Push the current spectrum into the waterfall ring.
+    const wfRow = this.mhumWaterfallRow;
+    for (let k = 0; k < bins; k++) wf[wfRow * bins + k] = curDb[k];
+    this.mhumWaterfallRow = (wfRow + 1) % Shell.MHUM_WF_ROWS;
+    if (this.mhumWaterfallFilled < Shell.MHUM_WF_ROWS) this.mhumWaterfallFilled++;
+
+    // Find the dominant peak in the display band (used for status line).
+    let peakK = -1, peakDb = -Infinity;
+    for (let k = 1; k < bins; k++) {
+      if (curDb[k] > peakDb) { peakDb = curDb[k]; peakK = k; }
+    }
+    // Parabolic interpolation for sub-bin freq accuracy.
+    let peakHz = peakK > 0 ? peakK * binHz : 0;
+    if (peakK > 0 && peakK < bins - 1) {
+      const a = curDb[peakK - 1], b = curDb[peakK], c = curDb[peakK + 1];
+      const denom = (a - 2 * b + c);
+      const delta = denom !== 0 ? 0.5 * (a - c) / denom : 0;
+      if (Math.abs(delta) <= 1) peakHz = (peakK + delta) * binHz;
+    }
+    // Classify (50 vs 60 Hz mains, or off-mains carrier).
+    const near = (hz: number, target: number, tol = 1.5) => Math.abs(hz - target) <= tol;
+    let klass = 'unknown';
+    if (near(peakHz, 60)) klass = '60 Hz mains';
+    else if (near(peakHz, 50)) klass = '50 Hz mains';
+    else if (near(peakHz, 120)) klass = '120 Hz (60 Hz × 2)';
+    else if (near(peakHz, 100)) klass = '100 Hz (50 Hz × 2)';
+    else if (near(peakHz, 180)) klass = '180 Hz (60 Hz × 3)';
+    else if (near(peakHz, 150)) klass = '150 Hz (50 Hz × 3)';
+    else if (peakHz > 0) klass = 'off-mains carrier';
+
+    // ── Render ──
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 12 * dpr;
+    const specH = Math.floor(H * 0.35);             // top section: current spectrum
+    const wfTop = specH;
+    const wfH = H - specH;
+
+    // Reference vertical lines + tick labels in the spectrum area.
+    const refs: Array<{ hz: number; mains: '50' | '60' | 'other' }> = [
+      { hz: 50,  mains: '50' }, { hz: 60,  mains: '60' },
+      { hz: 100, mains: '50' }, { hz: 120, mains: '60' },
+      { hz: 150, mains: '50' }, { hz: 180, mains: '60' },
+      { hz: 200, mains: '50' }, { hz: 240, mains: '60' },
+    ];
+    const xForHz = (hz: number) => pad + (hz / Shell.MHUM_MAX_HZ) * (W - 2 * pad);
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.textBaseline = 'bottom';
+    for (const r of refs) {
+      ctx.strokeStyle = r.mains === '50' ? '#1f3548' : '#1f4828';
+      ctx.lineWidth = 1 * dpr;
+      const x = xForHz(r.hz);
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      ctx.fillStyle = r.mains === '50' ? '#5b8db1' : '#7bb37a';
+      ctx.fillText(`${r.hz}`, x + 2 * dpr, specH - 2 * dpr);
+    }
+
+    // Spectrum trace (top section). Y axis is dB; use dynamic range
+    // around the median + 60 dB so the trace is visible regardless
+    // of overall audio level.
+    const tmp = Array.from(curDb).sort((a, b) => a - b);
+    const median = tmp[Math.floor(tmp.length / 2)];
+    const ymax = median + 50;
+    const ymin = median - 10;
+    const range = Math.max(10, ymax - ymin);
+    ctx.strokeStyle = '#cfffa3';
+    ctx.lineWidth = 1.2 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = xForHz(k * binHz);
+      const yN = 1 - Math.max(0, Math.min(1, (curDb[k] - ymin) / range));
+      const y = pad + yN * (specH - 2 * pad);
+      if (k === 0) ctx.moveTo(x, y);
+      else          ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Peak crosshair.
+    if (peakK > 0) {
+      const x = xForHz(peakHz);
+      ctx.strokeStyle = '#fd5';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, 0); ctx.lineTo(x, specH); ctx.stroke();
+    }
+    // Section divider.
+    ctx.strokeStyle = '#3f8fc4';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(0, wfTop); ctx.lineTo(W, wfTop); ctx.stroke();
+
+    // Scrolling waterfall (bottom section). Build at native rows×bins
+    // resolution into an offscreen canvas, then drawImage-scale to the
+    // visible canvas — same approach as Persistence Spectrum.
+    if (!this.mhumOffCanvas || this.mhumOffCanvas.width !== bins || this.mhumOffCanvas.height !== Shell.MHUM_WF_ROWS) {
+      this.mhumOffCanvas = document.createElement('canvas');
+      this.mhumOffCanvas.width = bins;
+      this.mhumOffCanvas.height = Shell.MHUM_WF_ROWS;
+      this.mhumWfImage = null;
+    }
+    const off = this.mhumOffCanvas;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    if (!this.mhumWfImage) {
+      this.mhumWfImage = offCtx.createImageData(bins, Shell.MHUM_WF_ROWS);
+    }
+    const img = this.mhumWfImage!;
+    const data = img.data;
+    // Re-scale heatmap to the dynamic range computed above.
+    const filled = this.mhumWaterfallFilled;
+    for (let dy = 0; dy < Shell.MHUM_WF_ROWS; dy++) {
+      // dy = 0 at top = newest. Map dy → ring row.
+      const age = dy;
+      const row = (this.mhumWaterfallRow - 1 - age + Shell.MHUM_WF_ROWS) % Shell.MHUM_WF_ROWS;
+      const rowFilled = dy < filled;
+      const rowBase = row * bins;
+      for (let k = 0; k < bins; k++) {
+        let r = 0, g = 0, b = 0;
+        if (rowFilled) {
+          const d = wf[rowBase + k];
+          const t = Math.max(0, Math.min(1, (d - ymin) / range));
+          // Same colour ramp as Persistence Spectrum.
+          if (t > 0) {
+            if (t < 0.25)       { const u = t / 0.25;          r = 0;                       g = 0;                          b = Math.round(80 * u); }
+            else if (t < 0.55)  { const u = (t - 0.25) / 0.30; r = 0;                       g = Math.round(200 * u);        b = Math.round(80 * (1 - u)); }
+            else if (t < 0.85)  { const u = (t - 0.55) / 0.30; r = Math.round(220 * u);     g = 200 + Math.round(40 * u);   b = 0; }
+            else                 { const u = (t - 0.85) / 0.15; r = 220 + Math.round(35 * u); g = 240 - Math.round(140 * u); b = 0; }
+          }
+        }
+        const o = (dy * bins + k) * 4;
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+      }
+    }
+    offCtx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, pad, wfTop, W - 2 * pad, wfH);
+    // Redraw the reference vertical lines + peak crosshair on top of
+    // the waterfall area too (they got covered by drawImage).
+    for (const r of refs) {
+      ctx.strokeStyle = r.mains === '50' ? 'rgba(95, 141, 177, 0.45)' : 'rgba(123, 179, 122, 0.45)';
+      ctx.lineWidth = 1 * dpr;
+      const x = xForHz(r.hz);
+      ctx.beginPath();
+      ctx.moveTo(x, wfTop); ctx.lineTo(x, H); ctx.stroke();
+    }
+    if (peakK > 0) {
+      const x = xForHz(peakHz);
+      ctx.strokeStyle = 'rgba(255, 221, 85, 0.6)';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, wfTop); ctx.lineTo(x, H); ctx.stroke();
+    }
+
+    // Status line.
+    const status = this.$('mhumStatus');
+    if (status) {
+      status.textContent =
+        `Mains-Hum Tracker — ${N} pt · ${binHz.toFixed(2)} Hz/bin · 0–${Shell.MHUM_MAX_HZ} Hz`
+        + ` · peak ${peakHz.toFixed(2)} Hz @ ${peakDb.toFixed(1)} dB (${klass})`;
     }
   }
 
@@ -18106,7 +20975,7 @@ export class Shell {
     else                      this.client.resumeWaterfall();
   }
 
-  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
+  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'ceps' | 'mhum' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
     // ── Decoder panels ──
     if (this.cwOn     && name !== 'cw')     this.toggleCw();
     if (this.rttyOn   && name !== 'rtty')   this.toggleRtty();
@@ -18149,6 +21018,8 @@ export class Shell {
     if (this.thdOn    && name !== 'thd')    this.toggleThd();
     if (this.persistOn && name !== 'persist') this.togglePersist();
     if (this.envpOn   && name !== 'envp')   this.toggleEnvp();
+    if (this.cepsOn   && name !== 'ceps')   this.toggleCeps();
+    if (this.mhumOn   && name !== 'mhum')   this.toggleMhum();
     if (this.grayOn   && name !== 'gray')   this.toggleGray();
     if (this.vectOn   && name !== 'vect')   this.toggleVect();
     if (this.iqEyeOn  && name !== 'eye')    this.toggleIqEye();

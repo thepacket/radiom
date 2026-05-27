@@ -562,6 +562,20 @@ body.wefax-ext .wefax-canvas {
 #persistPanel #persistCanvas { min-height: 0; height: auto !important; }
 #envpPanel { overflow: hidden; }
 #envpPanel #envpCanvas { min-height: 0; height: auto !important; }
+#cepsPanel { overflow: hidden; }
+#cepsPanel #cepsCanvas { min-height: 0; height: auto !important; }
+#mhumPanel { overflow: hidden; }
+#mhumPanel #mhumCanvas { min-height: 0; height: auto !important; }
+#ifrqPanel { overflow: hidden; }
+#ifrqPanel #ifrqCanvas { min-height: 0; height: auto !important; }
+#aldvPanel { overflow: hidden; }
+#aldvPanel #aldvCanvas { min-height: 0; height: auto !important; }
+#cafPanel { overflow: hidden; }
+#cafPanel #cafCanvas { min-height: 0; height: auto !important; }
+#echoPanel { overflow: hidden; }
+#echoPanel #echoCanvas { min-height: 0; height: auto !important; }
+#sclkPanel { overflow: hidden; }
+#sclkPanel #sclkCanvas { min-height: 0; height: auto !important; }
 #aconLockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
 .acon-preset {
   background: #111; color: var(--fg);
