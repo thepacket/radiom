@@ -1236,6 +1236,11 @@ export class AudioPlayer {
    *  Same int16 PCM stream as `onScope`; the panel buffers it and runs
    *  an FFT to locate the fundamental + harmonics. */
   onThd: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — Persistence Spectrum (2D freq×amplitude
+   *  histogram). Same int16 PCM stream as `onScope` / `onThd`. */
+  onPersist: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — Envelope PDF panel. Same int16 PCM stream. */
+  onEnvp: ((s: Int16Array) => void) | null = null;
   /** Optional sink — used by the QRSS slow-CW grabber. Receives the
    *  same demodulated int16 PCM stream as the other audio decoders;
    *  QRSS itself runs a long-window audio FFT for sub-Hz resolution. */
@@ -1387,7 +1392,7 @@ export class AudioPlayer {
     } else {
       src = decodePcmBe(frame.payload);
       // For PCM also produce int16 view for transcriber/recorder/ft8.
-      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onDsd || this.onMultimon || this.onMsk144 || this.onAis || this.onAcars || this.onTetrapol || this.onOp25 || this.onLrpt || this.onScope || this.onThd || this.onVect || this.onQrss || this.onIqAudio) {
+      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onDsd || this.onMultimon || this.onMsk144 || this.onAis || this.onAcars || this.onTetrapol || this.onOp25 || this.onLrpt || this.onScope || this.onThd || this.onPersist || this.onEnvp || this.onVect || this.onQrss || this.onIqAudio) {
         const n = src.length;
         const i16 = new Int16Array(n);
         for (let i = 0; i < n; i++) i16[i] = src[i] * 32767 | 0;
@@ -1446,6 +1451,8 @@ export class AudioPlayer {
       if (this.onLrpt     && int16) this.onLrpt(int16);
       if (this.onScope    && int16) this.onScope(int16);
       if (this.onThd      && int16) this.onThd(int16);
+      if (this.onPersist  && int16) this.onPersist(int16);
+      if (this.onEnvp     && int16) this.onEnvp(int16);
       if (this.onVect     && int16) this.onVect(int16);
       if (this.onQrss     && int16) this.onQrss(int16);
       if (this.onIqAudio  && int16) this.onIqAudio(int16);
@@ -1614,6 +1621,8 @@ export class AudioPlayer {
     if (this.onLrpt)       this.onLrpt(int16);
     if (this.onScope)      this.onScope(int16);
     if (this.onThd)        this.onThd(int16);
+    if (this.onPersist)    this.onPersist(int16);
+    if (this.onEnvp)       this.onEnvp(int16);
     if (this.onVect)       this.onVect(int16);
     if (this.onIqAudio)    this.onIqAudio(int16);
     if (this.onQrss)       this.onQrss(int16);

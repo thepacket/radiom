@@ -555,6 +555,13 @@ body.wefax-ext .wefax-canvas {
 /* Scope panel — keep the trigger / mode / run controls anchored to the
  * bottom-right of the panel so the live trace gets the top space. */
 #scopePanel .ft8-actions { top: auto; bottom: 6px; right: 8px; }
+/* Persistence panel — status line is wordy (FFT geom + floor params +
+ * counters) so the panel needs overflow:hidden + a flex-shrinkable
+ * canvas to keep it from pushing past the spectrum-wrap bottom. */
+#persistPanel { overflow: hidden; }
+#persistPanel #persistCanvas { min-height: 0; height: auto !important; }
+#envpPanel { overflow: hidden; }
+#envpPanel #envpCanvas { min-height: 0; height: auto !important; }
 #aconLockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
 .acon-preset {
   background: #111; color: var(--fg);

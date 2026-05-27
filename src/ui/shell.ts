@@ -593,7 +593,7 @@ export class Shell {
             <div class="wf-tools wf-tools-r">
               <button id="btnCloseViz" class="knob-mini" type="button" style="display:none" title="Close active visualizer panel (SCOP / FMNT / OTHR / …)">×</button>
               <button id="btnSpeed" class="knob-mini" type="button" data-cmd="speedBtn" data-help-label="FPS" title="KiwiSDR waterfall frame-rate-code: 0=no waterfall, 1: 1 FPS, 2: 5 FPS, 3: 13 FPS, 4: 23 FPS.">FPS</button>
-              <button id="btnWfDup" class="knob-mini" type="button" title="Waterfall row duplication (1..8)">WF1</button>
+              <button id="btnWfDup" class="knob-mini" type="button" title="Waterfall row duplication (1..8)">x 1</button>
               <button id="btnWfAuto" class="knob-mini" type="button" data-help-label="AUTO/DARK/DARK+" title="Auto-stretch LoW/HiW from rolling histogram">AUTO</button>
             </div>
             <button id="wfChevL" class="wf-chev wf-chev-l" type="button" style="display:none"
@@ -870,6 +870,22 @@ export class Shell {
           <div id="thdPanel" class="ft8-panel" style="display:none">
             <div class="ft8-status" id="thdStatus">Audio FFT —</div>
             <canvas id="thdCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="persistPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="persistClear" type="button" title="Reset the persistence histogram — useful when the band changes or after a strong transient that has biased the colour scale">clear</button>
+            </div>
+            <div class="ft8-status" id="persistStatus">Persistence Spectrum —</div>
+            <canvas id="persistCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="envpPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="envpClear" type="button" title="Reset the envelope-PDF histogram">clear</button>
+            </div>
+            <div class="ft8-status" id="envpStatus">Envelope PDF —</div>
+            <canvas id="envpCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
 
           <div id="qrssPanel" class="ft8-panel" style="display:none">
@@ -1271,6 +1287,8 @@ export class Shell {
           <button class="kpbtn c" data-cmd="f+1000" title="Tune +1 kHz">+1k</button>
           <button class="kpbtn" id="btnAudioFft" style="display:none" title="SPEC — audio FFT spectrum analyzer for the demodulated signal (0–6 kHz). High-resolution inline display below the waterfall with auto-stretch contrast (5th/99th percentile EMA).">SPEC</button>
           <button class="kpbtn" id="btnThd" style="display:none" title="AFFT — high-resolution (16384 pt) audio FFT 0–6 kHz of the demodulated signal. Finer frequency resolution than SPEC for analyzing narrow tones, harmonics, and THD.">AFFT</button>
+          <button class="kpbtn" id="btnPersist" style="display:none" title="Persistence Spectrum — 2D histogram (freq × amplitude → density). Each FFT frame increments a bin at (freq, dB level); old frames decay exponentially. Always-on carriers leave bright horizontal lines; transient noise spreads thinly across many amplitudes. Best tool for revealing weak persistent signals buried in noise.">PERS</button>
+          <button class="kpbtn" id="btnEnvp" style="display:none" title="Envelope PDF — probability density of the analytic-signal envelope |x + jH{x}| of the demodulated audio. Pure noise → Rayleigh-shaped curve. Carrier + noise → Rician (shifted Rayleigh). Speech → long-tailed asymmetric. FSK / two-tone → bimodal. One glance tells you the signal class.">ENVP</button>
           <!-- DSD (dsd-fme) digital-voice decoders. Hidden stash; the
                DEC list picker is the only access path. Each button
                drives the same DsdDecoder with a different mode flag. -->
@@ -2291,11 +2309,11 @@ export class Shell {
     updateRfwBtn();
     // WF row-duplication cycle button (1 → 2 → 3 → 4 → 1).
     const btnWfDup = this.$('btnWfDup') as HTMLButtonElement;
-    btnWfDup.textContent = `WF${this.wfDup}`;
+    btnWfDup.textContent = `x ${this.wfDup}`;
     btnWfDup.addEventListener('click', () => {
       this.wfDup = (this.wfDup % 8) + 1;
       this.spectrum.setWfDup(this.wfDup);
-      btnWfDup.textContent = `WF${this.wfDup}`;
+      btnWfDup.textContent = `x ${this.wfDup}`;
       localStorage.setItem('radiom.wfDup', String(this.wfDup));
     });
     // Auto-stretch cycle button: OFF → AUTO → DARK → DARKER → OFF.
@@ -2387,6 +2405,28 @@ export class Shell {
       if (this.thdOn) { this.toggleThd(); return; }
       this.exclusiveActivate('thd');
       this.toggleThd();
+    });
+    this.$('btnPersist').addEventListener('click', () => {
+      if (this.persistOn) { this.togglePersist(); return; }
+      this.exclusiveActivate('persist');
+      this.togglePersist();
+    });
+    this.$('persistClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.persistHist) this.persistHist.fill(0);
+      this.persistMaxCount = 0;
+      this.persistFrames = 0;
+    });
+    this.$('btnEnvp').addEventListener('click', () => {
+      if (this.envpOn) { this.toggleEnvp(); return; }
+      this.exclusiveActivate('envp');
+      this.toggleEnvp();
+    });
+    this.$('envpClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.envpHist) this.envpHist.fill(0);
+      this.envpMaxCount = 0;
+      this.envpFrames = 0;
     });
     this.$('btnGray').addEventListener('click', () => {
       if (this.grayOn) { this.toggleGray(); return; }
@@ -4064,7 +4104,7 @@ export class Shell {
       { label: 'Doppler Tracker', selector: '#btnDopp' },
       { label: 'Eye Diagram',  selector: '#btnEye' },
       { label: 'Voice Formant Tracker (exp)', selector: '#btnFmnt' },
-      { label: 'Complex-Basement Constellation',  selector: '#btnIqView' },
+      { label: 'IQ Constellation',  selector: '#btnIqView' },
       { label: 'Kurtosis vs Time', selector: '#btnKurt' },
       { label: 'Signal Meter', selector: '#btnSDial' },
       { label: 'Over-The-Horizon Radar', selector: '#btnOthr' },
@@ -4076,6 +4116,10 @@ export class Shell {
       { label: 'Audio Constellation', selector: '#btnAcon' },
       { label: 'Audio Spectrogram', selector: '#btnAudioFft' },
       { label: 'Audio FFT', selector: '#btnThd' },
+      // Persistence Spectrum hidden for now — wiring + impl stay in
+      // shell.ts / player.ts so we can re-enable by uncommenting:
+      // { label: 'Persistence Spectrum', selector: '#btnPersist' },
+      { label: 'Envelope PDF', selector: '#btnEnvp' },
       { label: 'Carrier Zoom', selector: '#btnZoom' },
       { label: 'Signal over Time Plot', selector: '#btnSPlot' },
     ];
@@ -4452,7 +4496,7 @@ export class Shell {
   private static readonly VIZ_BUTTON_IDS = [
     'btnAntc','btnDlds','btnDopp','btnEye','btnFmnt','btnIqView','btnKurt',
     'btnSDial','btnOthr','btnPpmc','btnRfi','btnScope','btnSfrc','btnVect',
-    'btnAcon','btnAudioFft','btnThd','btnZoom','btnSPlot',
+    'btnAcon','btnAudioFft','btnThd','btnPersist','btnEnvp','btnZoom','btnSPlot',
   ];
 
   /** Every decoder button reachable from DECA / DECB. Used by the BACK
@@ -6135,6 +6179,8 @@ export class Shell {
     if (this.driftOn)      this.toggleDrift();
     if (this.scopeOn)      this.toggleScope();
     if (this.thdOn)        this.toggleThd();
+    if (this.persistOn)    this.togglePersist();
+    if (this.envpOn)       this.toggleEnvp();
     if (this.grayOn)       this.toggleGray();
     if (this.vectOn)       this.toggleVect();
     if (this.iqEyeOn)      this.toggleIqEye();
@@ -7365,6 +7411,73 @@ export class Shell {
   private thdBuf = new Float32Array(16384);
   private thdBufWrite = 0;
   private thdRaf: number | null = null;
+  /** Persistence Spectrum — 2D freq×amplitude histogram. Each FFT
+   *  frame bumps a count at (freqBin, dbBin); old counts decay
+   *  exponentially so the colour scale tracks the recent past. */
+  private persistOn = false;
+  private static readonly PERSIST_FFT = 1024;
+  private static readonly PERSIST_DB_BINS = 96;          // y-axis bin count (0 .. PERSIST_EXCESS_DB above floor)
+  private static readonly PERSIST_EXCESS_DB = 40;        // y-axis spans 0 .. 40 dB above the per-bin spatial floor
+  private static readonly PERSIST_MARGIN_DB = 1;         // ignore excess smaller than this (suppresses near-floor jitter)
+  /** Spatial baseline window — for each freq bin, the floor is the
+   *  25th-percentile dB value within ±PERSIST_FLOOR_HW bins of itself.
+   *  Narrow signals (1–3 bins) get skipped by the percentile selection;
+   *  the broadband noise floor underneath gets captured cleanly. */
+  private static readonly PERSIST_FLOOR_HW = 15;         // half-window in FFT bins (≈ ±176 Hz @ 11.7 Hz/bin)
+  private static readonly PERSIST_FLOOR_PCT = 0.25;      // percentile selected as the baseline (0..1)
+  private static readonly PERSIST_DECAY = 0.985;         // per-frame multiplicative decay of histogram counts
+  private persistBuf = new Float32Array(Shell.PERSIST_FFT);
+  private persistBufWrite = 0;
+  private persistHist: Float32Array | null = null;       // freqBins × dbBins, row-major
+  private persistMaxCount = 0;                           // running peak for auto-normalisation
+  private persistFrames = 0;
+  private persistRaf: number | null = null;
+  /** Render-throttle: only run drawPersist every Nth rAF tick. The
+   *  persistence spectrum doesn't visually benefit from 60 Hz updates
+   *  and the per-frame FFT + percentile sort + image-data fill is heavy
+   *  enough to starve the AudioContext if left at full rate. */
+  private static readonly PERSIST_RENDER_EVERY_N = 4;    // ≈ 15 Hz at 60 fps
+  private persistRafTick = 0;
+  /** Re-used scratch buffers — kept as fields so we don't allocate
+   *  ~30 KB of typed arrays every render frame (the GC churn was
+   *  large enough to glitch audio playback). */
+  private persistFftRe: Float32Array | null = null;
+  private persistFftIm: Float32Array | null = null;
+  private persistDbScratch: Float32Array | null = null;
+  private persistWinScratch: Float32Array | null = null;
+  /** Offscreen scratch canvas at native histogram resolution
+   *  (half × PERSIST_DB_BINS = 512 × 96 ≈ 49 k px). We fill this once
+   *  per render frame, then `drawImage` it scaled to the visible
+   *  canvas — ~9× fewer pixels to touch than painting the full
+   *  retina-resolution canvas directly (W × H ≈ 460 k px typical). */
+  private persistOffCanvas: HTMLCanvasElement | null = null;
+  private persistOffImageData: ImageData | null = null;
+  /** Pointer-driven freq cursor over the persist canvas. `persistCursorX`
+   *  is the CSS-pixel offset from the canvas left edge; the draw routine
+   *  maps it back to an FFT bin to display the matching frequency. */
+  private persistCursorX: number | null = null;
+  private persistCursorBound = false;
+  /** Envelope PDF — analytic-signal envelope histogram. Each render
+   *  frame computes |x(t)+jH{x(t)}| from a ring of audio samples,
+   *  normalises by the frame's peak envelope, and bins into a 128-bin
+   *  histogram with exponential decay. */
+  private envpOn = false;
+  private static readonly ENVP_FFT = 2048;                // ≈170 ms window at 12 kHz
+  private static readonly ENVP_BINS = 128;
+  private static readonly ENVP_DECAY = 0.92;              // per-frame multiplicative decay
+  private static readonly ENVP_RENDER_EVERY_N = 3;        // ≈20 Hz at 60 fps
+  private envpBuf = new Float32Array(Shell.ENVP_FFT);
+  private envpBufWrite = 0;
+  private envpHist: Float32Array | null = null;
+  private envpMaxCount = 0;
+  private envpFrames = 0;
+  private envpRaf: number | null = null;
+  private envpRafTick = 0;
+  /** Reusable scratch buffers (same rationale as the persist scratch
+   *  set — no per-frame allocations). */
+  private envpFftRe: Float32Array | null = null;
+  private envpFftIm: Float32Array | null = null;
+  private envpEnvScratch: Float32Array | null = null;
   /** Hover cursor X (CSS px from canvas left). Null when pointer is
    *  outside the canvas — no cursor drawn, status line shows defaults. */
   private thdCursorX: number | null = null;
@@ -13489,6 +13602,462 @@ export class Shell {
     }
   }
 
+  /** Persistence Spectrum — short FFTs streamed into a freq×amplitude
+   *  density histogram. Always-on tones leave bright horizontal lines
+   *  (consistent amplitude at one freq); transient / wideband noise
+   *  spreads thinly across many amplitudes. The histogram decays
+   *  multiplicatively each frame so the colour map tracks the recent
+   *  past instead of accumulating forever. */
+  private togglePersist() {
+    this.persistOn = !this.persistOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnPersist');
+    const panel = this.$('persistPanel');
+    btn.classList.toggle('active', this.persistOn);
+    panel.style.display = this.persistOn ? '' : 'none';
+    if (this.persistOn) {
+      this.persistBuf.fill(0);
+      this.persistBufWrite = 0;
+      const F = Shell.PERSIST_FFT >> 1;
+      this.persistHist = new Float32Array(F * Shell.PERSIST_DB_BINS);
+      this.persistMaxCount = 0;
+      this.persistFrames = 0;
+      this.player.onPersist = (s) => this.feedPersist(s);
+      if (!this.persistCursorBound) {
+        const canvas = this.$('persistCanvas') as HTMLCanvasElement;
+        canvas.addEventListener('pointermove', (e) => {
+          const r = canvas.getBoundingClientRect();
+          this.persistCursorX = e.clientX - r.left;
+        });
+        canvas.addEventListener('pointerleave', () => { this.persistCursorX = null; });
+        this.persistCursorBound = true;
+      }
+      this.persistRafTick = 0;
+      const tick = () => {
+        if (!this.persistOn) { this.persistRaf = null; return; }
+        if ((this.persistRafTick++ % Shell.PERSIST_RENDER_EVERY_N) === 0) {
+          this.drawPersist();
+        }
+        this.persistRaf = requestAnimationFrame(tick);
+      };
+      this.persistRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onPersist = null;
+      if (this.persistRaf != null) { cancelAnimationFrame(this.persistRaf); this.persistRaf = null; }
+    }
+  }
+
+  private feedPersist(samples: Int16Array) {
+    // Same int16→[-1,1] ring-fill pattern as feedThd. Bins are pushed
+    // through the FFT inside drawPersist (rAF-rate, not feed-rate, so
+    // the audio thread doesn't burn budget on FFT in tight loops).
+    const buf = this.persistBuf;
+    const N = buf.length;
+    let w = this.persistBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.persistBufWrite = w;
+  }
+
+  private drawPersist() {
+    const canvas = this.$('persistCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.PERSIST_FFT;
+    const half = N >> 1;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const dbBins = Shell.PERSIST_DB_BINS;
+    const excessRange = Shell.PERSIST_EXCESS_DB;
+    const marginDb = Shell.PERSIST_MARGIN_DB;
+    const HW = Shell.PERSIST_FLOOR_HW;
+    const pct = Shell.PERSIST_FLOOR_PCT;
+
+    // Hann window + FFT of the latest N samples in the ring. Scratch
+    // arrays live on the instance so we don't allocate ~16 KB per
+    // frame (was glitching audio at 60 fps).
+    if (!this.persistFftRe || this.persistFftRe.length !== N) {
+      this.persistFftRe = new Float32Array(N);
+      this.persistFftIm = new Float32Array(N);
+    }
+    const re = this.persistFftRe;
+    const im = this.persistFftIm!;
+    im.fill(0);   // FFT writes both arrays in-place; clear imag after previous call
+    const buf = this.persistBuf;
+    const wIdx = this.persistBufWrite;
+    const twoPiOverN = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const v = buf[(wIdx + i) % N];
+      const w = 0.5 * (1 - Math.cos(twoPiOverN * i));
+      re[i] = v * w;
+    }
+    this.fftInPlace(re, im);
+
+    // Per-bin absolute dB power.
+    if (!this.persistDbScratch || this.persistDbScratch.length !== half) {
+      this.persistDbScratch = new Float32Array(half);
+    }
+    const dbArr = this.persistDbScratch;
+    for (let k = 1; k < half; k++) {
+      const m = re[k] * re[k] + im[k] * im[k];
+      dbArr[k] = m > 1e-30 ? 10 * Math.log10(m) : -200;
+    }
+
+    const hist = this.persistHist!;
+    // Decay the entire histogram so older counts fade. The hot tones
+    // get re-bumped each frame and so stay bright.
+    const decay = Shell.PERSIST_DECAY;
+    for (let i = 0; i < hist.length; i++) hist[i] *= decay;
+    // Per-bin spatial baseline: the PERSIST_FLOOR_PCT-th percentile of
+    // dB in the ±HW neighborhood. Narrow signals (1–3 bins wide) are
+    // higher than ~75 % of their neighbours so the 25th-percentile
+    // selection skips them and lands on the broadband noise floor.
+    const winSize = HW * 2 + 1;
+    if (!this.persistWinScratch || this.persistWinScratch.length !== winSize) {
+      this.persistWinScratch = new Float32Array(winSize);
+    }
+    const winTmp = this.persistWinScratch;
+    const pctIdx = Math.max(0, Math.min(winSize - 1, Math.floor(winSize * pct)));
+    let frameMax = 0;
+    for (let k = 1; k < half; k++) {
+      const j0 = Math.max(1, k - HW);
+      const j1 = Math.min(half - 1, k + HW);
+      let count = 0;
+      for (let j = j0; j <= j1; j++) winTmp[count++] = dbArr[j];
+      // Partial-sort by quickselect: for tiny windows (31 elements)
+      // a full in-place insertion sort beats engineered selection.
+      // (count is at most winSize.)
+      for (let i = 1; i < count; i++) {
+        const v = winTmp[i];
+        let j = i - 1;
+        while (j >= 0 && winTmp[j] > v) { winTmp[j + 1] = winTmp[j]; j--; }
+        winTmp[j + 1] = v;
+      }
+      const floor = winTmp[Math.min(pctIdx, count - 1)];
+      const excess = dbArr[k] - floor - marginDb;
+      if (excess > 0) {
+        const dbIdx = Math.min(dbBins - 1,
+          Math.floor((excess / excessRange) * dbBins));
+        const cell = k * dbBins + dbIdx;
+        hist[cell] += 1;
+        if (hist[cell] > frameMax) frameMax = hist[cell];
+      }
+    }
+    // Track running peak for stable colour mapping. Decays alongside
+    // the histogram so a transient never permanently dims the scale.
+    this.persistMaxCount = Math.max(this.persistMaxCount * decay, frameMax);
+    this.persistFrames++;
+
+    // Render at the histogram's native resolution (half × dbBins) into
+    // an offscreen canvas, then drawImage-scale up to the visible
+    // canvas. One pixel == one histogram cell, so the inner loop only
+    // touches ~49 k px regardless of how big the visible canvas is.
+    if (!this.persistOffCanvas) {
+      this.persistOffCanvas = document.createElement('canvas');
+      this.persistOffCanvas.width = half;
+      this.persistOffCanvas.height = dbBins;
+    }
+    const off = this.persistOffCanvas;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    if (!this.persistOffImageData) {
+      this.persistOffImageData = offCtx.createImageData(half, dbBins);
+    }
+    const img = this.persistOffImageData;
+    const data = img.data;
+    const scale = 1 / Math.max(1e-6, this.persistMaxCount);
+    // Column-major over freq bins, row-major within (top row = 0 dB
+    // excess = highest amplitude; bottom row = the margin floor).
+    for (let k = 1; k < half; k++) {
+      const colBase = k * dbBins;
+      for (let dy = 0; dy < dbBins; dy++) {
+        // dy=0 sits at the top of the offscreen canvas → highest dB
+        // excess bin (= dbBins-1 in histogram), dy=dbBins-1 at bottom
+        // → smallest excess (= histogram bin 0). Flip the index.
+        const dbIdx = dbBins - 1 - dy;
+        const v = hist[colBase + dbIdx] * scale;
+        const t = v < 1 ? (v > 0 ? v : 0) : 1;
+        let r = 0, g = 0, b = 0;
+        if (t > 0) {
+          if (t < 0.25)       { const u = t / 0.25;            r = 0;                       g = 0;                          b = Math.round(80 * u); }
+          else if (t < 0.55)  { const u = (t - 0.25) / 0.30;   r = 0;                       g = Math.round(200 * u);        b = Math.round(80 * (1 - u)); }
+          else if (t < 0.85)  { const u = (t - 0.55) / 0.30;   r = Math.round(220 * u);     g = 200 + Math.round(40 * u);   b = 0; }
+          else                 { const u = (t - 0.85) / 0.15;   r = 220 + Math.round(35 * u); g = 240 - Math.round(140 * u); b = 0; }
+        }
+        const o = (dy * half + k) * 4;
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+      }
+    }
+    offCtx.putImageData(img, 0, 0);
+    // Nearest-neighbour scale-up keeps the heatmap crisp — smoothing
+    // would blur the narrow signal columns into the noise band below.
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+
+    // Frequency cursor overlay. Vertical yellow line + freq / dB
+    // readout at the pointer position, snapped to the underlying FFT
+    // bin so the reported freq matches what's actually plotted there.
+    let cursorTxt: string | null = null;
+    if (this.persistCursorX != null) {
+      const cssW = canvas.clientWidth;
+      const xCss = Math.max(0, Math.min(cssW - 1, this.persistCursorX));
+      const xPx = xCss * dpr;
+      // Map back to bin: x ↔ k via the same proportional mapping the
+      // image fill used (px ↔ kFrac = px/W · half).
+      const k = Math.min(half - 1, Math.max(1, Math.round((xPx / W) * half)));
+      const freqHz = k * binHz;
+      const floor = (() => {
+        // Recompute neighbourhood floor at the cursor bin — same
+        // logic as the histogram-fill loop, but localised to bin k
+        // so the readout reflects the cell currently under the
+        // crosshair without re-sorting every bin every frame.
+        const j0 = Math.max(1, k - HW);
+        const j1 = Math.min(half - 1, k + HW);
+        let count = 0;
+        for (let j = j0; j <= j1; j++) winTmp[count++] = dbArr[j];
+        for (let i = 1; i < count; i++) {
+          const v = winTmp[i];
+          let jj = i - 1;
+          while (jj >= 0 && winTmp[jj] > v) { winTmp[jj + 1] = winTmp[jj]; jj--; }
+          winTmp[jj + 1] = v;
+        }
+        return winTmp[Math.min(pctIdx, count - 1)];
+      })();
+      const excessDb = dbArr[k] - floor;
+      ctx.strokeStyle = '#fd5';
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(xPx, 0); ctx.lineTo(xPx, H);
+      ctx.stroke();
+      cursorTxt = ` · cursor ${(freqHz / 1000).toFixed(3)} kHz @ ${excessDb.toFixed(1)} dB above floor`;
+    }
+
+    // Status line.
+    const status = this.$('persistStatus');
+    if (status) {
+      status.textContent =
+        `Persistence Spectrum — ${N} pt · ${binHz.toFixed(1)} Hz/bin · 0–${((half - 1) * binHz / 1000).toFixed(2)} kHz`
+        + ` · y: 0–${excessRange} dB above neighbour floor (${(pct * 100).toFixed(0)}th pct, ±${HW} bins)`
+        + ` · frames ${this.persistFrames} · peak ${this.persistMaxCount.toFixed(1)}`
+        + (cursorTxt ?? '');
+    }
+  }
+
+  /** Envelope PDF — running probability density of the analytic
+   *  envelope |x + j·H{x}|. The shape diagnoses the signal class:
+   *    • Rayleigh (peak well above zero, smooth decay) → noise only
+   *    • Rician   (peak shifted toward A, lighter tail)   → carrier + noise
+   *    • bimodal                                          → FSK / two-tone
+   *    • long right tail                                  → speech / music
+   *    • narrow spike                                     → near-DC silence
+   */
+  private toggleEnvp() {
+    this.envpOn = !this.envpOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnEnvp');
+    const panel = this.$('envpPanel');
+    btn.classList.toggle('active', this.envpOn);
+    panel.style.display = this.envpOn ? '' : 'none';
+    if (this.envpOn) {
+      this.envpBuf.fill(0);
+      this.envpBufWrite = 0;
+      this.envpHist = new Float32Array(Shell.ENVP_BINS);
+      this.envpMaxCount = 0;
+      this.envpFrames = 0;
+      this.player.onEnvp = (s) => this.feedEnvp(s);
+      this.envpRafTick = 0;
+      const tick = () => {
+        if (!this.envpOn) { this.envpRaf = null; return; }
+        if ((this.envpRafTick++ % Shell.ENVP_RENDER_EVERY_N) === 0) {
+          this.drawEnvp();
+        }
+        this.envpRaf = requestAnimationFrame(tick);
+      };
+      this.envpRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onEnvp = null;
+      if (this.envpRaf != null) { cancelAnimationFrame(this.envpRaf); this.envpRaf = null; }
+    }
+  }
+
+  private feedEnvp(samples: Int16Array) {
+    const buf = this.envpBuf;
+    const N = buf.length;
+    let w = this.envpBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.envpBufWrite = w;
+  }
+
+  private drawEnvp() {
+    const canvas = this.$('envpCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.ENVP_FFT;
+    const bins = Shell.ENVP_BINS;
+
+    // Scratch alloc (once).
+    if (!this.envpFftRe || this.envpFftRe.length !== N) {
+      this.envpFftRe = new Float32Array(N);
+      this.envpFftIm = new Float32Array(N);
+      this.envpEnvScratch = new Float32Array(N);
+    }
+    const re = this.envpFftRe;
+    const im = this.envpFftIm!;
+    const env = this.envpEnvScratch!;
+    // Linearise the ring buffer into re[] with rectangular window —
+    // a window function would distort the very envelope we're trying
+    // to measure. im[] starts at zero (re input is real).
+    const buf = this.envpBuf;
+    const wIdx = this.envpBufWrite;
+    for (let i = 0; i < N; i++) re[i] = buf[(wIdx + i) % N];
+    im.fill(0);
+    // Forward FFT.
+    this.fftInPlace(re, im);
+    // Spectral Hilbert transform: zero negative half, double positive
+    // half (except DC + Nyquist). Result after IFFT is the analytic
+    // signal z(t) = x(t) + j·H{x(t)}.
+    for (let k = 1; k < N / 2; k++) { re[k] *= 2; im[k] *= 2; }
+    for (let k = N / 2 + 1; k < N; k++) { re[k] = 0; im[k] = 0; }
+    // Inverse FFT via the conjugate trick: ifft(X) = conj(fft(conj(X))) / N.
+    for (let k = 0; k < N; k++) im[k] = -im[k];
+    this.fftInPlace(re, im);
+    const invN = 1 / N;
+    // Build envelope sample-by-sample and track frame max.
+    let frameMax = 1e-9;
+    for (let i = 0; i < N; i++) {
+      const r = re[i] * invN;
+      const ii = -im[i] * invN;     // conjugate output
+      const e = Math.hypot(r, ii);
+      env[i] = e;
+      if (e > frameMax) frameMax = e;
+    }
+
+    const hist = this.envpHist!;
+    const decay = Shell.ENVP_DECAY;
+    for (let i = 0; i < hist.length; i++) hist[i] *= decay;
+    // Bin per-sample envelope into the histogram normalised by this
+    // frame's peak so the curve shape is invariant to AGC level.
+    const norm = 1 / frameMax;
+    let topBin = 0;
+    for (let i = 0; i < N; i++) {
+      const t = env[i] * norm;                    // 0..1
+      const b = Math.min(bins - 1, Math.floor(t * bins));
+      hist[b] += 1;
+      if (hist[b] > topBin) topBin = hist[b];
+    }
+    this.envpMaxCount = Math.max(this.envpMaxCount * decay, topBin);
+    this.envpFrames++;
+
+    // Render. PDF curve filled below the line for readability; light
+    // gridlines for x = 0, 0.5, 1 normalised envelope amplitude.
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const pad = 12 * dpr;
+    const plotW = W - 2 * pad;
+    const plotH = H - 2 * pad;
+    // Gridlines.
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let g = 0; g <= 4; g++) {
+      const x = pad + (g / 4) * plotW;
+      ctx.moveTo(x, pad); ctx.lineTo(x, H - pad);
+    }
+    for (let g = 0; g <= 4; g++) {
+      const y = pad + (g / 4) * plotH;
+      ctx.moveTo(pad, y); ctx.lineTo(W - pad, y);
+    }
+    ctx.stroke();
+    // PDF curve — first lay a translucent fill, then trace the line.
+    const yScale = 1 / Math.max(1e-6, this.envpMaxCount);
+    ctx.fillStyle = 'rgba(110, 220, 100, 0.35)';
+    ctx.beginPath();
+    ctx.moveTo(pad, H - pad);
+    for (let b = 0; b < bins; b++) {
+      const xN = b / (bins - 1);
+      const x = pad + xN * plotW;
+      const v = Math.min(1, hist[b] * yScale);
+      const y = H - pad - v * plotH;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W - pad, H - pad);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#cfffa3';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (let b = 0; b < bins; b++) {
+      const xN = b / (bins - 1);
+      const x = pad + xN * plotW;
+      const v = Math.min(1, hist[b] * yScale);
+      const y = H - pad - v * plotH;
+      if (b === 0) ctx.moveTo(x, y);
+      else          ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Axis ticks: x = normalised envelope amplitude 0..1, y = relative density.
+    ctx.fillStyle = '#888';
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.textBaseline = 'top';
+    for (let g = 0; g <= 4; g++) {
+      const x = pad + (g / 4) * plotW;
+      const lbl = (g / 4).toFixed(2);
+      ctx.fillText(lbl, x + 2 * dpr, H - pad + 2 * dpr);
+    }
+    // Quick classification heuristic based on histogram moments.
+    let sumN = 0, sumX = 0, sumX2 = 0;
+    for (let b = 0; b < bins; b++) {
+      const x = (b + 0.5) / bins;
+      const w = hist[b];
+      sumN  += w;
+      sumX  += w * x;
+      sumX2 += w * x * x;
+    }
+    const mean = sumN > 0 ? sumX / sumN : 0;
+    const variance = sumN > 0 ? Math.max(0, sumX2 / sumN - mean * mean) : 0;
+    const std = Math.sqrt(variance);
+    // Peak bin position (mode).
+    let modeBin = 0;
+    let modeVal = 0;
+    for (let b = 0; b < bins; b++) if (hist[b] > modeVal) { modeVal = hist[b]; modeBin = b; }
+    const mode = (modeBin + 0.5) / bins;
+    let klass = '—';
+    if (sumN > 0) {
+      // Approximate Rayleigh: mode ≈ 0.45·max, std/mean ≈ 0.52.
+      // Rician with strong carrier: mode toward 0.8..1.0, std/mean small.
+      const cv = mean > 0 ? std / mean : 0;
+      if (mode < 0.15)        klass = 'low-energy / silence';
+      else if (mode > 0.7 && cv < 0.25) klass = 'Rician (carrier + noise)';
+      else if (cv > 0.45)     klass = 'Rayleigh (noise-like)';
+      else if (cv > 0.30)     klass = 'speech / asymmetric';
+      else                    klass = 'narrow-spread tone';
+    }
+
+    const status = this.$('envpStatus');
+    if (status) {
+      status.textContent =
+        `Envelope PDF — ${N} pt · ${bins} bins · mean ${mean.toFixed(2)} · σ ${std.toFixed(2)} · mode ${mode.toFixed(2)} · ${klass}`;
+    }
+  }
+
   /** Toggle the WSPR-15 batch decoder. UTC-aligned on 15-minute
    *  boundaries (:00/:15/:30/:45). Defaults the dial to 137.500 kHz
    *  USB (the 2200 m WSPR-15 sub-band) if the receiver isn't already
@@ -17537,7 +18106,7 @@ export class Shell {
     else                      this.client.resumeWaterfall();
   }
 
-  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
+  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
     // ── Decoder panels ──
     if (this.cwOn     && name !== 'cw')     this.toggleCw();
     if (this.rttyOn   && name !== 'rtty')   this.toggleRtty();
@@ -17578,6 +18147,8 @@ export class Shell {
     if (this.fst4On   && name !== 'fst4')   this.toggleFst4();
     if (this.scopeOn  && name !== 'scope')  this.toggleScope();
     if (this.thdOn    && name !== 'thd')    this.toggleThd();
+    if (this.persistOn && name !== 'persist') this.togglePersist();
+    if (this.envpOn   && name !== 'envp')   this.toggleEnvp();
     if (this.grayOn   && name !== 'gray')   this.toggleGray();
     if (this.vectOn   && name !== 'vect')   this.toggleVect();
     if (this.iqEyeOn  && name !== 'eye')    this.toggleIqEye();
