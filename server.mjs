@@ -773,6 +773,92 @@ function sendDxSpots(req, res) {
   }));
 }
 
+/* ─────────  DXwatch — scrape recent DX cluster spots  ───────────
+ *  dxwatch.com exposes its "recent spots" feed as JSON at
+ *    https://www.dxwatch.com/dxsd1/s.php?s=0&r=<N>
+ *  Response shape: { "s": { "<id>": [spotter, freqKHz, dxCall,
+ *  comment, "HHMMz Mon DD", relAgeSec, bandTag, flag], ... } }
+ *  We normalise each row into a flat object so the client can render
+ *  a markdown table without re-parsing array slots.
+ *
+ *  Cached 60 s. Note: requesting r > 100 sometimes returns an empty
+ *  body or HTTP error from dxwatch, so we cap r at 50 by default. */
+const DXW_CACHE_TTL_MS = 60_000;
+let dxwCache = { ts: 0, body: '' };
+async function sendDxwatch(req, res) {
+  try {
+    const u = new URL(req.url, 'http://x');
+    const rowsRaw = parseInt(u.searchParams.get('rows') ?? '50', 10);
+    const rows = Number.isFinite(rowsRaw) ? Math.max(1, Math.min(100, rowsRaw)) : 50;
+    const cacheKey = `r${rows}`;
+    if (dxwCache.key === cacheKey && Date.now() - dxwCache.ts < DXW_CACHE_TTL_MS && dxwCache.body) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=30' });
+      return res.end(dxwCache.body);
+    }
+    const upstreamUrl = `https://www.dxwatch.com/dxsd1/s.php?s=0&r=${rows}`;
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), 15_000);
+    let upstream;
+    try {
+      upstream = await fetch(upstreamUrl, {
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept': 'application/json, text/javascript, */*; q=0.01',
+          'Referer': 'https://www.dxwatch.com/',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        signal: ctl.signal,
+      });
+    } finally { clearTimeout(tm); }
+    if (!upstream.ok) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: `dxwatch HTTP ${upstream.status}` }));
+    }
+    const raw = await upstream.text();
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch (_) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'dxwatch returned non-JSON' }));
+    }
+    const map = parsed && parsed.s && typeof parsed.s === 'object' ? parsed.s : {};
+    // Each row: [spotter, freqKHz, dxCall, comment, timeStr, relAgeSec,
+    // bandTag, flag]. Drop rows that don't match the expected shape.
+    const decodeEntity = (s) => String(s || '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&rsquo;/g, '’');
+    const spots = Object.entries(map)
+      .map(([id, row]) => {
+        if (!Array.isArray(row) || row.length < 5) return null;
+        const freqKHz = parseFloat(row[1]);
+        if (!Number.isFinite(freqKHz)) return null;
+        return {
+          id: String(id),
+          spotter: decodeEntity(row[0]),
+          freqKHz,
+          dxCall:  decodeEntity(row[2]),
+          comment: decodeEntity(row[3]),
+          timeStr: decodeEntity(row[4]),
+          ageSec:  Number.isFinite(row[5]) ? row[5] : null,
+          bandTag: Number.isFinite(row[6]) ? row[6] : null,
+        };
+      })
+      .filter(Boolean)
+      // Newest first — dxwatch returns ascending-by-id but the IDs grow
+      // with time; reverse-sort by numeric id so the freshest spot is
+      // at row 0.
+      .sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10))
+      .slice(0, rows);
+    const body = JSON.stringify({ rows: spots.length, requested: rows, spots });
+    dxwCache = { ts: Date.now(), key: cacheKey, body };
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=30' });
+    res.end(body);
+  } catch (e) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'dxwatch fetch failed: ' + e.message }));
+  }
+}
+
 /* ─────────  WSPRnet — via wspr.live public ClickHouse DB  ────────
  *  WSPRnet itself has no callsign-free machine-readable API for
  *  recent spots, but the community runs db1.wspr.live (a public
@@ -1289,6 +1375,7 @@ const server = http.createServer((req, res) => {
   if (url.startsWith('/api/eibi')) return sendEibi(req, res);
   if (url.startsWith('/api/nets')) return sendNets(req, res);
   if (url.startsWith('/api/dxspots')) return sendDxSpots(req, res);
+  if (url.startsWith('/api/dxwatch')) return sendDxwatch(req, res);
   if (url.startsWith('/api/wsprnet')) return sendWspr(req, res);
   if (url.startsWith('/api/kiwi-status')) return sendKiwiStatus(req, res);
   if (url.startsWith('/api/kiwi-touch')) return sendKiwiTouch(req, res);

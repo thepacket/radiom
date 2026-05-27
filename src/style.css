@@ -1018,6 +1018,28 @@ body.wefax-ext .wefax-canvas {
 }
 .sig-overlay-markdown strong { color: #fff; }
 .sig-overlay-markdown em { color: #cfe8f7; font-style: italic; }
+.sig-overlay-markdown table {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+  font: 500 11px/1.35 ui-monospace, "SF Mono", Menlo, monospace;
+}
+.sig-overlay-markdown th,
+.sig-overlay-markdown td {
+  padding: 3px 8px;
+  border: 1px solid rgba(63, 143, 196, 0.25);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.sig-overlay-markdown th {
+  background: #161616;
+  color: var(--led-bg);
+  font-weight: 700;
+  position: sticky; top: 0;
+}
+.sig-overlay-markdown tbody tr:nth-child(odd)  { background: rgba(63, 143, 196, 0.04); }
+.sig-overlay-markdown tbody tr:nth-child(even) { background: rgba(63, 143, 196, 0.10); }
 .wf {
   display: block; width: 100%;
   background: #000; image-rendering: pixelated;
@@ -1644,6 +1666,12 @@ body.wefax-ext .wefax-canvas {
   background: transparent; border: 0; color: #ddd; font-size: 18px;
   cursor: pointer; padding: 0 6px;
 }
+/* The .band-modal outer container has overflow:auto so its native
+ * grid-based pickers can scroll. The .lists-picker has its own inner
+ * scroll region (.lists-result) so we suppress the outer one — without
+ * this, the page renders TWO stacked vertical scrollbars on the right
+ * edge (one from .band-modal, one from .lists-result). */
+.band-modal.lists-picker { overflow: hidden; }
 .lists-picker .lists-result { overflow: auto; padding: 4px; }
 .lists-picker .lists-row {
   display: grid; grid-template-columns: 110px 1fr; gap: 8px;

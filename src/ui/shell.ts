@@ -1433,6 +1433,7 @@ export class Shell {
           <button class="fnbtn" id="btnPskr" style="display:none" title="PSKR — moved to INFO panel">PSKR</button>
           <button class="fnbtn" id="btnNets" style="display:none" title="NET — moved to INFO panel">NET</button>
           <button class="fnbtn" id="btnDx" style="display:none" title="DX — real-time DX cluster spots (requires RADIOM_DX_CALLSIGN env var on the server).">DX</button>
+          <button class="fnbtn" id="btnDxwatch" style="display:none" title="DX Spots — moved to INFO panel">DXW</button>
           <button class="fnbtn" id="btnWnet" style="display:none" title="WNET — moved to INFO panel">WNET</button>
           <button class="fnbtn" id="btnGray" style="display:none" title="GRAY — moved to INFO panel">GRAY</button>
           <button class="fnbtn" id="btnZoom" style="display:none" title="ZOOM — sub-Hz spectrogram. High-resolution narrow-band slice of the waterfall around the cursor for resolving carriers, drift, and weak tones below the main waterfall bin width.">ZOOM</button>
@@ -2149,6 +2150,7 @@ export class Shell {
     this.$('btnEq').addEventListener('click', () => this.openEqPicker());
     this.$('btnNets').addEventListener('click', () => this.runNets());
     this.$('btnDx').addEventListener('click', () => this.runDxSpots());
+    this.$('btnDxwatch').addEventListener('click', () => this.runDxwatch());
     this.$('btnWnet').addEventListener('click', () => this.runWspr());
     this.bindF2Button();
     this.refreshF2Button();
@@ -4078,6 +4080,8 @@ export class Shell {
         desc: 'Active amateur-radio nets — curated directory of regularly scheduled HF/VHF nets (traffic, emcomm, technical, regional) with day / time / frequency / mode.' },
       { label: 'WSPR Beacon Spots', selector: '#btnWnet',
         desc: 'WSPR beacon spots report on the present frequency.' },
+      { label: 'DX Spots', selector: '#btnDxwatch',
+        desc: 'Latest DX cluster spots — scraped from dxwatch.com, refreshed every 60 s server-side. Pulls 50 rows per request (asking for more than ~100 sometimes fails upstream). Each spot shows UTC time, frequency, band, the spotted DX callsign, the spotter, and the operator-supplied comment.' },
       { label: 'Gray-line Propagation Map', selector: '#btnGray',
         desc: 'Gray-line propagation map — the terminator (sunrise / sunset boundary) overlaid on a world map. Useful for predicting peak DX windows on LF / MF / lower HF.' },
       { label: 'Frequencies', selector: '#btnLists',
@@ -5088,11 +5092,11 @@ export class Shell {
         lines.push('');
         lines.push(`## Modes`);
         lines.push('');
-        lines.push('```');
+        lines.push('| Mode | Reports |');
+        lines.push('|---|---|');
         for (const m of Object.keys(byMode).sort((a, b) => byMode[b] - byMode[a])) {
-          lines.push(`  ${m.padEnd(8)} ${byMode[m]}`);
+          lines.push(`| ${m} | ${byMode[m]} |`);
         }
-        lines.push('```');
         // Unique senders.
         const senders = new Map<string, { count: number; bestSnr: number; modes: Set<string>; locator: string }>();
         for (const r of reports) {
@@ -5106,15 +5110,16 @@ export class Shell {
         lines.push('');
         lines.push(`## Senders — ${senders.size} unique`);
         lines.push('');
-        lines.push('```');
+        lines.push('| Call | Locator | Modes | Reports | Best SNR |');
+        lines.push('|---|---|---|---|---|');
         const sorted = Array.from(senders.entries())
           .sort((a, b) => b[1].count - a[1].count);
-        lines.push(`Call         Loc      Modes              Reports  Best SNR`);
+        const escapePipe = (s: string) => String(s ?? '').replace(/\|/g, '\\|');
         for (const [call, info] of sorted) {
-          const m = Array.from(info.modes).join(',');
-          lines.push(`${call.padEnd(12)} ${info.locator.padEnd(8)} ${m.padEnd(18)} ${String(info.count).padEnd(7)} ${(info.bestSnr >= 0 ? '+' : '') + info.bestSnr} dB`);
+          const m = Array.from(info.modes).join(', ');
+          const snr = `${info.bestSnr >= 0 ? '+' : ''}${info.bestSnr} dB`;
+          lines.push(`| ${escapePipe(call)} | ${escapePipe(info.locator)} | ${escapePipe(m)} | ${info.count} | ${escapePipe(snr)} |`);
         }
-        lines.push('```');
       }
     } catch (err) {
       lines.push(`**PSKR — error:** ${(err as Error).message}`);
@@ -5166,14 +5171,18 @@ export class Shell {
         lines.push('');
         lines.push('## Transmitters');
         lines.push('');
-        lines.push('```');
-        lines.push(`Call         Loc      Hits   Best SNR  Max km  Freq Hz   Last heard`);
+        lines.push('| Call | Locator | Hits | Best SNR | Max km | Freq (Hz) | Last heard |');
+        lines.push('|---|---|---|---|---|---|---|');
+        const escapePipe = (s: string) => String(s ?? '').replace(/\|/g, '\\|');
         for (const t of data.transmitters) {
           const ageMin = Math.round(t.lastHeardAgoSec / 60);
           const ageStr = ageMin <= 0 ? 'now' : `${ageMin}m ago`;
-          lines.push(`${t.tx_sign.padEnd(12)} ${t.tx_loc.padEnd(8)} ${String(t.hits).padStart(4)}   ${(t.bestSnr >= 0 ? '+' : '') + t.bestSnr} dB   ${String(t.maxDistanceKm).padStart(5)}  ${String(t.freqHz).padStart(8)}  ${ageStr}`);
+          const snr = `${t.bestSnr >= 0 ? '+' : ''}${t.bestSnr} dB`;
+          lines.push(
+            `| ${escapePipe(t.tx_sign)} | ${escapePipe(t.tx_loc)} | ${t.hits} | `
+            + `${escapePipe(snr)} | ${t.maxDistanceKm} | ${t.freqHz} | ${escapePipe(ageStr)} |`
+          );
         }
-        lines.push('```');
       }
     } catch (err) {
       lines.push(`**WNET — error:** ${(err as Error).message}`);
@@ -5257,6 +5266,92 @@ export class Shell {
     }
   }
 
+  /** DX Spots — scrape the latest ~50 spots from dxwatch.com (via
+   *  server-side /api/dxwatch) and render them as a markdown table in
+   *  the sig-overlay. Independent of the local DX cluster client; this
+   *  is a quick "what's spotted right now globally" view that doesn't
+   *  need RADIOM_DX_CALLSIGN. The server caches each scrape for 60 s,
+   *  matching the user's request that we re-poll every minute. */
+  private dxwatchBusy = false;
+  private async runDxwatch(): Promise<void> {
+    if (this.dxwatchBusy) return;
+    this.dxwatchBusy = true;
+    const btn = this.$('btnDxwatch') as HTMLElement;
+    btn.classList.add('busy');
+    clearSigOverlay();
+    const lines: string[] = [];
+    try {
+      this.banner('DX Spots — fetching latest dxwatch.com spots…', 1500);
+      // Ask for 50 rows — dxwatch sometimes refuses >100, but is
+      // reliable at 50.
+      const r = await fetch('/api/dxwatch?rows=50', { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json() as {
+        rows: number; requested: number;
+        spots: { id: string; spotter: string; freqKHz: number;
+                 dxCall: string; comment: string; timeStr: string;
+                 ageSec: number | null; bandTag: number | null }[];
+        error?: string;
+      };
+      if (data.error) throw new Error(data.error);
+      const spots = data.spots || [];
+      lines.push('# DX Spots');
+      lines.push('');
+      lines.push(`**Source:** dxwatch.com · **Rows:** ${spots.length} · **Polled:** every 60 s`);
+      lines.push('');
+      if (spots.length === 0) {
+        lines.push('*(no spots returned — dxwatch upstream may be quiet or rate-limiting)*');
+      } else {
+        // Mode-band heuristic from frequency. Keeps the table self-
+        // contained so the operator doesn't have to cross-reference the
+        // dxwatch bandTag codes.
+        const band = (kHz: number): string => {
+          if (kHz < 530)    return 'LF';
+          if (kHz < 1800)   return 'MF';
+          if (kHz < 2000)   return '160m';
+          if (kHz < 4000)   return '80m';
+          if (kHz < 5450)   return '60m';
+          if (kHz < 7300)   return '40m';
+          if (kHz < 10150)  return '30m';
+          if (kHz < 14350)  return '20m';
+          if (kHz < 18168)  return '17m';
+          if (kHz < 21450)  return '15m';
+          if (kHz < 24990)  return '12m';
+          if (kHz < 29700)  return '10m';
+          if (kHz < 54000)  return '6m';
+          if (kHz < 148000) return '2m';
+          if (kHz < 225000) return '1.25m';
+          if (kHz < 450000) return '70cm';
+          if (kHz < 928000) return '33cm';
+          return `${(kHz/1000).toFixed(0)}MHz`;
+        };
+        // Markdown table — renderMarkdown supports |---| pipes.
+        lines.push('| Time UTC | Freq (kHz) | Band | DX Call | Spotter | Comment |');
+        lines.push('|---|---:|---|---|---|---|');
+        const escapePipe = (s: string) => String(s).replace(/\|/g, '\\|');
+        for (const s of spots) {
+          // timeStr looks like "0814z 27 May" — keep the UTC HHMM piece.
+          const t = (s.timeStr.match(/^(\d{4})z/)?.[1]) || s.timeStr;
+          lines.push(
+            `| ${escapePipe(t)} | ${s.freqKHz.toFixed(1)} | ${band(s.freqKHz)} | `
+            + `${escapePipe(s.dxCall)} | ${escapePipe(s.spotter)} | ${escapePipe(s.comment || '')} |`
+          );
+        }
+      }
+    } catch (err) {
+      lines.push(`**DX Spots — error:** ${(err as Error).message}`);
+    } finally {
+      showSigOverlay(
+        this.$('wf').parentElement as HTMLElement,
+        lines.join('\n'),
+        'DXW',
+        (m, ms) => this.banner(m, ms),
+      );
+      this.dxwatchBusy = false;
+      btn.classList.remove('busy');
+    }
+  }
+
   /** NETS — aggregate amateur HF activity reported on PSK Reporter
    *  across all HF ham bands in the last 15 minutes. Useful for
    *  finding "where amateurs are active right now" — a band-by-band
@@ -5300,15 +5395,14 @@ export class Shell {
         lines.push('');
         lines.push(`**Total:** ${totalReports} reports · ${totalSenders} senders across ${data.bands.length} active bands`);
         lines.push('');
-        lines.push('```');
-        lines.push(`Band      Range MHz       Reports  Senders  Top modes`);
+        lines.push('| Band | Range (MHz) | Reports | Senders | Top modes |');
+        lines.push('|---|---|---:|---:|---|');
         for (const b of data.bands) {
-          const range = `${b.loMHz.toFixed(3)}-${b.hiMHz.toFixed(3)}`;
+          const range = `${b.loMHz.toFixed(3)}–${b.hiMHz.toFixed(3)}`;
           const modes = b.modes.slice(0, 5)
             .map(m => `${m.mode}(${m.count})`).join(' ');
-          lines.push(`${b.band.padEnd(8)} ${range.padEnd(15)} ${String(b.reports).padStart(7)}  ${String(b.uniqueSenders).padStart(7)}  ${modes}`);
+          lines.push(`| ${b.band} | ${range} | ${b.reports} | ${b.uniqueSenders} | ${modes} |`);
         }
-        lines.push('```');
       }
       const voiceNets = data.voiceNets || [];
       lines.push('');
@@ -5318,17 +5412,20 @@ export class Shell {
         lines.push(`*(no scheduled voice net active at this UTC time)*`);
       } else {
         lines.push('');
-        lines.push('```');
-        lines.push(`Freq      Mode  Time UTC   Days     Net                                  Region`);
+        lines.push('| Freq (kHz) | Mode | Time UTC | Days | Net | Region | Notes |');
+        lines.push('|---:|---|---|---|---|---|---|');
+        const escapePipe = (s: string) => String(s ?? '').replace(/\|/g, '\\|');
         for (const n of voiceNets) {
           const sh = String(Math.floor(n.startUTC / 100)).padStart(2, '0');
           const sm = String(n.startUTC % 100).padStart(2, '0');
           const eh = String(Math.floor(n.endUTC / 100)).padStart(2, '0');
           const em = String(n.endUTC % 100).padStart(2, '0');
-          const days = (n.days || '').trim() || '-';
-          lines.push(`${n.freqKHz.toFixed(0).padStart(6)}   ${n.mode.padEnd(4)}  ${sh}${sm}-${eh}${em}   ${days.padEnd(7)}  ${n.name.slice(0, 36).padEnd(36)}  ${n.region}${n.notes ? '  // ' + n.notes : ''}`);
+          const days = (n.days || '').trim() || '–';
+          lines.push(
+            `| ${n.freqKHz.toFixed(0)} | ${escapePipe(n.mode)} | ${sh}${sm}–${eh}${em} | `
+            + `${escapePipe(days)} | ${escapePipe(n.name)} | ${escapePipe(n.region)} | ${escapePipe(n.notes || '')} |`
+          );
         }
-        lines.push('```');
       }
     } catch (err) {
       lines.push(`**NETS — error:** ${(err as Error).message}`);
@@ -8271,7 +8368,7 @@ export class Shell {
     // incoming tool is *not* in that group, tear the overlay down; if it
     // is in the group, its caller will overwrite the overlay so we leave
     // clearSigOverlay to that path.
-    const overlayGroup = new Set(['btnEibi','btnPskr','btnNets','btnWnet']);
+    const overlayGroup = new Set(['btnEibi','btnPskr','btnNets','btnWnet','btnDxwatch']);
     if (!except || !overlayGroup.has(except)) clearSigOverlay();
     for (const id of overlayGroup) {
       if (id !== except) {
