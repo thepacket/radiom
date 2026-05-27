@@ -1,12 +1,30 @@
 # radiom
 
-A KiwiSDR-based web HF receiver with a large built-in decoder library
-(CW, RTTY, FT8/FT4, WSPR, JT9/JT65, FST4, JS8, NAVTEX, WEFAX, HFDL, ALE 2G,
-Olivia, MFSK, MT63, Throb, and ~30 others).
+A multi-source web SDR client with a large built-in decoder library
+(88 protocols covering CW / RTTY / FT8/FT4 / WSPR / JT9/JT65 / FST4 /
+JS8 / NAVTEX / WEFAX / HFDL / ALE 2G / Olivia / MFSK / MT63 / Throb /
+ACARS / VDL-2 / ADS-B / AIS / DSC / DMR / NXDN / YSF / M17 / P25 /
+LRPT / APT / HRPT / LoRa / rtl_433 / SONDE / OP25 / AERO / STD-C / and
+~50 others).
 
-The browser app connects to any [KiwiSDR](https://kiwisdr.com) server, streams
-audio + waterfall, and routes the audio through a fleet of decoder bridges
-running on a small Node backend.
+The browser app connects to one of three SDR-server flavors and routes
+the demodulated audio (or raw IQ, where appropriate) through a fleet
+of decoder bridges running on a small Node backend:
+
+- **[KiwiSDR](https://kiwisdr.com)** — primary source for HF
+  (0–30 MHz) audio. Most decoders are fed from a Kiwi.
+- **[OpenWebRX](https://www.openwebrx.de)** — second source supporting
+  HF and VHF/UHF when the host has appropriate front-ends. Used for
+  bands above 30 MHz when the operator has access to an OWRX-fronted
+  receiver.
+- **rtl_tcp** — third source for direct RTL-SDR access (typically
+  via a remote RTL-SDR USB receiver exposed over TCP). Required for
+  the IQ-baseband decoders that need ≥1 MS/s (ADS-B at 1090 MHz, UAT
+  at 978 MHz, AERO / STD-C at L-band, LRPT / HRPT, OP25 trunking, etc.).
+
+The active source is selected from the top bar; each decoder
+indicates in its tooltip whether it requires an IQ-capable source
+(rtl_tcp / OWRX) or works with the audio chain from any source.
 
 > **Status: actively being tested.** radiom is an advanced mobile-first HF
 > receiver with a large surface area — many features still need real-world
@@ -20,55 +38,119 @@ running on a small Node backend.
 
 See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset of the features.
 
-### Decoder library (~40 protocols)
+### Decoder library (88 protocols)
 
-| Protocol            | Vendored from         | Presets / variants available in-app |
-|---------------------|-----------------------|-------------------------------------|
-| 8PSK                | fldigi psk            | 125 / 125FL / 125F, 250 / 250FL / 250F, 500 / 500F, 1000 / 1000F, 1200F |
-| ALE 2G              | LinuxALE              | MIL-STD-188-141A/B |
-| ARDOP               | pflarue/ardopcf       | 200 / 500 / 1000 / 2000 Hz BW |
-| Contestia (CTSA)    | fldigi contestia      | Same (tones × bandwidth) grid as Olivia |
-| CW                  | from-scratch          | Single decoder, adjustable WPM bias |
-| DominoEX (DOMEX)    | fldigi dominoex       | DEX 4, 5, 7-8, 8, 11, 11-FEC, 16, 22 |
-| FSQ                 | fldigi fsq            | FSQ 1.5 / 3 / 4.5 / 6 baud |
-| FST4                | WSJT-X fst4d          | TR 60 / 120 / 300 / 900 / 1800 s |
-| FST4W               | WSJT-X fst4d -W       | TR 60 / 120 / 300 / 900 / 1800 s |
-| FT4                 | from-scratch ft8/ft4  | 7.5-s slot decoder |
-| FT8                 | from-scratch ft8/ft4  | 15-s slot decoder |
-| Hellschreiber (HELL)| from-scratch (AM)     | Feld-Hell (AM-only render) |
-| HF packet (PKT)     | direwolf              | 300-baud AX.25 / APRS on 30 m |
-| HFDL                | szpajder/dumphfdl     | KiwiSDR IQ-mode, configurable channel |
-| JS8                 | js8call               | Normal, Slow, Fast, Turbo, Ultra |
-| JT4                 | WSJT-X jt9 -4         | sub-modes A–G |
-| JT65                | WSJT-X jt9 -65        | — |
-| JT9                 | WSJT-X jt9 -9         | — |
-| MCW                 | AM + CW chain         | — (uses the CW decoder) |
-| MFSK                | fldigi mfsk           | MFSK4, 8, 11, 16, 22, 31, 32, 64, 128 |
-| MT63                | fldigi mt63           | 500S, 500L, 1000S, 1000L, 2000S, 2000L |
-| NAVTEX              | fldigi navtex         | SITOR-B FEC broadcast |
-| Olivia              | fldigi olivia         | 18 (tones × bandwidth) presets: 4/125 … 64/2000 |
-| PI4                 | fldigi pi4 (v2)       | Single mode (beacon ID) |
-| PSK (BPSK)          | fldigi psk            | PSK31, 63, 63F, 125, 250, 500, 1000, PSK125R / 250R / 500R / 1000R |
-| Q65                 | WSJT-X jt9 -q         | Q65-A, B, C, D, E |
-| QPSK                | fldigi psk            | QPSK31, 63, 125, 250, 500 |
-| RTTY                | fldigi rtty           | 17 presets: 170 Hz amateur (45.45 / 75 baud, low / mid / high pitch), 50 / 60 / 75 / 100 baud commercial, UK 200/50, Russian 200/100 + 250/75 + 450/75, DWD 425 weather, TASS 425 press, 850 Hz, 1000 Hz custom |
-| SELCAL (SELC)       | EliasOenal/multimon-ng | Aircraft 4-char SELCAL — same binary also handles POCSAG / FLEX / EAS / ZVEI / DTMF / FMSFSK |
-| SITOR               | fldigi navtex (B)     | Same engine, free-tuned dial |
-| STANAG 4285         | from-scratch detector | Lock detection only (no payload) |
-| STANAG 4539         | from-scratch detector | Lock detection only (no payload) |
-| THOR                | fldigi thor           | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
-| Throb (THRB)        | fldigi throb (v2)     | Throb 1, 2, 4 + Throb-X variants |
-| WEFAX (FAX)         | fldigi wefax          | IOC 576 / 288, multiple LPM (60/90/120/240), B&W / colour |
-| WSPR                | WSJT-X wsprd          | 2-min slots, 11 standard sub-bands |
-| WSPR-15 (W15)       | WSJT-X wsprd -m       | 15-min slots (LF / MF), aligned to :00/:15/:30/:45 UTC |
-| WWV                 | fldigi wwv            | WWV / WWVH minute-tick decoder |
+Alphabetical. Multiple decoders share a binary (e.g. `jt9` covers four
+WSJT-X modes, `dsd-fme` covers ten digital-voice modes, `multimon-ng`
+covers twenty paging/selcall modes, `direwolf` covers four packet
+variants, `inmarsat-sniffer` covers AERO + STD-C).
+
+| Protocol            | Vendored from              | Variants / notes |
+|---------------------|----------------------------|------------------|
+| 9600 Packet         | direwolf (MODEM 9600)      | G3RUH scrambled NRZ, FOX cubesats + 70 cm — needs wideband (≥24 kHz) audio |
+| ACARS               | f00b4r0/acarsdec           | 131 MHz airline data link, MSK 2400 bps |
+| ADS-B               | flightaware/dump1090       | 1090 MHz Mode-S extended squitter |
+| AERO                | alphafox02/inmarsat-sniffer | Inmarsat AERO Classic (--mode=aero), L-band IQ |
+| AFSK1200            | EliasOenal/multimon-ng     | Bell-202 AFSK 1200 bps (APRS, weather sondes…) |
+| AFSK2400            | EliasOenal/multimon-ng     | Three tone-pair variants (AFSK2400 / _2 / _3) run concurrently |
+| AIS                 | hessu/aisdecoder (gnuais)  | 161.975 / 162.025 MHz marine vessel tracking |
+| ALE 2G              | LinuxALE                   | MIL-STD-188-141A/B |
+| AMTOR               | fldigi navtex (B)          | FEC mode of SITOR-B |
+| APT                 | SatDump (noaa_apt)         | NOAA analog APT @ 137 MHz |
+| CCIR                | EliasOenal/multimon-ng     | ITU-R 5-tone selcall |
+| CCITT               | multimon-ng (→ CCIR)       | ITU-T 5-tone — same tone table, routed via CCIR |
+| CLIPFSK             | EliasOenal/multimon-ng     | Bellcore / ETSI Caller-ID V.23 FSK |
+| Contestia (CTSA)    | fldigi contestia           | Same (tones × bandwidth) grid as Olivia |
+| CSPAS               | jbirby/COSPAS-SARSAT-Codec | 406 MHz ELT / EPIRB / PLB (1G + 2G) |
+| CW                  | from-scratch + fldigi      | Single decoder, adjustable WPM bias |
+| CWM                 | EliasOenal/multimon-ng     | multimon-ng's native Morse (cross-check against CW) |
+| D-STAR              | lwvmobile/dsd-fme (-fd)    | DV+DD digital voice, AMBE2+ |
+| DMR                 | dsd-fme (-ft)              | ETSI Tier-2, single-slot |
+| DMR-stereo          | dsd-fme (-fs)              | Decodes both TDMA slots concurrently (slot1=L, slot2=R) |
+| DominoEX (DOMEX)    | fldigi dominoex            | DEX 4, 5, 7-8, 8, 11, 11-FEC, 16, 22 |
+| dPMR                | dsd-fme (-fz)              | dPMR446 (EU low-power business) |
+| DSC                 | jbirby/DSC-Codec (Python)  | ITU-R M.493 marine VHF Ch 70 + HF guard channels |
+| DTMF                | EliasOenal/multimon-ng     | Touch-tone digits |
+| DZ/PZVEI            | EliasOenal/multimon-ng     | German + Polish ZVEI dialects, bundled |
+| EAS                 | EliasOenal/multimon-ng     | Emergency Alert System SAME headers |
+| EEA                 | EliasOenal/multimon-ng     | European EAS-variant selcall |
+| EIA                 | EliasOenal/multimon-ng     | European industrial-alert selcall |
+| EURO                | multimon-ng (→ EEA)        | Generic EU 5-tone, routed via EEA |
+| FLEX                | EliasOenal/multimon-ng     | 1600/3200/6400 bps 2/4-FSK paging |
+| FLEX_NEXT           | EliasOenal/multimon-ng     | Newer FLEX revision, additive demod |
+| FMSFSK              | EliasOenal/multimon-ng     | German FMS Funkmeldesystem 1200 bps |
+| FreeDV              | freedv_rx                  | 700C / 700D / 700E / 1600 / 2020 digital voice |
+| FSK9600             | EliasOenal/multimon-ng     | Generic 9600 bps NRZ FSK |
+| FSQ                 | fldigi fsq                 | FSQ 1.5 / 3 / 4.5 / 6 baud |
+| FST4                | WSJT-X fst4d               | TR 60 / 120 / 300 / 900 / 1800 s |
+| FST4W               | WSJT-X fst4d -W            | TR 60 / 120 / 300 / 900 / 1800 s |
+| FT4                 | from-scratch ft8/ft4       | 7.5-s slot decoder |
+| FT8                 | from-scratch ft8/ft4       | 15-s slot decoder |
+| HAPN4800            | EliasOenal/multimon-ng     | Hong Kong amateur packet 4800 bps FSK |
+| HF Packet           | direwolf (MODEM 300)       | 300-baud AX.25 / APRS on 30 m |
+| HFDL                | szpajder/dumphfdl          | HF data link (multiple ground stations), IQ-mode |
+| HRPT                | SatDump (noaa_hrpt)        | NOAA AVHRR HRPT @ L-band |
+| IL2P Packet         | direwolf (-d 2)            | Nino Carrillo's Reed-Solomon FEC framing on VHF 1200 |
+| JS8                 | js8call                    | Normal, Slow, Fast, Turbo, Ultra |
+| JT4                 | WSJT-X jt9 -4              | sub-modes A–G |
+| JT65                | WSJT-X jt9 -65             | — |
+| JT9                 | WSJT-X jt9 -9              | — |
+| LoRa                | tapparelj/gr-lora_sdr      | EU 868 / US 915 / AS 433 MHz, SF7–12, BW 125/250/500 kHz |
+| LRPT                | SatDump (meteor_m2_lrpt)   | Meteor M2 weather sat @ 137 MHz |
+| LTR                 | GopherTrunk                | LTR-Net trunked dispatch |
+| M17                 | dsd-fme (-fU)              | M17 open digital voice |
+| MFSK                | fldigi mfsk                | MFSK4, 8, 11, 16, 22, 31, 32, 64, 128 |
+| MSK144              | WSJT-X msk144d             | Meteor-scatter |
+| MT63                | fldigi mt63                | 500S, 500L, 1000S, 1000L, 2000S, 2000L |
+| NAVTEX              | fldigi navtex              | SITOR-B FEC broadcast (490 / 518 kHz / 4209.5 kHz) |
+| NXDN-48             | dsd-fme (-fn)              | NXDN 4800 (narrow, Kenwood / Icom) |
+| NXDN-96             | dsd-fme (-fN)              | NXDN 9600 (wider variant) |
+| Olivia              | fldigi olivia              | 18 (tones × bandwidth) presets: 4/125 … 64/2000 |
+| OP25                | boatbod/op25 (rx.py)       | P25 trunking + control-channel parsing, IQ-mode |
+| P25-P1              | dsd-fme (-fp)              | P25 Phase 1 (CQPSK) — single-channel |
+| P25-P2              | dsd-fme (-f2)              | P25 Phase 2 (HDQPSK) — single-channel |
+| PACTOR              | fldigi navtex (B)          | Same engine, free-tuned dial |
+| POCSAG              | multimon-ng (POCSAG{512,1200,2400}) | Pager protocol, all three baud rates |
+| PSK (BPSK)          | fldigi psk                 | PSK31, 63, 63F, 125, 250, 500, 1000, PSK125R/250R/500R/1000R |
+| Q65                 | WSJT-X jt9 -q              | Q65-A, B, C, D, E |
+| QRSS                | from-scratch (DSP)         | Slow-CW visual decoder |
+| RDS                 | windytan/redsea            | FM broadcast Radio Data System |
+| rtl_433             | merbanan/rtl_433           | ~200 ISM-band protocols (weather, TPMS, meters, …) |
+| RTTY                | fldigi rtty                | 17 presets: 170 Hz amateur, 50/60/75/100 baud commercial, UK 200/50, Russian 200/100/250/75/450/75, DWD/TASS 425, 850/1000 Hz custom |
+| SELCAL              | EliasOenal/multimon-ng     | Aviation HF 4-char SELCAL (-a CCIR) |
+| SITOR-A             | from-scratch               | ARQ mode (full 7-char block) |
+| SITOR-B             | fldigi navtex (B)          | FEC broadcast mode |
+| SONDE               | rs1729/RS (rs41mod et al.) | Radiosondes — RS41, DFM-09, M10, iMet-54, LMS6, MP3H1 |
+| STD-C               | alphafox02/inmarsat-sniffer | Inmarsat-C SOLAS messaging (--mode=stdc) |
+| THOR                | fldigi thor                | THOR 4, 5, 8, 11, 16, 22, 25×4, 50×1, 50×2, 100 |
+| Throb (THRB)        | fldigi throb               | Throb 1, 2, 4 + Throb-X variants |
+| UAT                 | flightaware/dump978-fa     | 978 MHz US general-aviation ADS-B variant |
+| UFSK1200            | EliasOenal/multimon-ng     | Universal FSK 1200 bps (telematics, telemetry) |
+| VDL-2               | szpajder/dumpvdl2          | 136 MHz aviation data link (12 channels concurrent) |
+| VHF Packet          | direwolf (MODEM 1200)      | 144.39 (US) / 144.80 (EU) MHz APRS, Bell-202 |
+| WEFAX               | fldigi wefax               | IOC 576 / 288, multiple LPM, B&W + colour |
+| WSPR                | WSJT-X wsprd               | 2-min slots, 11 standard sub-bands |
+| WSPR-15             | WSJT-X wsprd -m            | 15-min slots (LF / MF), aligned to :00/:15/:30/:45 UTC |
+| WWV                 | fldigi wwv                 | WWV / WWVH minute-tick decoder |
+| X10                 | EliasOenal/multimon-ng     | X10 home-automation RF (310 MHz) |
+| YSF                 | dsd-fme (-fy)              | Yaesu System Fusion / C4FM |
+| ZVEI                | EliasOenal/multimon-ng     | ZVEI1 + ZVEI2 + ZVEI3 selcall, bundled |
+
+Additional cross-cutting tooling:
+- **AGW Packet Engine** server (TCP 8000) exposed by all four packet
+  variants for APRSIS32 / UI-View / Xastir clients (RX-only).
+- **APRS telemetry** (T# / PARM / UNIT / EQNS / BITS) decoded inline
+  by all packet modes — direwolf's structured-payload parser is on.
+- **RSID auto-classifier** vendored from fldigi for autonomous mode
+  detection — runs alongside the AUTO panel and switches the active
+  decoder.
 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
 
 ### Integrated signal generator (GEN button)
 
-Every shipped decoder can be exercised without a live HF signal via the
+Some shipped decoder can be exercised without a live HF signal via the
 **GEN** button in the function row. It opens a categorised picker
 (`openModesPicker`) of curated test samples — synthesized reference
 transmissions plus a handful of real off-air recordings — covering CW,
@@ -76,35 +158,6 @@ RTTY (every shift / baud combination listed above), all BPSK / QPSK /
 8PSK rates, every MFSK / Olivia / Contestia / MT63 / DominoEX / THOR /
 Throb variant, FSQ, FT4 / FT8 / FST4 / WSPR / JS8 / JT9 / JT65,
 NAVTEX, WEFAX, Hellschreiber, ALE, packet, IFKP, and WWV.
-
-The selected sample is decoded to a 12 kHz mono Int16 buffer via
-`OfflineAudioContext` (proper anti-aliased resampling, not linear
-interp), then routed through the active decoder using the same audio
-fan-out path as live KiwiSDR audio. This is the canonical regression
-test for any decoder change — the inject path is one of the things the
-in-tree audio samples (`audio/<mode>/*.mp3|wav`) were captured / generated
-for.
-
-### UI
-
-- 8-page touch-first keypad UI designed primarily for phone use.
-- Compact mode + landscape support.
-- AUTO/DARK/DARK+ palette modes, multiple waterfall colour LUTs.
-- Memory / station / AI side panels.
-- Server browser — fetches the live KiwiSDR public list via CORS proxies,
-  shows users / SNR / antenna / location for each kiwi, supports favorites
-  and custom entries.
-- Persisted settings (localStorage) for every knob, mode, and panel state.
-
-### Backend
-
-- Single Node `server.mjs` serves the static front-end on port 8080 plus all
-  `/ws/decode/*` decoder-bridge endpoints.
-- Optional bearer-token auth (`RADIOM_TOKEN`) + Origin allow-list on every
-  WS endpoint.
-- Per-IP and global concurrency limits for decoder WS connections.
-- PWA-installable (offline-capable shell via VitePWA).
-- fly.io deployable; standalone Dockerfile for self-hosters.
 
 ## Quick start
 

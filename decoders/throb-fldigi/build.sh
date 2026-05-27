@@ -28,12 +28,18 @@ if [ ! -f "$SRC/fldigi/throb.cxx" ] || [ ! -f "$SRC/fldigi/throb.h" ]; then
     git clone --depth 1 --branch "$FLDIGI_REF" \
       https://git.code.sf.net/p/fldigi/fldigi "$WORK/fldigi"
   fi
+  # fldigi's source layout: implementations live in src/<mode>/,
+  # public headers in src/include/. throb.cxx is under src/throb/ but
+  # throb.h is under src/include/ — the original lookup chain didn't
+  # check src/include and failed loudly. Add it.
   for f in throb.cxx throb.h; do
     if   [ -f "$WORK/fldigi/src/throb/$f" ];   then cp "$WORK/fldigi/src/throb/$f"   "$SRC/fldigi/$f"
+    elif [ -f "$WORK/fldigi/src/include/$f" ]; then cp "$WORK/fldigi/src/include/$f" "$SRC/fldigi/$f"
     elif [ -f "$WORK/fldigi/src/cw_rtty/$f" ]; then cp "$WORK/fldigi/src/cw_rtty/$f" "$SRC/fldigi/$f"
     elif [ -f "$WORK/fldigi/src/$f" ];         then cp "$WORK/fldigi/src/$f"         "$SRC/fldigi/$f"
     else
       echo "Couldn't find $f in fldigi source tree" >&2
+      find "$WORK/fldigi/src" -name "$f" >&2 || true
       exit 1
     fi
   done

@@ -31,6 +31,37 @@ import { SstvDecoder } from './decoder/sstv.mjs';
 import { FreedvDecoder } from './decoder/freedv.mjs';
 import { SelcalDecoder } from './decoder/selcal.mjs';
 import { PocsagDecoder } from './decoder/pocsag.mjs';
+import { DsdDecoder } from './decoder/dsd.mjs';
+import { MultimonDecoder } from './decoder/multimon.mjs';
+import { DscDecoder } from './decoder/dsc.mjs';
+import { Msk144Decoder } from './decoder/msk144.mjs';
+import { AisDecoder } from './decoder/ais.mjs';
+import { AcarsDecoder } from './decoder/acars.mjs';
+// TETRAPOL decoder retired — tetrapol_dump only accepts demodulated
+// bits, not audio, and the upstream demod is a GR Python flowgraph
+// we don't ship. Import + WS endpoint + Dockerfile stage all removed.
+// The decoder/tetrapol.mjs file stays for git history.
+import { Op25Decoder } from './decoder/op25.mjs';
+import { LrptDecoder } from './decoder/lrpt.mjs';
+import { RtlTcpBridge } from './decoder/rtltcp.mjs';
+import { AdsbDecoder } from './decoder/adsb.mjs';
+import { Vdl2Decoder } from './decoder/vdl2.mjs';
+import { UatDecoder } from './decoder/uat.mjs';
+// WMBus decoder retired — wmbusmeters is a frame parser, not an IQ
+// demodulator. Use the rtl_433 button at 868.300 MHz instead.
+import { RdsDecoder } from './decoder/rds.mjs';
+import { JaeroDecoder } from './decoder/jaero.mjs';
+import { CospasDecoder } from './decoder/cospas.mjs';
+import { StdcDecoder } from './decoder/stdc.mjs';
+import { Rtl433Decoder } from './decoder/rtl433.mjs';
+import { SondeDecoder } from './decoder/sonde.mjs';
+import { LoraDecoder } from './decoder/lora.mjs';
+import { LtrDecoder } from './decoder/ltr.mjs';
+// Timesig decoder retired — dokutan/dcf77-decode takes pre-decoded
+// bit lines, not audio. The AM-envelope+pulse-width demod that
+// would convert LF audio to bits doesn't exist in radiom. Button
+// hidden in the UI; btnTimeStations picker keeps working for manual
+// listening.
 import { Js8Decoder }  from './decoder/js8.mjs';
 import { Fst4Decoder } from './decoder/fst4.mjs';
 import { NAVTEXDecoder } from './decoder/navtex.mjs';
@@ -1038,8 +1069,199 @@ async function sendKiwiStatus(req, res) {
   }
 }
 
+/** Scrape receiverbook.de for OpenWebRX servers. Each entry on the page
+ *  looks like:
+ *    <div><a href="http://host:port/" target="_blank">…desc…</a></div>
+ *    <div>OpenWebRX 1.2.114</div>            ← or "OpenWebRxPlus", "KiwiSDR …", "WebSDR "
+ *    <div class="receiverbands">…</div>
+ *  We pair each anchor div with the immediately-following software-version
+ *  div, then keep only OpenWebRX (mainline + plus). 55-ish pages today;
+ *  cached aggressively. */
+const owrxCache = { ts: 0, body: null };
+const OWRX_TTL_MS = 10 * 60_000;
+const OWRX_BASE = 'https://www.receiverbook.de/';
+
+async function fetchOwrxPage(page) {
+  const target = page === 1 ? OWRX_BASE : `${OWRX_BASE}?page=${page}`;
+  const ctl = new AbortController();
+  const tm = setTimeout(() => ctl.abort(), 15_000);
+  try {
+    const r = await fetch(target, { headers: BROWSER_HEADERS, signal: ctl.signal });
+    return r.ok ? await r.text() : '';
+  } catch { return ''; }
+  finally { clearTimeout(tm); }
+}
+
+function parseOwrxPage(html) {
+  // Pair pattern: anchor div → software div → receiverbands div.
+  // Capture: 1=url, 2=description, 3=software label, 4=receiverbands HTML.
+  const re = /<div>\s*<a\s+href="(https?:\/\/[^"]+)"[^>]*>(?:<i[^>]*><\/i>)?\s*([^<]*)<\/a>\s*<\/div>\s*<div>\s*(OpenWebR[xX][^<]*)<\/div>\s*<div class="receiverbands">([\s\S]*?)<\/div>/g;
+  const out = [];
+  const seen = new Set();
+  const TAG_LABELS = {
+    'bandtag-hamradio':  'HAM',
+    'bandtag-broadcast': 'BC',
+    'bandtag-public':    '2W',     // receiverbook's "Public two-way radio"
+    'bandtag-aviation':  'AIR',
+    'bandtag-marine':    'MAR',
+    'bandtag-mil':       'MIL',
+    'bandtag-utility':   'UTL',
+    'bandtag-time':      'TIME',
+  };
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const rawUrl = m[1].trim();
+    const desc = decodeHtmlEntities(m[2]).trim();
+    const sw = m[3].trim();
+    const bandsHtml = m[4] || '';
+
+    // Per-category bands: each <span class="badge bandtag bandtag-XXX"
+    // data-html="true" title="<ul><li>BANDA</li>..."> captures one
+    // category. We extract (category label, [bands]) tuples.
+    const cats = [];
+    const allBands = new Set();
+    const catRe = /<span class="badge bandtag (bandtag-[\w-]+)"[^>]*title="([\s\S]*?)"[^>]*>/g;
+    let c;
+    while ((c = catRe.exec(bandsHtml)) !== null) {
+      const tagClass = c[1];
+      const titleHtml = c[2];
+      // Strip " Broadcast" suffix so the bands list reads cleanly
+      // (e.g. "120m Broadcast" → "120m"). Duplicates are coalesced by
+      // the Set below when the same band appears in HAM and BC tags.
+      const bands = [...titleHtml.matchAll(/<li>\s*([^<]+?)\s*<\/li>/g)]
+        .map(b => b[1].trim().replace(/\s+Broadcast$/i, ''));
+      const label = TAG_LABELS[tagClass] || tagClass.replace('bandtag-', '').toUpperCase();
+      cats.push(label);
+      for (const b of bands) allBands.add(b);
+    }
+
+    // Normalize URL: strip trailing slash for stable dedup key.
+    const url = rawUrl.replace(/\/$/, '');
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      url,
+      name: desc || url,
+      software: sw,
+      categories: cats,                // e.g. ["HAM","BC","2W"]
+      bands: [...allBands],            // e.g. ["2190m","630m","160m",...]
+    });
+  }
+  return out;
+}
+
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n));
+}
+
+async function fetchOwrxList() {
+  // Page 1 also reveals the max page number; grab it from pagination links.
+  const first = await fetchOwrxPage(1);
+  let maxPage = 1;
+  const pageNums = [...first.matchAll(/href="\/\?page=(\d+)"/g)].map(m => +m[1]);
+  if (pageNums.length) maxPage = Math.max(...pageNums);
+  // Cap so we don't accidentally hammer the site if pagination explodes.
+  maxPage = Math.min(maxPage, 80);
+
+  // Fetch remaining pages with bounded concurrency.
+  const CONC = 6;
+  const pages = [first];
+  let next = 2;
+  async function worker() {
+    while (next <= maxPage) {
+      const p = next++;
+      pages[p - 1] = await fetchOwrxPage(p);
+    }
+  }
+  await Promise.all(Array.from({ length: CONC }, () => worker()));
+
+  const all = [];
+  const seen = new Set();
+  for (const html of pages) {
+    for (const e of parseOwrxPage(html)) {
+      if (seen.has(e.url)) continue;
+      seen.add(e.url);
+      all.push(e);
+    }
+  }
+
+  // Enrich each entry with details from its own /status.json
+  // (GPS coords, location, ASL, admin). Concurrency-capped + per-server
+  // 6 s timeout so a dead server doesn't stall the whole refresh; any
+  // failure leaves the entry without enrichment.
+  const STATUS_CONC = 12;
+  let i = 0;
+  async function statusWorker() {
+    while (i < all.length) {
+      const entry = all[i++];
+      try {
+        const ctl = new AbortController();
+        const tm = setTimeout(() => ctl.abort(), 6_000);
+        const r = await fetch(`${entry.url.replace(/\/$/, '')}/status.json`,
+          { headers: BROWSER_HEADERS, signal: ctl.signal });
+        clearTimeout(tm);
+        if (!r.ok) continue;
+        const j = await r.json();
+        const rx = j?.receiver ?? {};
+        if (rx.gps && typeof rx.gps.lat === 'number') entry.lat = rx.gps.lat;
+        if (rx.gps && typeof rx.gps.lon === 'number') entry.lon = rx.gps.lon;
+        if (typeof rx.location === 'string')          entry.location = rx.location;
+        if (typeof rx.asl === 'number')               entry.asl = rx.asl;
+        if (typeof rx.admin === 'string')             entry.admin = rx.admin;
+        // SDR backend types — `sdrs[].type` is the connector class name
+        // (`RtlSdrSource`, `AirspySource`, `RxsdrSource`, `KiwiSdrSource`,
+        // …). Verified from upstream openwebrx/controllers/status.py:
+        //   "type": type(receiver).__name__
+        // Surfacing it lets the client picker badge/filter by hardware
+        // — e.g. drop "trash on HF" rigs (RTL-SDR direct-sampling) by
+        // default while keeping AirspyHF / RX888 / SDRplay entries.
+        if (Array.isArray(j?.sdrs)) {
+          const types = j.sdrs
+            .map(s => (typeof s?.type === 'string' ? s.type : null))
+            .filter(Boolean);
+          if (types.length) entry.sdrTypes = [...new Set(types)];
+        }
+      } catch { /* leave unenriched */ }
+    }
+  }
+  await Promise.all(Array.from({ length: STATUS_CONC }, () => statusWorker()));
+
+  return all;
+}
+
+async function sendOwrxList(res) {
+  console.log('[owrx-list] request');
+  try {
+    let body;
+    if (owrxCache.body && Date.now() - owrxCache.ts < OWRX_TTL_MS) {
+      console.log(`[owrx-list] cache hit (${owrxCache.body.length} entries)`);
+      body = owrxCache.body;
+    } else {
+      const list = await fetchOwrxList();
+      owrxCache.body = list;
+      owrxCache.ts = Date.now();
+      console.log(`[owrx-list] fetched ${list.length} OpenWebRX entries from receiverbook.de`);
+      body = list;
+    }
+    const json = JSON.stringify(body);
+    res.writeHead(200, {
+      'access-control-allow-origin': '*',
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(json),
+    });
+    res.end(json);
+  } catch (e) {
+    console.warn(`[owrx-list] error: ${e.message}`);
+    if (!res.headersSent) { res.writeHead(502); res.end('upstream error: ' + e.message); }
+  }
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
+  if (url.startsWith('/api/owrx-public')) return sendOwrxList(res);
   if (url.startsWith('/api/kiwi-public')) {
     const tail = url.slice('/api/kiwi-public'.length).replace(/^\//, '');
     return proxyKiwiHttp(`http://kiwisdr.com/public/${tail}`, res);
@@ -1707,11 +1929,19 @@ function attachRsidDecoder(ws) {
   });
 }
 
-// ── /ws/decode/packet — HF AX.25 / APRS packet decoder via direwolf.
+// ── /ws/decode/packet — AX.25 / APRS packet decoder via direwolf.
+//                        ?baud=300  → HF AFSK (default)
+//                        ?baud=1200 → VHF Bell-202 (144 MHz APRS)
+//                        ?baud=9600 → G3RUH (FOX cubesats, 70 cm UHF)
+//                        ?framing=il2p → IL2P (FEC framing, VHF 1200)
 const packetWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
-function attachPacketDecoder(ws) {
+function attachPacketDecoder(ws, query) {
+  const raw = Number(query?.get('baud'));
+  const baud = (raw === 1200 || raw === 9600) ? raw : 300;
+  const framing = query?.get('framing') === 'il2p' ? 'il2p' : 'ax25';
   let bytesIn = 0, framesOut = 0;
   const decoder = new PacketDecoder({
+    baud, framing,
     onLine: (line) => {
       framesOut++;
       if (ws.readyState === WS.OPEN) ws.send(line);
@@ -1720,9 +1950,9 @@ function attachPacketDecoder(ws) {
       if (ws.readyState === WS.OPEN) ws.send(`[status] ${msg}`);
     },
   });
-  console.log('[packet-decoder] session started');
+  console.log(`[packet-decoder] session started baud=${baud} framing=${framing}`);
   const hb = setInterval(() => {
-    console.log(`[packet-decoder] hb bytesIn=${bytesIn} framesOut=${framesOut}`);
+    console.log(`[packet-decoder] hb baud=${baud} framing=${framing} bytesIn=${bytesIn} framesOut=${framesOut}`);
   }, 30_000);
   ws.on('message', (data, isBinary) => {
     if (!isBinary) return;
@@ -2222,6 +2452,348 @@ function attachPocsagDecoder(ws, query) {
   });
 }
 
+// ── ADS-B / VDL-2 / UAT / WMBus / RDS — each takes either UC8 IQ or
+// raw audio on a binary WS, dumps text events as JSON {t:"text",line}.
+// Generic factory keeps the wiring compact.
+function makeBinaryDecoderWs(Decoder) {
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+  const attach = (ws) => {
+    const decoder = new Decoder({
+      onText: (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+      onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+    });
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary) return;
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      decoder.feed(buf);
+    });
+    ws.on('close', () => decoder.close());
+  };
+  return { wss, attach };
+}
+const adsbWss  = makeBinaryDecoderWs(AdsbDecoder);
+const vdl2Wss  = makeBinaryDecoderWs(Vdl2Decoder);
+const uatWss   = makeBinaryDecoderWs(UatDecoder);
+// wmbusWss retired with the button.
+const rdsWss   = makeBinaryDecoderWs(RdsDecoder);
+const jaeroWss  = makeBinaryDecoderWs(JaeroDecoder);
+const cospasWss = makeBinaryDecoderWs(CospasDecoder);
+const stdcWss   = makeBinaryDecoderWs(StdcDecoder);
+const rtl433Wss = makeBinaryDecoderWs(Rtl433Decoder);
+const ltrWss    = makeBinaryDecoderWs(LtrDecoder);
+// timesigWss + attachTimesigDecoder retired with the button.
+const loraWss   = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachLoraDecoder(ws, query) {
+  const bw   = parseInt(query?.get('bw')   ?? '125000', 10);
+  const sf   = parseInt(query?.get('sf')   ?? '7',      10);
+  const cr   = parseInt(query?.get('cr')   ?? '1',      10);
+  const rate = parseInt(query?.get('rate') ?? String(Math.max(2 * bw, 500_000)), 10);
+  const decoder = new LoraDecoder({
+    bw, sf, cr, rate,
+    onText: (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    decoder.feed(buf);
+  });
+  ws.on('close', () => decoder.close());
+}
+// Sonde wraps SondeDecoder with sub-mode passing.
+const sondeWss  = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachSondeDecoder(ws, query) {
+  const subMode = (query?.get('sub') ?? 'rs41').toLowerCase();
+  const decoder = new SondeDecoder({
+    subMode,
+    onText: (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+  });
+  ws.on('close', () => decoder.close());
+}
+
+// ── /ws/rtltcp/<host>:<port> — proxy to a remote rtl_tcp server.
+// Browser opens a WS, server opens a TCP connection to the rtl_tcp
+// daemon, decimates the IQ stream down to a manageable rate, and
+// forwards as int16-LE binary frames. JSON control plane in both
+// directions for tuner/freq/gain control.
+const rtltcpWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachRtlTcpBridge(ws, host, port) {
+  let bridge = null;
+  const send = (obj) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify(obj)); };
+  try {
+    bridge = new RtlTcpBridge({
+      host, port,
+      onIq:    (buf) => { if (ws.readyState === WS.OPEN) ws.send(buf, { binary: true }); },
+      onHello: (info) => send({ t: 'hello', ...info }),
+      onStatus:(msg) => send({ t: 'status', msg }),
+    });
+  } catch (e) {
+    send({ t: 'status', msg: `bridge failed: ${e.message}` });
+    try { ws.close(); } catch {}
+    return;
+  }
+  console.log(`[rtltcp] session ${host}:${port}`);
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) return;
+    try {
+      const m = JSON.parse(data.toString());
+      switch (m.t) {
+        case 'freq':    if (Number.isFinite(m.hz)) bridge.setFreq(m.hz); break;
+        case 'rate':    if (Number.isFinite(m.hz)) bridge.setSampleRate(m.hz); break;
+        case 'gain':    if (Number.isFinite(m.tenthDb)) bridge.setGain(m.tenthDb); break;
+        case 'gainmode':bridge.setGainMode(!!m.manual); break;
+        case 'agc':     bridge.setAgcMode(!!m.on); break;
+        case 'corr':    if (Number.isFinite(m.ppm)) bridge.setFreqCorr(m.ppm); break;
+        case 'direct':  if (Number.isFinite(m.mode)) bridge.setDirectSampling(m.mode); break;
+        case 'offset':  bridge.setOffsetTuning(!!m.on); break;
+        case 'decim':   if (Number.isFinite(m.outHz)) bridge.setOutRate(m.outHz); break;
+        case 'format':  if (typeof m.fmt === 'string') bridge.setOutFormat(m.fmt); break;
+      }
+    } catch {}
+  });
+  ws.on('close', () => { try { bridge?.close(); } catch {} });
+}
+
+// ── /ws/decode/msk144 — wsjt-x MSK144 (meteor scatter). Batch decode
+// on 15 s UTC slots; emits one JSON spot per decoded message.
+const msk144Wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachMsk144Decoder(ws, query) {
+  let dialKHz = parseFloat(query?.get('dial') ?? '50260');
+  if (!Number.isFinite(dialKHz)) dialKHz = 50260;
+  let bytesIn = 0, spotsOut = 0;
+  const decoder = new Msk144Decoder({
+    dialFreqKHz: () => dialKHz,
+    onSpot: (s) => { spotsOut++; if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'spot', ...s })); },
+    onStatus: (m) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg: m })); },
+  });
+  const hb = setInterval(() => console.log(`[msk144] hb bytesIn=${bytesIn} spotsOut=${spotsOut}`), 60_000);
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) {
+      try { const m = JSON.parse(data.toString()); if (m?.t === 'dial' && Number.isFinite(m.kHz)) dialKHz = m.kHz; } catch {}
+      return;
+    }
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+    bytesIn += buf.length;
+  });
+  ws.on('close', () => { clearInterval(hb); decoder.close(); });
+}
+
+// ── /ws/decode/ais — rtl-ais aisdecoder, NMEA marine vessel
+// tracking. 161.975 / 162.025 MHz.
+const aisWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachAisDecoder(ws) {
+  const decoder = new AisDecoder({
+    onEvent: (ev) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev })); },
+    onText:  (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+  });
+  ws.on('close', () => decoder.close());
+}
+
+// ── /ws/decode/acars — TLeconte/acarsdec, 131 MHz airline data.
+const acarsWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachAcarsDecoder(ws) {
+  const decoder = new AcarsDecoder({
+    onEvent: (ev) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev })); },
+    onText:  (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+  });
+  ws.on('close', () => decoder.close());
+}
+
+// /ws/decode/tetrapol endpoint removed when the button was retired.
+
+// ── /ws/decode/op25 — boatbod/op25 P25 trunking decoder. Now an
+// IQ-in endpoint (cs16 interleaved I,Q over WS binary frames),
+// converted to cf32 in the bridge before being fed to rx.py via a
+// fifo. Emits both raw text lines and structured events (NAC/TGID/
+// SRC/freq) when the trunking system is active.
+const op25Wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachOp25Decoder(ws, query) {
+  const demod = (query?.get('demod') ?? 'cqpsk').toLowerCase();
+  const sampleRate = Number(query?.get('rate')) || 96_000;
+  console.log(`[op25] WS attached demod=${demod} rate=${sampleRate}`);
+  const decoder = new Op25Decoder({
+    demod, sampleRate,
+    onText:   (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onEvent:  (ev)   => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev })); },
+    onStatus: (msg)  => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 4) return;             // need at least one IQ pair
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+  });
+  ws.on('close', () => decoder.close());
+}
+
+// ── /ws/decode/lrpt — satdump Meteor M2 LRPT (137 MHz). IQ-baseband
+// in, images written to a tmp dir; bridge emits a JSON event per
+// produced PNG with a path the browser can fetch.
+const lrptWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachLrptDecoder(ws, query) {
+  const pipeline = (query?.get('pipeline') ?? 'lrpt').toLowerCase();
+  const decoder = new LrptDecoder({
+    pipeline,
+    onImage: (img) => {
+      if (ws.readyState !== WS.OPEN) return;
+      // JSON prelude tells the client "the *next* binary frame is the
+      // image with this name/mime". The client correlates the two by
+      // queue order — no IDs needed since LRPT writes one image at a
+      // time and the bridge serialises onImage() callbacks.
+      ws.send(JSON.stringify({ t: 'image-prelude', name: img.name, mime: img.mime }));
+      ws.send(img.bytes, { binary: true });
+    },
+    onText:  (line) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line })); },
+    onStatus:(msg) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg })); },
+  });
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    decoder.feed(buf);
+  });
+  ws.on('close', () => decoder.close());
+}
+
+// ── /ws/decode/multimon — generic multimon-ng modes (FLEX, ERMES,
+// DTMF, ZVEI, AFSK1200, X10, EAS). Mode selected by `?mode=<name>`.
+// Same 12 kHz int16 LE input as SELCAL/POCSAG; emits JSON events.
+const multimonWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachMultimonDecoder(ws, query) {
+  const mode = (query?.get('mode') ?? 'flex').toLowerCase();
+  let bytesIn = 0, eventsOut = 0;
+  const decoder = new MultimonDecoder({
+    mode,
+    onEvent: (ev) => {
+      eventsOut++;
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev }));
+    },
+    onText: (line) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line }));
+    },
+    onStatus: (msg) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg }));
+    },
+  });
+  console.log(`[multimon-decoder] session started mode=${mode}`);
+  const hb = setInterval(() => {
+    console.log(`[multimon-decoder] hb mode=${mode} bytesIn=${bytesIn} eventsOut=${eventsOut}`);
+  }, 60_000);
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+    bytesIn += buf.length;
+  });
+  ws.on('close', () => {
+    clearInterval(hb);
+    decoder.close();
+  });
+}
+
+// ── /ws/decode/dsc — Marine Digital Selective Calling (ITU-R M.493).
+// 12 kHz int16 LE mono in (same wire shape as multimon). The bridge
+// holds a 10 s rolling buffer and shells out to jbirby/DSC-Codec on
+// a 4 s timer; multimon-ng doesn't decode DSC.
+const dscWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachDscDecoder(ws, _query) {
+  let bytesIn = 0, eventsOut = 0;
+  const decoder = new DscDecoder({
+    onEvent: (ev) => {
+      eventsOut++;
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev }));
+    },
+    onText: (line) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line }));
+    },
+    onStatus: (msg) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg }));
+    },
+  });
+  console.log('[dsc-decoder] session started');
+  const hb = setInterval(() => {
+    console.log(`[dsc-decoder] hb bytesIn=${bytesIn} eventsOut=${eventsOut}`);
+  }, 60_000);
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+    bytesIn += buf.length;
+  });
+  ws.on('close', () => {
+    clearInterval(hb);
+    decoder.close();
+  });
+}
+
+// ── /ws/decode/dsd — Digital Speech Decoder (dsd-fme): D-STAR / DMR /
+// NXDN / YSF / dPMR / M17 / P25 metadata. Mode selected by query param
+// `?mode=dstar|dmr|nxdn48|nxdn96|ysf|dpmr|m17|p25p1|p25p2`. Streams
+// 12 kHz int16 PCM up, emits JSON events on every parsed line.
+const dsdWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachDsdDecoder(ws, query) {
+  const mode = (query?.get('mode') ?? 'dmr').toLowerCase();
+  let bytesIn = 0, eventsOut = 0, audioBytesOut = 0;
+  const decoder = new DsdDecoder({
+    mode,
+    onEvent: (ev) => {
+      eventsOut++;
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'event', ...ev }));
+    },
+    onText: (line) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'text', line }));
+    },
+    onStatus: (msg) => {
+      if (ws.readyState === WS.OPEN) ws.send(JSON.stringify({ t: 'status', msg }));
+    },
+    onAudio: (pcm) => {
+      // Raw 8 kHz int16 LE from dsd-fme. Forward as binary frame —
+      // client owns Web Audio scheduling identical to FreeDV path.
+      audioBytesOut += pcm.length;
+      if (ws.readyState === WS.OPEN) ws.send(pcm, { binary: true });
+    },
+  });
+  console.log(`[dsd-decoder] session started mode=${mode}`);
+  const hb = setInterval(() => {
+    console.log(`[dsd-decoder] hb mode=${mode} bytesIn=${bytesIn} eventsOut=${eventsOut} audioOut=${audioBytesOut}`);
+  }, 60_000);
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) return;     // no JSON control plane needed; mode is fixed on open
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (buf.length < 2) return;
+    decoder.feed(new Int16Array(buf.buffer, buf.byteOffset, buf.length / 2));
+    bytesIn += buf.length;
+  });
+  ws.on('close', () => {
+    clearInterval(hb);
+    decoder.close();
+  });
+}
+
 // ── /ws/decode/js8 — JS8Call (15-second slot) decoder via js8 binary.
 //
 // Same shape as the WSPR endpoint: client streams 12 kHz int16 PCM and
@@ -2363,7 +2935,8 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   if (req.url && req.url.startsWith('/ws/decode/packet')) {
-    packetWss.handleUpgrade(req, socket, head, (clientWs) => attachPacketDecoder(clientWs));
+    const query = new URL(req.url, 'http://x').searchParams;
+    packetWss.handleUpgrade(req, socket, head, (clientWs) => attachPacketDecoder(clientWs, query));
     return;
   }
   if (req.url && req.url.startsWith('/ws/decode/wspr15')) {
@@ -2381,6 +2954,101 @@ server.on('upgrade', (req, socket, head) => {
     pocsagWss.handleUpgrade(req, socket, head, (clientWs) => attachPocsagDecoder(clientWs, query));
     return;
   }
+  if (req.url && req.url.startsWith('/ws/decode/dsd')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    dsdWss.handleUpgrade(req, socket, head, (clientWs) => attachDsdDecoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/dsc')) {
+    dscWss.handleUpgrade(req, socket, head, (clientWs) => attachDscDecoder(clientWs, null));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/multimon')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    multimonWss.handleUpgrade(req, socket, head, (clientWs) => attachMultimonDecoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/rtltcp/')) {
+    // /ws/rtltcp/<host>:<port> — strip prefix, parse host:port
+    const rest = req.url.slice('/ws/rtltcp/'.length).split('?')[0];
+    const m = rest.match(/^([\w.-]+):(\d+)\/?$/);
+    if (!m) { socket.destroy(); return; }
+    const host = m[1], port = parseInt(m[2], 10);
+    rtltcpWss.handleUpgrade(req, socket, head, (clientWs) => attachRtlTcpBridge(clientWs, host, port));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/msk144')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    msk144Wss.handleUpgrade(req, socket, head, (clientWs) => attachMsk144Decoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/ais')) {
+    aisWss.handleUpgrade(req, socket, head, (clientWs) => attachAisDecoder(clientWs));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/acars')) {
+    acarsWss.handleUpgrade(req, socket, head, (clientWs) => attachAcarsDecoder(clientWs));
+    return;
+  }
+  // /ws/decode/tetrapol upgrade handler retired with the button.
+  if (req.url && req.url.startsWith('/ws/decode/op25')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    op25Wss.handleUpgrade(req, socket, head, (clientWs) => attachOp25Decoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/lrpt')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    lrptWss.handleUpgrade(req, socket, head, (clientWs) => attachLrptDecoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/adsb')) {
+    adsbWss.wss.handleUpgrade(req, socket, head, adsbWss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/vdl2')) {
+    vdl2Wss.wss.handleUpgrade(req, socket, head, vdl2Wss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/uat')) {
+    uatWss.wss.handleUpgrade(req, socket, head, uatWss.attach);
+    return;
+  }
+  // /ws/decode/wmbus upgrade handler retired with the button.
+  if (req.url && req.url.startsWith('/ws/decode/rds')) {
+    rdsWss.wss.handleUpgrade(req, socket, head, rdsWss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/jaero')) {
+    jaeroWss.wss.handleUpgrade(req, socket, head, jaeroWss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/cospas')) {
+    cospasWss.wss.handleUpgrade(req, socket, head, cospasWss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/stdc')) {
+    stdcWss.wss.handleUpgrade(req, socket, head, stdcWss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/rtl433')) {
+    rtl433Wss.wss.handleUpgrade(req, socket, head, rtl433Wss.attach);
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/sonde')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    sondeWss.handleUpgrade(req, socket, head, (clientWs) => attachSondeDecoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/lora')) {
+    const query = new URL(req.url, 'http://x').searchParams;
+    loraWss.handleUpgrade(req, socket, head, (clientWs) => attachLoraDecoder(clientWs, query));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/decode/ltr')) {
+    ltrWss.wss.handleUpgrade(req, socket, head, ltrWss.attach);
+    return;
+  }
+  // /ws/decode/timesig upgrade route retired with the button.
   if (req.url && req.url.startsWith('/ws/decode/selcal')) {
     const query = new URL(req.url, 'http://localhost').searchParams;
     selcalWss.handleUpgrade(req, socket, head, (clientWs) => attachSelcalDecoder(clientWs, query));

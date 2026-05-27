@@ -48,7 +48,12 @@ html, body {
 .topbar button {
   background: var(--panel); color: var(--fg);
   border: 1px solid var(--border); border-radius: 8px;
-  height: 40px; width: 48px; font-size: 18px;
+  /* All topbar buttons line up at 27 px so the menu (☰) and help (?)
+   * match the height of the KiwiSDR / OpenWebRx / power buttons.
+   * Width still defaults to 48 px for the icon-only buttons; source
+   * toggles override with width:auto. */
+  height: 27px; width: 48px; font-size: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .topbar .server {
   flex: 1; min-width: 0;
@@ -57,7 +62,40 @@ html, body {
   height: 40px; padding: 0 12px;
   text-align: center; font-size: 14px; cursor: pointer;
 }
-.topbar .power { color: var(--accent); border-color: var(--accent); }
+.topbar .power {
+  color: var(--accent);
+  border-color: var(--accent);
+  /* Match the source buttons (KiwiSDR / OpenWebRx) height-wise. The
+   * `.topbar button` rule sets 40 × 48; override here to track the
+   * .kpbtn-style source toggles. */
+  height: 27px;
+  width: auto;
+  padding: 0 8px;
+  font-size: 14px;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.topbar .power svg { width: 16px; height: 16px; }
+/* Push the connection LED + the power button against the right edge,
+ * mirroring the small LED's right-justification. The fixed-size dot
+ * needs `align-self: center` to ride at the vertical mid-line of the
+ * 27-px power button next to it (the topbar's default `stretch`
+ * collapses to `flex-start` for explicitly-sized children). */
+.topbar .conn-dot { margin-left: auto; align-self: center; }
+/* Source toggle buttons (KiwiSDR / OpenWebRx) — match the keypad
+ * style (.kpbtn) rather than the chunkier topbar default. Width auto-
+ * fits the label so neither "KiwiSDR" nor "OpenWebRx" gets clipped. */
+.topbar .source-btn {
+  width: auto;
+  padding: 0 10px;
+  height: 27px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  align-self: center;
+}
 .topbar .menu.installable {
   border-color: #2ecc71;
   color: #2ecc71;
@@ -586,12 +624,16 @@ body.wefax-ext .wefax-canvas {
   font-size: 10px; line-height: 1;
   padding: 3px 6px;
   color: #fff;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.18);
+  /* Opaque so the button cleanly covers underlying decoder text /
+   * waterfall content — the previous rgba(255,255,255,0.08) over a
+   * dark panel made the buttons look ghostly when they overlapped
+   * lines of decoded output. */
+  background: #2a2a2a;
+  border: 1px solid #4a4a4a;
   border-radius: 4px;
   cursor: pointer;
 }
-.transcript-btn:active { background: rgba(255,255,255,0.18); }
+.transcript-btn:active { background: #3a3a3a; }
 .cw-param {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 10px; color: #cfffa3;
@@ -1054,6 +1096,25 @@ body.wefax-ext .wefax-canvas {
 .kprow:not(.freq-row) > .kpbtn:nth-child(n+4):nth-child(-n+6) {
   color: var(--led-bg);
 }
+/* Every numeric-pad key shares the same dim-yellow accent regardless of
+ * its grid position. The nth-child rule above only catches columns 4-6,
+ * which leaves the leftmost digit column (1 / 4 / 7 / .) the default
+ * white. Targeting data-key directly covers all of them. */
+.kpbtn[data-key] { color: var(--led-bg); }
+/* GEN / SID / MEM sit in the right column (slot 6) so the nth-child
+ * rule colours them led-bg. They're picker entry points, not numeric
+ * pad keys — force them back to white so the digit row stays the only
+ * yellow cluster. Specificity matches the nth-child rule above so it
+ * actually wins the cascade. */
+.kprow:not(.freq-row) > .kpbtn[data-cmd="gen"]:nth-child(n),
+.kprow:not(.freq-row) > .kpbtn[data-cmd="sid"]:nth-child(n),
+.kprow:not(.freq-row) > .kpbtn[data-cmd="mem"]:nth-child(n),
+.kprow:not(.freq-row) > .kpbtn[data-cmd="back"]:nth-child(n) { color: #fff; }
+/* kHz / MHz frequency-submit buttons get the same LED-yellow as the
+ * digit keys (.kpbtn[data-key]) so they read as part of the numeric
+ * pad rather than a command. */
+.kprow:not(.freq-row) > .kpbtn[data-cmd="mhz"]:nth-child(n),
+.kprow:not(.freq-row) > .kpbtn[data-cmd="set"]:nth-child(n) { color: var(--led-bg); }
 /* Buttons that share the same "page content" role as the n+3..n+5
  * cluster but live in different DOM positions because of hidden
  * siblings (WUSB/WLSB pushed ZOOM out of the colorable range). */
@@ -1250,7 +1311,19 @@ body.wefax-ext .wefax-canvas {
   z-index: 1000;
 }
 
-.modal-card { background: var(--bg); width: 100%; display: flex; flex-direction: column; }
+.modal-card {
+  background: var(--bg);
+  width: 100%;
+  /* Cap the card to the viewport so the inner flex column actually
+   * has a bounded height — without this the card can grow taller than
+   * 100vh on tall content (e.g. a 50-profile receiver) and `flex:1`
+   * on .srv-list never engages overflow:scroll. */
+  height: 100%;
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .modal-bar {
   display: flex; gap: 8px; padding: 8px;
   background: var(--bg); border-bottom: 1px solid var(--border);
@@ -1267,11 +1340,48 @@ body.wefax-ext .wefax-canvas {
   border: 1px solid var(--border); border-radius: 8px;
   padding: 0 14px; height: 40px; font-size: 14px;
 }
-.modal-bar .btn-favs.active {
+.modal-bar .btn-favs.active,
+.modal-bar .btn-no-rtl.active {
   border-color: var(--led-bg);
   color: var(--led-bg);
 }
-.srv-list { flex: 1; overflow: auto; padding: 8px; }
+.srv-list {
+  flex: 1;
+  /* `overflow-y: scroll` keeps a visible track even when content fits,
+   * so the scrollbar is always reachable on touch devices that hide
+   * `overflow:auto` indicators. `min-height: 0` lets the flex parent
+   * actually shrink the list to the available area (without this, very
+   * tall content pushes the modal-card past the viewport on Safari). */
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  padding: 8px;
+  scrollbar-gutter: stable;
+}
+/* macOS desktop Safari/Chrome hide overlay scrollbars by default
+ * (System Settings → "Show scroll bars: When scrolling"). To force an
+ * always-visible custom scrollbar we MUST set `-webkit-appearance: none`
+ * — that converts the bar to a fully-styled non-overlay widget that
+ * respects our width/colour. Same CSS works on Android, Windows, etc. */
+.srv-list::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+}
+.srv-list::-webkit-scrollbar-track {
+  background: #1c1c1c;
+  border-left: 1px solid #333;
+}
+.srv-list::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 6px;
+  min-height: 30px;
+  border: 2px solid #1c1c1c;
+}
+.srv-list::-webkit-scrollbar-thumb:hover { background: #aaa; }
+.srv-list::-webkit-scrollbar-corner { background: #1c1c1c; }
+/* Firefox / standards path. */
+.srv-list { scrollbar-width: auto; scrollbar-color: #888 #1c1c1c; }
 .srv-row {
   display: flex; gap: 10px; padding: 12px;
   background: var(--panel); border-radius: 10px; margin-bottom: 8px;
@@ -1371,11 +1481,25 @@ body.wefax-ext .wefax-canvas {
 /* ─── Band overlay ─── */
 .band-modal {
   position: fixed; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: transparent;        /* no full-screen tint */
+  display: flex;
+  /* `safe center` centers the matrix when it fits the available area,
+   * but switches to start-alignment as soon as the content would
+   * overflow — keeping the top rows visible (and scrollable) instead
+   * of clipping them off the top edge. */
+  align-items: safe center;
+  justify-content: safe center;
+  /* Modal container itself is transparent — only the button tiles
+   * cover the waterfall. Background gaps still show the live spectrum
+   * underneath so the operator keeps situational awareness. */
+  background: transparent;
   z-index: 1000;
   animation: bandFadeIn 140ms ease;
+  overflow: auto;
 }
+/* (Removed the full-viewport dim backdrop — it darkened the whole UI
+ * too aggressively. Panels still stack above via z-index 1000 and the
+ * grid's own translucent backdrop-filter card supplies enough visual
+ * separation from the content underneath.) */
 @keyframes bandFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .eq-card {
   background: rgba(20, 20, 25, 0.94);
@@ -1443,23 +1567,30 @@ body.wefax-ext .wefax-canvas {
 .eq-flat:active, .eq-close:active { background: #3f8fc4; color: #fff; }
 .band-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 14px;
-  padding: 18px;
-  border-radius: 18px;
-  /* Transparent — the fuzzy look comes from the backdrop-filter blurring
-     whatever's behind the card. */
-  background: rgba(0, 0, 0, 0.15);
-  backdrop-filter: blur(20px) saturate(1.1);
-  -webkit-backdrop-filter: blur(20px) saturate(1.1);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
-  width: calc(100% - 24px); max-width: 720px;
+  /* auto-fit + minmax: tiles flow to fill whatever width the viewport
+   * provides, so big pickers (DSP, INFO with 44 entries, DEC{A,B})
+   * never push past the screen edge. The 44px floor still leaves room
+   * for 4-char labels at 11px. */
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  gap: 4px;
+  padding: 6px;
+  /* No card chrome — the buttons themselves are the only foreground;
+   * gaps between them stay transparent so the waterfall shows through. */
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  width: calc(100% - 12px); max-width: 720px;
+  /* The host .band-modal scrolls when content overflows the available
+   * area (it's positioned over the waterfall rect by JS), so the grid
+   * itself doesn't need its own scroll container. */
+  max-height: 100%;
+  box-sizing: border-box;
 }
 .band-btn {
-  height: 60px;
-  font-size: 18px; font-weight: 600;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  height: 32px;
+  /* Match the keypad's .kpbtn font (12 px, weight 500, default family)
+   * so the picker tiles read as the same family as the keys below. */
+  font-size: 12px; font-weight: 500;
   color: var(--fg);
   background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 60%, #161616 100%);
   border: 2px solid #2a2a2a;
@@ -1663,8 +1794,12 @@ body.wefax-ext .wefax-canvas {
     0 2px 8px rgba(0,0,0,0.4);
 }
 @media (max-width: 520px) {
-  .band-grid { gap: 8px; }
-  .band-btn { height: 50px; font-size: 15px; border-radius: 10px; }
+  /* Keep the picker tiles compact on phones so big matrices (DSP,
+   * INFO, DEC{A,B}, DISP) fit a single viewport. Match the keypad's
+   * .kpbtn (12 px font, 27 px height) so picker text isn't bigger
+   * than the keys below. */
+  .band-grid { gap: 4px; }
+  .band-btn { height: 32px; font-size: 12px; border-radius: 8px; }
 }
 
 /* ─── Stats viewer (Settings → Show Kiwi Stats) ─── */
@@ -1860,6 +1995,29 @@ body.wefax-ext .wefax-canvas {
 }
 .help-desc { color: #cfd5db; line-height: 1.45; }
 
+/* DEC picker — same rtty-list / rtty-row format as the frequency
+ * pickers. anchorPickerOverWaterfall pins the modal root to the
+ * waterfall rect; override the default rtty-list centred max-width
+ * so the list fills that rect. Wrap the long help description in
+ * the meta line. */
+.dec-picker {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+.dec-picker .rtty-list {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+}
+.dec-picker .rtty-row-meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
 /* ─── DECOD picker (sorted decoder list, tap-to-toggle) ─── */
 .menu.decod {
   width: auto;
@@ -1891,3 +2049,4 @@ body.wefax-ext .wefax-canvas {
   width: 24px; text-align: center;
 }
 .decod-row.active .decod-dot { color: #ffb27a; }
+

@@ -5,6 +5,7 @@ export type Mode =
   | 'iq'
   | 'lsb' | 'lsn'
   | 'nbfm'| 'nnfm'
+  | 'wfm'
   | 'qam'
   | 'sal' | 'sam' | 'sas' | 'sau'
   | 'usb' | 'usn';

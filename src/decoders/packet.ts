@@ -4,6 +4,14 @@
 
 export interface PacketDecoderOpts {
   sampleRate: number;
+  /** 300 → HF AX.25 (10.147 MHz default), 1200 → VHF Bell-202 (144 MHz
+   *  APRS default), 9600 → G3RUH (FOX cubesats / 70 cm UHF packet).
+   *  Defaults to 300 to match the old behavior. */
+  baud?: 300 | 1200 | 9600;
+  /** Framing layer. 'il2p' enables Nino Carrillo's FEC framing
+   *  (Reed-Solomon over the AX.25-shaped payload). Only meaningful
+   *  at baud=1200 today — the IL2P config pins to VHF 1200. */
+  framing?: 'ax25' | 'il2p';
   onLine?: (line: string) => void;
   onStatus?: (s: string) => void;
 }
@@ -46,7 +54,10 @@ export class PacketDecoder {
 
   private connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/decode/packet`;
+    const baud = (this.opts.baud === 1200 || this.opts.baud === 9600)
+                 ? this.opts.baud : 300;
+    const framing = this.opts.framing === 'il2p' ? '&framing=il2p' : '';
+    const url = `${proto}//${location.host}/ws/decode/packet?baud=${baud}${framing}`;
     this.opts.onStatus?.('connecting…');
     let ws: WebSocket;
     try { ws = new WebSocket(url); }

@@ -17,6 +17,10 @@ export interface Settings {
   wfInterpolate: boolean;
   /** Show the Kiwi connection-diagnostic band under the LED panel. */
   showKiwiDiag: boolean;
+  /** Show the −50/+50/−25/+25/−12.5/+12.5 kHz "large tuning step" row
+   *  above the regular ±10/±5/±1 kHz row. Off by default — the row
+   *  is mainly useful when band-scanning VHF/UHF on an OWRX server. */
+  showLargeTuningRow: boolean;
   fftAveraging: number;          // 0..100 — UI slider; maps to wf_speed
   wfSpeed: number;               // Kiwi waterfall FPS, 0=slowest..4=fastest
   fftAutoNoiseOffset: number;    // dBm offset added when auto-scaling
@@ -114,6 +118,7 @@ export const DEFAULT_SETTINGS: Settings = {
   flushKeepMs: 500,
   wfInterpolate: true,
   showKiwiDiag: true,
+  showLargeTuningRow: false,
   fftAveraging: 80,
   wfSpeed: 2,
   fftAutoNoiseOffset: -2,
@@ -233,6 +238,10 @@ export function openSettingsModal(opts: SettingsModalOpts): void {
           <label class="settings-row toggle-row">
             <span>Show Kiwi connection diagnostic band</span>
             <input type="checkbox" id="showKiwiDiag" ${s.showKiwiDiag ? 'checked' : ''} />
+          </label>
+          <label class="settings-row toggle-row">
+            <span>Show large tuning steps row (−50k/+50k/−25k/+25k/±12.5k)</span>
+            <input type="checkbox" id="showLargeTuningRow" ${s.showLargeTuningRow ? 'checked' : ''} />
           </label>
         </div>
 
@@ -501,6 +510,7 @@ export function openSettingsModal(opts: SettingsModalOpts): void {
       })(),
       wfInterpolate: ($('wfInterpolate') as HTMLInputElement).checked,
       showKiwiDiag: ($('showKiwiDiag') as HTMLInputElement).checked,
+      showLargeTuningRow: ($('showLargeTuningRow') as HTMLInputElement).checked,
       // FFT settings UI was removed; preserve whatever was last persisted.
       fftAveraging: opts.current?.fftAveraging ?? s.fftAveraging,
       wfSpeed: opts.current?.wfSpeed ?? 2,

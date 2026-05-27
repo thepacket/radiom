@@ -297,7 +297,13 @@ export class KiwiClient {
   /** Toggle server-side noise reduction. Captured exactly from QiwiQ — the
    *  active algorithm is 3 (not 1), and both denoiser types need their full
    *  parameter set + en=1 before audible effect kicks in. */
-  setNoiseReduction(on: boolean): void {
+  /** Toggle server-side noise reduction. Captured exactly from QiwiQ — the
+   *  active algorithm is 3 (not 1), and both denoiser types need their full
+   *  parameter set + en=1 before audible effect kicks in.
+   *  Accepts a number too (shell's nrMode 0..1) for ergonomic symmetry
+   *  with OpenWebRX, but the semantics on Kiwi are unchanged: on/off only. */
+  setNoiseReduction(mode: boolean | number): void {
+    const on = typeof mode === 'boolean' ? mode : mode > 0;
     if (!on) { this.send(this.snd, 'SET nr algo=0'); return; }
     this.send(this.snd, 'SET nr algo=3');
     for (const type of [0, 1]) {

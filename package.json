@@ -1,7 +1,7 @@
 {
   "name": "radiom",
   "private": true,
-  "version": "0.3.743",
+  "version": "0.4.3",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
@@ -23,7 +23,28 @@
     "build:sstv": "bash decoders/sstv/build.sh",
     "build:freedv": "bash decoders/freedv/build.sh",
     "build:throb": "bash decoders/throb-fldigi/build.sh",
-    "build:selcal": "bash decoders/multimon/build.sh"
+    "build:selcal": "bash decoders/multimon/build.sh",
+    "build:dsc": "bash decoders/dsc/build.sh",
+    "build:dsd": "bash decoders/dsd/build.sh",
+    "build:msk144": "bash decoders/msk144/build.sh",
+    "build:ais": "bash decoders/ais/build.sh",
+    "build:acars": "bash decoders/acars/build.sh",
+    "build:tetrapol": "bash decoders/tetrapol/build.sh",
+    "build:op25": "bash decoders/op25/build.sh",
+    "build:lrpt": "bash decoders/lrpt/build.sh",
+    "build:adsb": "bash decoders/adsb/build.sh",
+    "build:vdl2": "bash decoders/vdl2/build.sh",
+    "build:uat": "bash decoders/uat/build.sh",
+    "build:wmbus": "bash decoders/wmbus/build.sh",
+    "build:rds": "bash decoders/rds/build.sh",
+    "build:jaero": "bash decoders/jaero/build.sh",
+    "build:cospas": "bash decoders/cospas/build.sh",
+    "build:stdc": "bash decoders/stdc/build.sh",
+    "build:rtl433": "bash decoders/rtl433/build.sh",
+    "build:sonde": "bash decoders/sonde/build.sh",
+    "build:lora": "bash decoders/lora/build.sh",
+    "build:ltr": "bash decoders/ltr/build.sh",
+    "build:timesig": "bash decoders/timesig/build.sh"
   },
   "dependencies": {
     "ws": "^8.20.0"

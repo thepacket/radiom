@@ -27,6 +27,13 @@ export class AdpcmDecoder {
     this.stepIdx = 0;
   }
 
+  /** Re-anchor predictor + step index. Used by OpenWebRX, which re-syncs
+   *  the decoder every ~1000 samples via inline "SYNC" markers. */
+  setState(stepIdx: number, predictor: number): void {
+    this.stepIdx = Math.max(0, Math.min(88, stepIdx | 0));
+    this.predictor = Math.max(-32768, Math.min(32767, predictor | 0));
+  }
+
   /** Decode `bytes.length * 2` samples of int16 PCM into `out` (must be sized
    *  for that count). Returns the number of samples written. */
   decodeInto(bytes: Uint8Array, out: Int16Array): number {
@@ -39,7 +46,9 @@ export class AdpcmDecoder {
     return n;
   }
 
-  private decodeNibble(nibble: number): number {
+  /** Decode a single 4-bit nibble. Exposed for callers like OpenWebRX
+   *  that decode byte-by-byte while watching for inline sync markers. */
+  decodeNibble(nibble: number): number {
     const step = STEP_TABLE[this.stepIdx];
     let diff = step >> 3;
     if (nibble & 4) diff += step;

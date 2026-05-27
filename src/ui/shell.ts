@@ -4,6 +4,11 @@ import { AudioPlayer } from '../audio/player';
 import { SpectrumView, PALETTES, buildLUT, type PaletteName } from './spectrum';
 import { FftAverager } from './fft_average';
 import { openServerList, findServerEntry, type ServerEntry } from './server-list';
+import { openOwrxList, owrxWsUrl } from './openwebrx-list';
+import { openRtlList } from './rtl-list';
+import { RtlTcpClient } from '../rtltcp/client';
+import { OpenWebRxClient } from '../openwebrx/client';
+import type { AudioFrame, KiwiStatus, WaterfallFrame } from '../kiwi/types';
 import { openPresetsModal } from './presets-modal';
 import { openBandModal } from './band-modal';
 import { openSettingsModal, loadSettings, saveSettings, LANGS_SRC, LANGS_DST, type Settings } from './settings-modal';
@@ -44,6 +49,9 @@ import { ThrobFldigiDecoder, type ThrobMode } from '../decoders/throb-fldigi';
 import { Jt4Decoder, type Jt4Spot } from '../decoders/jt4';
 import { SelcalDecoder, type SelcalCall } from '../decoders/selcal';
 import { PocsagDecoder, type PocsagPage } from '../decoders/pocsag';
+import { DsdDecoder, type DsdMode, type DsdEvent } from '../decoders/dsd';
+import { MultimonDecoder, type MultimonMode, type MultimonEvent } from '../decoders/multimon';
+import { VendoredDecoder } from '../decoders/vendored';
 import { Fst4Decoder, type Fst4Spot } from '../decoders/fst4';
 import { ALE2GDecoder } from '../decoders/ale-2g';
 import { HFDLDecoder } from '../decoders/hfdl';
@@ -73,7 +81,6 @@ interface ScanItem {
 interface Toggles {
   fft: boolean;
   wf: boolean;
-  nr: boolean;
   comp: boolean;
   adpcm: boolean;
   base: boolean;
@@ -93,6 +100,7 @@ const DEFAULT_PASSBANDS: Record<Mode, [number, number]> = {
   lsb:  [-2700, 0],
   lsn:  [-2350, -350],
   nbfm: [-6000, 6000],
+  wfm:  [-80000, 80000],   // WFM broadcast — 160 kHz; OWRX-only (HD audio path)
   nnfm: [-3000, 3000],
   qam:  [-4900, 4900],
   sal:  [-4900, 0],
@@ -105,7 +113,7 @@ const DEFAULT_PASSBANDS: Record<Mode, [number, number]> = {
 
 export class Shell {
   private root: HTMLElement;
-  private client: KiwiClient | null = null;
+  private client: KiwiClient | OpenWebRxClient | RtlTcpClient | null = null;
   private player = new AudioPlayer();
   private spectrum!: SpectrumView;
   private fftAvg!: FftAverager;
@@ -117,9 +125,25 @@ export class Shell {
   private highCut = 0;
   private vol = 50;          // 0..100
   private sql = 0;            // 0..40 dB above noise floor (0 = off)
+  /** GATE — client-side audio noise gate threshold. 0..100 maps to
+   *  -100..0 dBFS. 0 = gate off (never mutes). Frame RMS below
+   *  threshold mutes the output. Source-agnostic — works on Kiwi
+   *  and OWRX. Persisted to localStorage. */
+  private gate: number =
+    Number.parseInt(localStorage.getItem('radiom.gate') ?? '0', 10) || 0;
   private wfSpeed = loadSettings().wfSpeed;  // 0..4 — Kiwi wf_speed (server averaging), persisted in Settings
   private zoom = 8;   // 32 MHz / 2^8 = 125 kHz visible window (closest to 200 kHz)
   private wfStart = 0;
+  /** OpenWebRX-only: centre of the visible waterfall window (kHz). Updated
+   *  by OpenWebRxClient via the `owrx_view_center_khz` kv key. Differs
+   *  from `freqKHz` so the cursor can move when the dial changes within
+   *  the window. Null while the source is Kiwi. */
+  private owrxViewCenterKHz: number | null = null;
+  /** OpenWebRX-only: full list of (SDR, profile) pairs the active server
+   *  advertises. Each item: `{id, name}` where id is "sdr_id|profile_id".
+   *  Drives the profile picker (long-press OWX button). */
+  private owrxProfiles: Array<{ id: string; name: string }> = [];
+  private owrxSelectedProfile: string | null = null;
   private bandwidthHz = 30_000_000;
   private smeterDbm = -120;
   private rxChans: number | null = null;
@@ -146,8 +170,11 @@ export class Shell {
 
   // freq entry state
   private pending: string | null = null; // when user is typing digits
-  private toggles: Toggles = { fft: true, wf: true, nr: false, comp: false, adpcm: false, base: false };
+  private toggles: Toggles = { fft: true, wf: true, comp: false, adpcm: false, base: false };
   private nbMode = 0;  // 0=off 1=std 2=auto 3=Wild's
+  /** Noise-reduction mode. 0=off; 1..3 maps to KiwiSDR's single denoiser
+   *  (on/off) and to OpenWebRX's three NR algorithms (wdsp/lms/spec). */
+  private nrMode = 0;
   /** Last frequency-nudge step (signed, Hz). Updated whenever any of the
    *  ±10k / ±1k / ±100 / ±10 / ±1 buttons fires, used by SRCH auto-tune. */
   private lastNudgeStepHz: number =
@@ -389,6 +416,28 @@ export class Shell {
     // knob dials show the right values from the first paint.
     this.loadRadioState();
     this.render();
+    // Single-picker invariant + waterfall anchoring: whenever a new
+    // `.band-modal` is added to the body, (a) remove any others so
+    // openings always replace instead of stack, and (b) pin the new
+    // modal over the waterfall rect so BAND / BW / and every per-
+    // decoder freq picker get the same "fit-in-waterfall, centered or
+    // top-aligned" treatment as MODE / DSP / INFO / DISP / DEC{A,B}
+    // without each picker function needing to opt in.
+    const pickerObserver = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (!(n instanceof HTMLElement)) continue;
+          if (!n.classList.contains('band-modal')) continue;
+          document.querySelectorAll('.band-modal').forEach((other) => {
+            if (other !== n) other.remove();
+          });
+          this.anchorPickerOverWaterfall(n);
+        }
+      }
+    });
+    pickerObserver.observe(document.body, { childList: true });
+    this.installVizCloseChip();
+    this.refreshSourceButtonState();
     this.spectrum = new SpectrumView(
       this.$('fft') as HTMLCanvasElement,
       this.$('wf') as HTMLCanvasElement,
@@ -401,6 +450,11 @@ export class Shell {
     // Show the diag chip immediately with the baseline ("no Kiwi MSG
     // yet") even before the user powers the receiver on.
     this.refreshKiwiDiag();
+    // Apply persisted "show large tuning steps row" preference (Display
+    // section of Settings). Default is off → the row's inline style is
+    // already display:none; show it now if the user previously enabled it.
+    const largeRowInit = document.getElementById('freqRowLarge');
+    if (largeRowInit && this.settings.showLargeTuningRow) largeRowInit.style.display = '';
     this.spectrum.setLogMode(this.fftLog);
     // The live FFT pane is permanently hidden — skip per-frame trace
     // draws to keep the CPU profile flat at idle.
@@ -447,7 +501,11 @@ export class Shell {
       <header class="topbar">
         <button id="menu" class="menu">☰</button>
         <button id="help" class="menu" aria-label="decoder help" title="Help · all buttons / knobs reference">?</button>
-        <input id="server" class="server" value="${escapeAttr(localStorage.getItem('radiom.lastServer') || '')}" placeholder="host:port" spellcheck="false" readonly />
+        <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">KiwiSDR</button>
+        <button id="owrxPicker" class="kpbtn source-btn" title="OpenWebRx — switch source and open the OpenWebRx server picker (mutually exclusive with KiwiSDR / RTL)" aria-label="OpenWebRx source">OpenWebRx</button>
+        <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">RTL</button>
+        <!-- Hidden: still used internally to hold the host:port string. -->
+        <input id="server" class="server" style="display:none" value="${escapeAttr(localStorage.getItem('radiom.lastServer') || '')}" placeholder="host:port" spellcheck="false" readonly />
         <span id="connDot" class="conn-dot" data-state="off" aria-label="connection status"></span>
         <button id="power" class="power" aria-label="power" title="Power — short tap to (re)connect / disconnect the Kiwi. Long-press: hard off (closes every decoder panel and suspends the AudioContext)">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -467,6 +525,7 @@ export class Shell {
             <span id="lblNb2"></span>
             <span id="lblNr2"></span>
             <span id="lblNb"></span>
+            <span id="lblNr"></span>
           </div>
           <div class="led-freq-row">
             <span id="ledUtc" class="led-utc" title="UTC time">--:--:--</span>
@@ -525,6 +584,7 @@ export class Shell {
               <button id="btnSigL" class="knob-mini" type="button" title="F2 — secondary frequency cursor. Tap to snap F2 to the current F (tuning) frequency; long-press to hide. The BW readout shows |F − F2|.">F2</button>
             </div>
             <div class="wf-tools wf-tools-r">
+              <button id="btnCloseViz" class="knob-mini" type="button" style="display:none" title="Close active visualizer panel (SCOP / FMNT / OTHR / …)">×</button>
               <button id="btnSpeed" class="knob-mini" type="button" data-cmd="speedBtn" data-help-label="FPS" title="KiwiSDR waterfall frame-rate-code: 0=no waterfall, 1: 1 FPS, 2: 5 FPS, 3: 13 FPS, 4: 23 FPS.">FPS</button>
               <button id="btnWfDup" class="knob-mini" type="button" title="Waterfall row duplication (1..8)">WF1</button>
               <button id="btnWfAuto" class="knob-mini" type="button" data-help-label="AUTO/DARK/DARK+" title="Auto-stretch LoW/HiW from rolling histogram">AUTO</button>
@@ -717,6 +777,38 @@ export class Shell {
             <div class="ft8-lines cw-text" id="pocsText"></div>
           </div>
 
+          <div id="vendoredPanel" class="ft8-panel cw-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="vendoredCopy"  type="button">copy</button>
+              <button class="transcript-btn" id="vendoredClear" type="button">clear</button>
+              <button class="transcript-btn" id="vendoredImgSave" type="button" style="display:none">save image</button>
+            </div>
+            <div class="ft8-status" id="vendoredStatus">vendored-decoder listening…</div>
+            <img id="vendoredImg" style="display:none;max-width:100%;max-height:50%;align-self:center;border-radius:4px" alt="decoded image" />
+            <div class="ft8-lines cw-text" id="vendoredText"></div>
+          </div>
+
+          <div id="multimonPanel" class="ft8-panel cw-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="multimonCopy"  type="button">copy</button>
+              <button class="transcript-btn" id="multimonClear" type="button">clear</button>
+            </div>
+            <div class="ft8-status" id="multimonStatus">multimon-ng listening… (needs binary built via npm run build:selcal)</div>
+            <div class="ft8-lines cw-text" id="multimonText"></div>
+          </div>
+
+          <div id="dsdPanel" class="ft8-panel cw-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="dsdCopy"  type="button">copy</button>
+              <button class="transcript-btn" id="dsdClear" type="button">clear</button>
+              <button class="transcript-btn" id="dsdVolDown" type="button" title="Decrease DSD voice level">vol −</button>
+              <span class="ft8-status" id="dsdVolVal" style="display:inline-block;min-width:42px;text-align:center">1.8×</span>
+              <button class="transcript-btn" id="dsdVolUp"   type="button" title="Increase DSD voice level">vol +</button>
+            </div>
+            <div class="ft8-status" id="dsdStatus">DSD listening… (needs dsd-fme binary built via npm run build:dsd)</div>
+            <div class="ft8-lines cw-text" id="dsdText"></div>
+          </div>
+
           <div id="selcalPanel" class="ft8-panel cw-panel" style="display:none">
             <div class="ft8-actions">
               <button class="transcript-btn" id="selcalCopy"  type="button">copy</button>
@@ -764,6 +856,11 @@ export class Shell {
             </div>
             <div class="ft8-status" id="scopeStatus">SCOPE — trigger ↑ @ 0.00</div>
             <canvas id="scopeCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="thdPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-status" id="thdStatus">Audio FFT —</div>
+            <canvas id="thdCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
 
           <div id="qrssPanel" class="ft8-panel" style="display:none">
@@ -1146,43 +1243,139 @@ export class Shell {
           </div>
         </div>
 
-        <div class="freq-row kprow kprow-7">
+        <div class="freq-row kprow" id="freqRowLarge" style="display:none">
+          <button class="kpbtn c" data-cmd="f-50000"   title="Tune −50 kHz">-50k</button>
+          <button class="kpbtn c" data-cmd="f+50000"   title="Tune +50 kHz">+50k</button>
+          <button class="kpbtn c" data-cmd="f-25000"   title="Tune −25 kHz">-25k</button>
+          <button class="kpbtn c" data-cmd="f+25000"   title="Tune +25 kHz">+25k</button>
+          <button class="kpbtn c" data-cmd="f-12500"   title="Tune −12.5 kHz">-12.5k</button>
+          <button class="kpbtn c" data-cmd="f+12500"   title="Tune +12.5 kHz">+12.5k</button>
+        </div>
+
+        <div class="freq-row kprow">
           <button class="kpbtn c" data-cmd="f-10000" title="Tune −10 kHz">-10k</button>
           <button class="kpbtn c" data-cmd="f+10000" title="Tune +10 kHz">+10k</button>
           <button class="kpbtn c" data-cmd="f-5000" title="Tune −5 kHz">-5k</button>
           <button class="kpbtn c" data-cmd="f+5000" title="Tune +5 kHz">+5k</button>
           <button class="kpbtn c" data-cmd="f-1000" title="Tune −1 kHz">-1k</button>
           <button class="kpbtn c" data-cmd="f+1000" title="Tune +1 kHz">+1k</button>
-          <button class="kpbtn" id="btnAudioFft" title="SPEC — audio-band spectrum analyser on the demodulated signal">SPEC</button>
+          <button class="kpbtn" id="btnAudioFft" style="display:none" title="SPEC — audio FFT spectrum analyzer for the demodulated signal (0–6 kHz). High-resolution inline display below the waterfall with auto-stretch contrast (5th/99th percentile EMA).">SPEC</button>
+          <button class="kpbtn" id="btnThd" style="display:none" title="AFFT — high-resolution (16384 pt) audio FFT 0–6 kHz of the demodulated signal. Finer frequency resolution than SPEC for analyzing narrow tones, harmonics, and THD.">AFFT</button>
+          <!-- DSD (dsd-fme) digital-voice decoders. Hidden stash; the
+               DEC list picker is the only access path. Each button
+               drives the same DsdDecoder with a different mode flag. -->
+          <button class="kpbtn" id="btnDstar"   style="display:none" title="D-STAR digital voice (Icom DV). 4800 baud GMSK. Decodes header callsigns + per-frame TX/RX IDs via dsd-fme. Needs npm run build:dsd.">D-STAR</button>
+          <button class="kpbtn" id="btnDmr"     style="display:none" title="DMR digital voice (ETSI TS-102-361). 4-FSK TDMA, two timeslots per 12.5 kHz channel. Single-slot mode (dsd-fme -ft) — decodes whichever slot is active at any moment. Color code + TG/SRC IDs in panel.">DMR</button>
+          <button class="kpbtn" id="btnDmrs"    style="display:none" title="DMR stereo — decodes BOTH TDMA slots simultaneously (dsd-fme -fs). Slot 1 → left audio channel, slot 2 → right. Use to monitor both halves of a busy DMR repeater concurrently instead of seeing just whichever slot was first to sync.">DMR-S</button>
+          <button class="kpbtn" id="btnNxdn48"  style="display:none" title="NXDN 4800 (Kenwood/Icom narrowband, 6.25 kHz channel). 4-FSK, decodes RAN + IDs via dsd-fme.">NXDN-48</button>
+          <button class="kpbtn" id="btnNxdn96"  style="display:none" title="NXDN 9600 (12.5 kHz channel). 4-FSK, decodes RAN + IDs via dsd-fme.">NXDN-96</button>
+          <button class="kpbtn" id="btnYsf"     style="display:none" title="YSF / C4FM (Yaesu System Fusion). 4-FSK, 9600 baud. Decodes DSQ + callsigns via dsd-fme.">YSF</button>
+          <button class="kpbtn" id="btnDpmr"    style="display:none" title="dPMR / dPMR446 (EU narrowband 6.25 kHz). 4-FSK, decodes calling IDs via dsd-fme.">dPMR</button>
+          <button class="kpbtn" id="btnM17"     style="display:none" title="M17 open digital voice. 4-FSK 4800 baud, callsigns in clear. Decodes SRC/DST via dsd-fme.">M17</button>
+          <button class="kpbtn" id="btnP25p1"   style="display:none" title="P25 Phase 1 (APCO Project 25 FDMA). C4FM / CQPSK, 12.5 kHz. Decodes NAC + SRC + TG via dsd-fme/OP25.">P25-P1</button>
+          <button class="kpbtn" id="btnP25p2"   style="display:none" title="P25 Phase 2 (TDMA). H-DQPSK, 12.5 kHz / two slots. Decodes NAC + SRC + TG via dsd-fme.">P25-P2</button>
+          <!-- multimon-ng extra modes (FLEX/ERMES/DTMF/ZVEI/AFSK1200/X10/EAS).
+               Hidden stash; the DEC list picker is the only access path. -->
+          <button class="kpbtn" id="btnFlex"     style="display:none" title="FLEX paging (929/931 MHz US, 169 MHz EU). 1600/3200/6400 bps 2/4-FSK. Decodes CAP-codes + alphanumeric messages via multimon-ng.">FLEX</button>
+          <button class="kpbtn" id="btnFlexNext" style="display:none" title="FLEX_NEXT — Motorola's revised FLEX (~2010+) with extra frame types and tighter error correction. multimon-ng's FLEX_NEXT demod catches packets plain FLEX would miss in noisy conditions. Same 929/931 MHz US / 169 MHz EU dial; just a different mode flag.">FLEX-N</button>
+          <!-- ERMES retired: multimon-ng has no ERMES demod and the
+               protocol itself is decommissioned across Europe since
+               ~2010. Keep the comment so future readers don't try to
+               re-add a button against the dead protocol. -->
+          <button class="kpbtn" id="btnErmes"    style="display:none" data-retired="1" title="ERMES paging is retired — no working decoder.">ERMES</button>
+          <button class="kpbtn" id="btnDtmf"     style="display:none" title="DTMF touch-tone decoder. Useful for phone-patch signalling on amateur repeaters. multimon-ng -a DTMF.">DTMF</button>
+          <button class="kpbtn" id="btnZvei"     style="display:none" title="ZVEI 5-tone selective calling. EU EMS / fire dispatch. multimon-ng tries ZVEI1/2/3 dialects.">ZVEI</button>
+          <button class="kpbtn" id="btnAfsk1200" style="display:none" title="Bell-202 AFSK 1200 bps. Generic narrowband modem (APRS, weather sondes, etc.). multimon-ng -a AFSK1200.">AFSK1200</button>
+          <button class="kpbtn" id="btnUfsk1200" style="display:none" title="UFSK1200 — Universal FSK at 1200 baud (multimon-ng -a UFSK1200). Generic 2-FSK demodulator catching non-AX.25 packet traffic: vehicle telematics, industrial telemetry, legacy paging links. Output is raw hex frames; no protocol-specific parsing.">UFSK1200</button>
+          <button class="kpbtn" id="btnAfsk2400" style="display:none" title="AFSK2400 — three tone-pair variants run concurrently (multimon-ng -a AFSK2400 -a AFSK2400_2 -a AFSK2400_3). Catches 2400 bps Bell-202 / V.23 modem traffic on utility and data links. Multimon-ng decodes whichever variant the signal uses; output is raw hex frames.">AFSK2400</button>
+          <button class="kpbtn" id="btnHapn4800" style="display:none" title="HAPN4800 — Hong Kong Amateur Packet Network 4800 bps FSK (multimon-ng -a HAPN4800). Originally regional HK packet; the demod is useful for any 4800 bps FSK variant on UHF business / amateur bands. Output is raw hex frames.">HAPN4800</button>
+          <button class="kpbtn" id="btnFsk9600" style="display:none" title="FSK9600 — generic 9600 bps NRZ FSK (multimon-ng -a FSK9600). Pre-G3RUH packet networks on VHF/UHF. Direct FSK on audio (not AFSK); multimon-ng handles internal resampling so 22050 Hz stdin is sufficient.">FSK9600</button>
+          <button class="kpbtn" id="btnDpzvei" style="display:none" title="DZVEI / PZVEI — German + Polish ZVEI 5-tone selcall dialects bundled (multimon-ng -a DZVEI -a PZVEI). Different stop-tone behaviour from ZVEI1/2/3. Used on regional EU dispatch / fire / industrial alarm networks.">DZ/PZVEI</button>
+          <button class="kpbtn" id="btnCwm" style="display:none" title="CWM — multimon-ng's native Morse decoder (-a MORSE_CW). Separate from the fldigi-based CW button (which gives richer output via narrower filter + speed-tracking). Useful as a cross-check / sanity validator against fldigi.">CWM</button>
+          <button class="kpbtn" id="btnClipFsk" style="display:none" title="CLIPFSK — Bellcore / ETSI Caller-ID (V.23 FSK 1200 baud). Decodes calling number + name + timestamp from the silent gap between rings on a POTS line. Niche on radio; useful when audio source is coupled to a telephone pair. multimon-ng -a CLIPFSK.">CLIPFSK</button>
+          <button class="kpbtn" id="btnFmsFsk" style="display:none" title="FMSFSK — German FMS Funkmeldesystem (1200 bps BFSK). Status-code signalling used by police, fire, EMS, civil defence on DE / AT / CH-DE emergency-services VHF/UHF bands (4 m / 2 m / 70 cm). Decodes BOS-ID + 4-bit status code + optional short message. multimon-ng -a FMSFSK.">FMSFSK</button>
+          <button class="kpbtn" id="btnX10"      style="display:none" title="X10 home-automation RF (310 MHz). Decodes ON/OFF/dim commands for housecode/unit. multimon-ng -a X10.">X10</button>
+          <button class="kpbtn" id="btnEas"      style="display:none" title="EAS — Emergency Alert System SAME header. FSK 520 / 1041 / 1562 Hz on NOAA weather radio (162 MHz). multimon-ng -a EAS.">EAS</button>
+          <!-- Vendored binary decoders (MSK144/AIS/ACARS/TETRAPOL/OP25/LRPT).
+               All share a single text-out panel via VendoredDecoder. -->
+          <button class="kpbtn" id="btnMsk144"   style="display:none" title="MSK144 (WSJT-X meteor scatter, 144 baud MSK, 15 s slots). Needs npm run build:msk144.">MSK144</button>
+          <button class="kpbtn" id="btnAis"      style="display:none" title="AIS marine vessel tracking (rtl-ais aisdecoder, 161.975/162.025 MHz GMSK). Outputs NMEA-0183. Needs npm run build:ais.">AIS</button>
+          <button class="kpbtn" id="btnAcars"    style="display:none" title="ACARS VHF (TLeconte/acarsdec, 131 MHz MSK 2400 bps). JSON-formatted aircraft messages. Needs npm run build:acars.">ACARS</button>
+          <!-- TETRAPOL retired from the keypad: tetrapol_dump only
+               decodes pre-demodulated bits, not audio, and the
+               upstream demod is a GR-Python flowgraph we don't ship.
+               Voice traffic is encrypted on most active deployments
+               anyway. Button stays in markup with display:none +
+               data-retired so the page-cycle logic skips it. -->
+          <button class="kpbtn" id="btnTetrapol" style="display:none" data-retired="1" title="TETRAPOL not wired — needs an upstream GR-Python demodulator (not shipped).">TETRAPOL</button>
+          <button class="kpbtn" id="btnOp25"     style="display:none" title="P25 trunking + control channel (osmocom/op25). Talkgroup names, NACs, encryption status. Needs npm run build:op25.">OP25</button>
+          <button class="kpbtn" id="btnLrpt"     style="display:none" title="LRPT — Meteor M2 weather satellite (137 MHz, satdump). Writes PNG images. Requires IQ-capable OWRX backend.">LRPT</button>
+          <button class="kpbtn" id="btnHrpt"     style="display:none" title="HRPT — NOAA/MetOp high-resolution weather satellite (1.7 GHz, satdump). Same binary as LRPT, different pipeline.">HRPT</button>
+          <button class="kpbtn" id="btnApt"      style="display:none" title="APT — NOAA analog weather satellite (137 MHz, satdump). Slow-scan image format.">APT</button>
+          <button class="kpbtn" id="btnAdsb"     style="display:none" title="ADS-B — 1090 MHz aircraft transponder (dump1090, UC8 IQ in). Decodes Mode-S extended squitter with position/altitude.">ADS-B</button>
+          <button class="kpbtn" id="btnVdl2"     style="display:none" title="VDL Mode 2 — 136.7–136.95 MHz aircraft data link (dumpvdl2, UC8 IQ in). ACARS-over-D8PSK.">VDL-2</button>
+          <button class="kpbtn" id="btnUat"      style="display:none" title="UAT 978 MHz — US ADS-B for general aviation (dump978, UC8 IQ in).">UAT</button>
+          <!-- WMBus retired: wmbusmeters is a frame parser, not an IQ
+     demodulator. Decoding IQ → wmbus would need rtl_wmbus as an
+     intermediate stage (~OP25-scale build). rtl_433 already does
+     basic wmbus decoding via its built-in protocol filters — point
+     it at 868.300 MHz and use the rtl_433 button instead. -->
+<button class="kpbtn" id="btnWmbus"    style="display:none" data-retired="1" title="WMBus not wired — use the rtl_433 button at 868.300 MHz for basic wmbus decoding.">WMBus</button>
+          <button class="kpbtn" id="btnRds"      style="display:none" title="RDS — FM-broadcast 57 kHz subcarrier (redsea). PS / PTY / radiotext / alt freqs. Needs raw MPX (RTL-SDR IQ).">RDS</button>
+          <button class="kpbtn" id="btnDsc"      style="display:none" title="DSC — Marine Digital Selective Calling (ITU-R M.493). VHF Ch 70 (156.525 MHz) and HF guard channels (2187.5/4207.5/6312/8414.5/12577/16804.5 kHz). Server-side jbirby/DSC-Codec (Python).">DSC</button>
+          <button class="kpbtn" id="btnJaero"    style="display:none" title="JAERO — Inmarsat AERO Classic decoder (L-band 1.5 GHz, aircraft satcom). A-BPSK / OQPSK / SOQPSK. Audio 48 kHz int16 from a SAM/USB demod.">AERO</button>
+          <button class="kpbtn" id="btnCospas"   style="display:none" title="Cospas-Sarsat 406 MHz ELT/EPIRB — emergency-beacon decoder. 144-bit BPSK 400 baud bursts. Decodes country code + beacon ID + GPS position when present.">CSPAS</button>
+          <button class="kpbtn" id="btnStdc"     style="display:none" title="Inmarsat STD-C — SOLAS maritime safety messaging (1.5 GHz L-band, BPSK 600 bps). Decodes NCS Common Channel + LES TDM forward link. Ship-to-shore traffic, EGC broadcasts, GMDSS distress alerts.">STD-C</button>
+          <!-- multimon-ng 5-tone selective-calling family (paging-adjacent).
+               All share the same multimon-ng binary as POCSAG/FLEX. -->
+          <button class="kpbtn" id="btnCcir"  style="display:none" title="CCIR — 5-tone ITU-R paging selective calling (originally Italian dispatch / fire). multimon-ng -a CCIR.">CCIR</button>
+          <button class="kpbtn" id="btnCcitt" style="display:none" title="CCITT — 5-tone selective calling, ITU-T variant. multimon-ng -a CCITT.">CCITT</button>
+          <button class="kpbtn" id="btnEea"   style="display:none" title="EEA — European emergency-alert 5-tone variant. multimon-ng -a EEA.">EEA</button>
+          <button class="kpbtn" id="btnEia"   style="display:none" title="EIA — European industrial-alert 5-tone variant. multimon-ng -a EIA.">EIA</button>
+          <button class="kpbtn" id="btnEuro"  style="display:none" title="EURO — generic EU 5-tone selective calling. multimon-ng -a EURO.">EURO</button>
+          <!-- IoT / telemetry. -->
+          <button class="kpbtn" id="btnRtl433" style="display:none" title="rtl_433 — ~200 ISM-band protocols (weather stations, TPMS, water/gas meters, smoke alarms, garage remotes, smart plugs). UC8 IQ in, JSON out. Default centre 433.92 MHz.">rtl_433</button>
+          <button class="kpbtn" id="btnSonde"  style="display:none" title="Radiosonde — weather-balloon decoder (rs1729's rs41mod by default). 400 MHz GFSK. Decodes position / altitude / P / T / RH / GPS. Audio 48 kHz int16 from NBFM demod.">SONDE</button>
+          <button class="kpbtn" id="btnLora"   style="display:none" title="LoRa — chirp-spread-spectrum IoT (gr-lora_sdr). EU 868 / US 915 / AS 433 MHz. Default config BW=125 kHz, SF=7, CR=4/5. Decodes raw LoRa frames; LoRaWAN MAC decode is downstream / not done here.">LoRa</button>
+          <button class="kpbtn" id="btnLtr"    style="display:none" title="LTR / LTR-Net — Logic Trunked Radio (GopherTrunk). US business UHF 400 / 800 MHz dominant trunking format pre-P25. Decodes control-channel: LCN / talkgroup / unit ID / channel grants.">LTR</button>
+          <!-- TIME-signal decoder retired: dokutan/dcf77-decode takes
+     pre-decoded bit lines, not audio. The AM-envelope + pulse-width
+     demod layer that would turn 77.5 kHz LF audio into bits doesn't
+     exist in radiom. Stations are also extremely range-limited
+     (~2000 km), narrowing the practical use. The btnTimeStations
+     frequency picker (also labeled TIME, different button) keeps
+     working for manual tuning to WWV/WWVH/CHU/RWM/JJY/BPM/HLA. -->
+<button class="kpbtn" id="btnTimesig" style="display:none" data-retired="1" title="Time-signal decoder retired — use the TIME frequency picker (btnTimeStations) to manually tune and listen.">TIME</button>
         </div>
 
-        <div class="freq-row kprow kprow-7">
+        <div class="freq-row kprow">
           <button class="kpbtn c" data-cmd="f-100" title="Tune −100 Hz">-100</button>
           <button class="kpbtn c" data-cmd="f+100" title="Tune +100 Hz">+100</button>
           <button class="kpbtn c" data-cmd="f-10" title="Tune −10 Hz">-10</button>
           <button class="kpbtn c" data-cmd="f+10" title="Tune +10 Hz">+10</button>
           <button class="kpbtn c" data-cmd="f-1" title="Tune −1 Hz">-1</button>
           <button class="kpbtn c" data-cmd="f+1" title="Tune +1 Hz">+1</button>
-          <button class="kpbtn" id="btnAcon" title="ACON — audio-derived constellation. Quadrature-mixes the audio at the user-set f₀ and plots the complex baseband. Works in any demod (USB/LSB/AM/CW), no IQ mode needed.">ACON</button>
+          <button class="kpbtn" id="btnAcon" style="display:none" title="ACON — audio-derived constellation. Quadrature-mixes the current demod's audio at f₀ Hz, lowpasses at BW/2, and plots the complex baseband as a constellation. Costas-lock optional (BPSK/QPSK/8PSK). Works in any demod mode.">ACON</button>
         </div>
 
-        <div class="fnrow fnrow-7">
-          <button class="fnbtn" id="btnSPlot" title="SPLT — long-window S-meter history plot (RSSI vs time)">SPLT</button>
+        <div class="fnrow">
+          <button class="fnbtn" id="btnSPlot" style="display:none" title="SPLT — S-meter plot. RSSI (dBm) vs time chart for the last 60 s. Full-session capture available via the copy button for export.">SPLT</button>
           <button class="fnbtn" data-cmd="cent" title="CENTER — recenter the waterfall on the tuned frequency">&gt;&nbsp;&nbsp;|&nbsp;&nbsp;&lt;</button>
           <button class="fnbtn" data-cmd="zoomIn" title="Zin — zoom waterfall in one step. Long-press to jump to max zoom (Z14)">Zin</button>
           <button class="fnbtn" data-cmd="zoomOut" title="Zout — zoom waterfall out one step">Zout</button>
           <button class="fnbtn" data-cmd="panL" title="&lt;&lt;&lt; — pan waterfall view left">&lt;&lt;&lt;</button>
           <button class="fnbtn" data-cmd="panR" title="&gt;&gt;&gt; — pan waterfall view right">&gt;&gt;&gt;</button>
-          <button class="fnbtn" id="btnSrch" title="SRCH — auto-tune by the last selected frequency step (default 500 ms interval). Tap to start, tap again to stop. Frequency stays where it stops.">SRCH</button>
+          <button class="fnbtn" id="btnSrch" title="STEP — auto-tune by the last selected frequency step (default 500 ms interval). Tap to start, tap again to stop. Frequency stays where it stops.">STEP</button>
         </div>
 
         <div class="knobs">
           ${(() => {
-            const labels = ['VOL','SQL','RF','LoF','HiF','LoW','HiW','VTG'];
-            const slugs  = ['vol','sql','rf','lof','hif','wlo','whi','vtg'];
+            const labels = ['VOL','SQL','GATE','RF','LoF','HiF','LoW','HiW','VTG'];
+            const slugs  = ['vol','sql','gate','rf','lof','hif','wlo','whi','vtg'];
             const titles: Record<string, string> = {
               VOL: 'VOL — speaker output level (0–100%)',
               SQL: 'SQL — squelch threshold (S-units above noise floor). Audio mutes when RSSI falls below this',
+              GATE:'GATE — audio noise gate. 0 = off; otherwise mutes the speaker when the per-frame audio RMS falls below the threshold. Knob value maps linearly to −100…0 dBFS',
               RF:  'RF — server-side RF gain. Cycles SLOW / MED / FAST / OFF via the MED button; this knob is the manual override when AGC is OFF',
               LoF: 'LoF — low-cut frequency of the audio passband (Hz)',
               HiF: 'HiF — high-cut frequency of the audio passband (Hz)',
@@ -1196,38 +1389,54 @@ export class Shell {
                  <div class="knob-dial"><div class="knob-line"></div></div>
                </div>`).join('');
           })()}
-          <button id="btnFlush" class="knob-mini" type="button" title="Drop the audio queue so the speaker catches up to the live RX">FLUSH</button>
+          <button id="btnFlush" class="knob-mini" type="button" style="display:none" title="FLUSH — hidden">FLUSH</button>
         </div>
 
-        <div class="fnrow fnrow-half fnrow-half-8">
-          <button class="fnbtn" id="btnAgc" title="AGC — automatic gain control mode. Tap to cycle SLOW / MED / FAST / OFF (when OFF, the RF knob is the manual gain)">AGC</button>
-          <button class="fnbtn" data-toggle="comp" title="CP — audio compressor (DynamicsCompressorNode + 6 dB makeup gain)">CP</button>
-          <button class="fnbtn" id="btnNb2" title="NB2 — client-side impulse noise blanker (Warren Pratt's WDSP NB2 ported to AudioWorklet). Detects impulsive noise (lightning crashes, ignition, switching transients) and smoothly blanks them with raised-cosine fade. Tap to cycle OFF → soft (K=3) → med (K=5) → hard (K=7) → OFF. Persists between sessions.">NB2</button>
-          <button class="fnbtn" id="btnAmnotch" title="NT2 — adaptive multi-notch (auto-comb). Tracks the four strongest narrow heterodyne carriers in 200-3000 Hz and nulls each with its own notch biquad. Mutually exclusive with NT. Best on crowded SW where multiple carriers compete.">NT2</button>
-          <button class="fnbtn" id="btnRfw" title="NR2 — RNNoise GRU neural noise reducer (JakenHerman/RFWhisper). Suppresses broadband RF interference and electrical noise. Loads ~110 kB WASM on first use.">NR2</button>
-          <button class="fnbtn" id="btnVtrk3" title="VT — LPC-based formant tracker (F1/F2/F3)">VT</button>
-          <button class="fnbtn" id="btnAfrm" title="AFF — anti-formant notches at the F1↔F2 and F2↔F3 valleys. Optional second stage on top of VTRK; sharpens the spectral envelope without amplifying anything">AFF</button>
-          <button class="fnbtn" id="btnEq" title="EQ — 5-band audio output equaliser (150 / 400 / 1k / 2.5k / 5k Hz, ±15 dB)">EQ</button>
-          <button class="fnbtn" id="btnLists" title="FREQ — unified searchable view across every frequency picker (BCON, VOLM, MILV, NDB, AERO, NUM, …). Filter by frequency or text.">FREQ</button>
+        <!-- Every button on this row has been moved to a picker; hide
+             the wrapper so the row doesn't leave an empty band between
+             the knobs and the keypad. The hidden buttons stay in the
+             DOM so picker dispatches keep working. -->
+        <div class="fnrow fnrow-half fnrow-half-8" style="display:none">
+          <button class="fnbtn" id="btnAgc" style="display:none" title="AGC — moved to DSP panel">AGC</button>
+          <button class="fnbtn" data-toggle="comp" style="display:none" title="CP — moved to DSP panel">CP</button>
+          <button class="fnbtn" id="btnNb2" style="display:none" title="NB2 — moved to DSP panel">NB2</button>
+          <button class="fnbtn" id="btnAmnotch" style="display:none" title="NT2 — moved to DSP panel">NT2</button>
+          <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
+          <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
+          <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
+          <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
+          <button class="fnbtn" id="btnLists" style="display:none" title="SRCH — search across every aggregated frequency list. Type a frequency, label, mode, or list name and matching rows surface in real time; the closest row to your current tune is highlighted on open.">SRCH</button>
+        </div>
+        <!-- Hidden stash for NB / NT / NR. They used to live in the
+             keypad mode column; the DSP panel dispatches clicks via
+             [data-cmd] / [data-toggle] selectors, so the buttons must
+             stay in the DOM (just not visible). -->
+        <div style="display:none" aria-hidden="true">
+          <button data-cmd="nb" id="kpNbStash">NB</button>
+          <button data-cmd="antch" id="kpNtStash">NT</button>
+          <button data-cmd="nr" id="kpNrStash">NR</button>
         </div>
 
-        <div class="fnrow fnrow-half fnrow-half-8">
+        <div class="fnrow fnrow-half fnrow-half-8" style="display:none">
           <button class="fnbtn" id="btnMute" style="display:none" title="AUX — drops the live Kiwi audio so an INS test sample becomes the sole input">AUX</button>
           <button class="fnbtn" id="btnVtrk" style="display:none" title="VT — voice-tracking bandpass (dominant speech-band energy)">VT</button>
           <button class="fnbtn" id="btnVtrk2" style="display:none" title="VT2 — three-band peaking EQ steered by formant tracker (F1/F2/F3)">VT2</button>
-          <button class="fnbtn" id="btnModes" title="Inject test sample">GEN</button>
-          <button class="fnbtn" id="btnSigId2" title="SID — record 20 seconds of the raw IQ stream and run the local DSP measurement pass (two-sided spectrum, envelope stats, AMC features, higher-order cumulants, cepstrum, autocorrelation baud estimate, cyclic spectrum). No classification — the report is raw measurements only. Receiver must be in IQ mode. No network call.">SID</button>
+          <button class="fnbtn" id="btnModes" style="display:none" title="GEN — moved to keypad">GEN</button>
+          <button class="fnbtn" id="btnSigId2" style="display:none" title="SID — moved to keypad">SID</button>
           <button class="fnbtn" id="btnLsb2" style="display:none" title="LSB2 — client-side LSB demodulator fed by the IQ-domain cleanup chain (NB → DCK → Passband + Notch → Wiener NR). Plays the filtered IQ stream as LSB audio so you can A/B against Kiwi's server-side LSB.">LSB2</button>
           <button class="fnbtn" id="btnUsb2" style="display:none" title="USB2 — client-side USB demodulator fed by the IQ-domain cleanup chain (NB → DCK → Passband + Notch → Wiener NR). Plays the filtered IQ stream as USB audio so you can A/B against Kiwi's server-side USB.">USB2</button>
           <button class="fnbtn" id="btnSigVal" style="display:none" title="VAL — validate the SID classifier against the bundled labeled signal corpus (PSK, RTTY, FT8, NAVTEX, Olivia, etc.). For each sample: Hilbert-transforms the audio to analytic IQ, runs the same analyzeLocalIQ pipeline SID uses, and compares the top protocol fingerprint to the known label. Produces an accuracy summary and a list of misclassifications.">VAL</button>
-          <button class="fnbtn" id="btnEibi" title="EIBI — look up the shortwave broadcast schedule for the cursor frequency at the current UTC time. Source: eibispace.de seasonal CSV (sked-a26). Shows broadcaster, language, target area, transmitter site, days of operation.">EIBI</button>
-          <button class="fnbtn" id="btnPskr" title="PSKR — query PSK Reporter for amateur reception reports on the cursor frequency over the last 15 minutes. Shows the senders heard nearby (FT8, FT4, JT9, PSK, WSPR, etc.), the mode and SNR distribution. Best signal for 'what's on this frequency right now'.">PSKR</button>
-          <button class="fnbtn" id="btnNets" title="NET — amateur activity by band right now. Aggregates PSK Reporter reception reports across all HF amateur bands over the last 15 minutes. Shows which bands are alive, how many unique stations, and the active modes per band.">NET</button>
-          <button class="fnbtn" id="btnDx" style="display:none" title="DX — real-time DX cluster spots. Requires RADIOM_DX_CALLSIGN env var on the server (set to a real amateur callsign). Public DX cluster nodes validate the login, so the button is hidden until a callsign is configured. With a callsign: shows DX/SSB/CW spots within ±10 kHz of the cursor over the last 30 minutes.">DX</button>
-          <button class="fnbtn" id="btnWnet" title="WNET — WSPR beacon transmitters heard around the cursor frequency over the last hour. Source: db1.wspr.live public ClickHouse mirror of WSPRnet (no login required). Groups by transmitter callsign with hit count, best SNR, longest path, locator, last-heard age.">WNET</button>
-          <button class="fnbtn" id="btnGray" title="GRAY — gray-line map showing the worldwide day/night terminator (best HF DX path indicator)">GRAY</button>
-          <button class="fnbtn" id="btnZoom" title="ZOOM — sub-Hz spectrogram of the IQ stream. ≈64k-pt FFT for very narrow frequency resolution (carrier hunting, drift tracking)">ZOOM</button>
-          <button class="fnbtn" id="btnMem" title="MEM — channel memory manager. Tap to open; long-press to save the current dial as a new memory channel.">MEM</button>
+          <!-- EIBI / PSKR / NET / WNET / GRAY now live only in the
+               INFO panel (tap INFO on the keypad). Kept here, hidden,
+               so the INFO-panel dispatches keep working. -->
+          <button class="fnbtn" id="btnEibi" style="display:none" title="EIBI — moved to INFO panel">EIBI</button>
+          <button class="fnbtn" id="btnPskr" style="display:none" title="PSKR — moved to INFO panel">PSKR</button>
+          <button class="fnbtn" id="btnNets" style="display:none" title="NET — moved to INFO panel">NET</button>
+          <button class="fnbtn" id="btnDx" style="display:none" title="DX — real-time DX cluster spots (requires RADIOM_DX_CALLSIGN env var on the server).">DX</button>
+          <button class="fnbtn" id="btnWnet" style="display:none" title="WNET — moved to INFO panel">WNET</button>
+          <button class="fnbtn" id="btnGray" style="display:none" title="GRAY — moved to INFO panel">GRAY</button>
+          <button class="fnbtn" id="btnZoom" style="display:none" title="ZOOM — sub-Hz spectrogram. High-resolution narrow-band slice of the waterfall around the cursor for resolving carriers, drift, and weak tones below the main waterfall bin width.">ZOOM</button>
+          <button class="fnbtn" id="btnMem" style="display:none" title="MEM — moved to keypad">MEM</button>
         </div>
 
         <div class="keypad" id="keypadNum">
@@ -1261,23 +1470,45 @@ export class Shell {
               SCAN: 'SCAN — picker-driven scanner. Tap to cycle the last-opened freq list; long-press to start auto-scan',
               SET:  'SET — long-press behaviour: store current dial as a preset',
               DEL:  'DEL — delete the last digit of frequency entry',
+              MODE: 'MODE — open the demodulation-mode picker (list filtered by the active server: KiwiSDR vs OpenWebRX)',
+              DSP:  'DSP — open the signal-processor matrix (AGC, NB, NT, NR, CP, NB2, NT2, NR2, VT, AFF, EQ)',
+              INFO: 'INFO — open the live / derived lookup matrix: EIBI shortwave schedule, PSKR PSKReporter spots, NETS active ham nets, WNET WSPRnet, GRAY gray-line propagation, SRCH search-all-frequency-lists, SID signal-ID lookup.',
+              FREQ: 'FREQ — open the frequency-list picker: every curated static dial-frequency list (BCON, NDB, VLFB, MILV, MARN, AERO, VOLM, TIME, SCI, NUM, DXCL, DGPS, GMDS, HFDM, MEPT, MWDX, CB, LW, AFRC, ASIA, LATM, SWBC, CLND, DIPL, PIRA, AIDR, CAP, TNET, ECOM, SKYN, HFGC, MARS, MRSE, RUSM, MPAC, CSTV, CSCW).',
+              VIEW: 'VIEW — open the visualization matrix (ANTC, DLDS, DOPP, EYE, FMNT, IQV, KURT, METR, OTHR, PPMC, RFI, SCOP, SFRC, VECT, ACON, SPEC, AFFT, ZOOM, SPLT)',
+              DECO: 'DECO — full decoder list (CW, RTTY, PSK, MFSK, WSJT-X, military & utility — everything in one scrollable help-style list). Tap a row to toggle; long-press for sub-mode/freq picker.',
+              GEN:  'GEN — inject a test sample for offline mode validation (moved to the DSP picker)',
+              SID:  'SID — record 20 s of IQ and run the local DSP measurement pass',
+              MEM:  'MEM — channel memory manager. Tap to open; long-press to save the current dial as a new memory channel.',
+              kHz:  'kHz — submit the typed digits as a frequency in kHz',
+              MHz:  'MHz — submit the typed digits as a frequency in MHz (×1000 → kHz)',
+              BACK: 'BACK — close whatever is in the foreground of the waterfall area (picker panel or visualizer overlay)',
             };
             // Cols 4-7 = numeric keypad / system controls (one full-height
             // button per cell).
+            // 6-col layout: 2 picker cols on the left + 4-col numeric
+            // pad on the right (digits + . / SET / DEL). PAGE used to
+            // live in the right column but is gone — there are no more
+            // multi-page decoders here; the old pages 2-10 remain in
+            // the DOM but display:none until their per-decoder pickers
+            // land.
+            // Column 3 reordering: GEN moved into the DSP picker;
+            // MEM bumped up to GEN's former slot; SET renamed to kHz
+            // and placed where MEM was; new MHz button (kHz × 1000)
+            // takes the bottom slot. DEL slides left into the cell
+            // SET used to occupy.
             const sideRows: string[][] = [
-              ['k:1:1','k:2:2','k:3:3','c:dec:PAGE'],
-              ['k:4:4','k:5:5','k:6:6','t:band:BAND'],
-              ['k:7:7','k:8:8','k:9:9','c:filter:BW'],
-              ['k:.:.','k:0:0','c:set:SET','c:del:DEL'],
+              ['k:1:1','k:2:2','k:3:3','c:back:BACK'],
+              ['k:4:4','k:5:5','k:6:6','c:mem:MEM'],
+              ['k:7:7','k:8:8','k:9:9','c:set:kHz'],
+              ['k:.:.','k:0:0','c:del:DEL','c:mhz:MHz'],
             ];
-            // Cols 1-3 = mode-selection matrix, 3 cols × 4 rows of
-            // normal-height buttons. 12 modes total, no placeholders.
-            const ms = (k: string, l: string) => `m:${k}:${l}`;
+            // Cols 0-1: picker buttons. Per-mode shortcuts removed in
+            // favour of the unified MODE / DSP / INFO matrix pickers.
             const modeRows: string[][] = [
-              [ms('am','AM'),   ms('nbfm','NBFM'), ms('iq','IQ')],
-              [ms('sam','SAM'), ms('cw','CW'),    'c:nb:NB'],
-              [ms('sal','SAL'), ms('lsb','LSB'),  'c:antch:NT'],
-              [ms('sau','SAU'), ms('usb','USB'),  't:nr:NR'],
+              ['t:band:BAND',       'c:decAPicker:DECO' ],
+              ['c:modePicker:MODE', 'c:freqPicker:FREQ' ],
+              ['c:filter:BW',       'c:dispPicker:VIEW' ],
+              ['c:dspPicker:DSP',   'c:infoPicker:INFO' ],
             ];
             const renderCell = (spec: string): string => {
               const [type, key, label] = spec.split(':');
@@ -1300,7 +1531,9 @@ export class Shell {
             return sideRows.map((sideRow, rowIdx) => {
               const modeCells = modeRows[rowIdx].map(renderCell).join('');
               const sideCells = sideRow.map(renderCell).join('');
-              return `<div class="kprow kprow-7">${modeCells}${sideCells}</div>`;
+              // Default .kprow grid = 6 cols, which matches 2 picker
+              // cols + 4 numeric cols. No more kprow-7 here.
+              return `<div class="kprow">${modeCells}${sideCells}</div>`;
             }).join('');
           })()}
         </div>
@@ -1312,39 +1545,39 @@ export class Shell {
              across pages 2 → 5. -->
         <div class="keypad" id="keypadDec" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnStanag" title="STANAG 4285 signal detector — recognises NATO 8-PSK 2400 baud on 1800 Hz audio carrier with periodic sync. Reports lock/SNR, not decoded content">4285</button>
             <button class="kpbtn" id="btnStanag4539" title="STANAG 4539 detector — high-rate NATO HF data modem (75-12800 bps). Same 1800 Hz carrier + 2400 baud as 4285 but 287-symbol preamble. Reports lock, not decoded content">4539</button>
-            <button class="kpbtn" id="btnAle" title="ALE — Automatic Link Establishment (MIL-STD-188-141B 2G). Listens for incoming linking calls on government / mil HF nets. Long-press for sub-band freq picker">ALE</button>
+            <button class="kpbtn" id="btnAle" title="Automatic Link Establishment (MIL-STD-188-141B 2G). Listens for incoming linking calls on government / mil HF nets. Long-press for sub-band freq picker">ALE</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
-            <button class="kpbtn" id="btnContestia" title="Contestia — faster contest-oriented variant of Olivia. fldigi-vendored. Long-press for sub-mode picker">CTSA</button>
-            <button class="kpbtn" id="btnCw" title="CW — Morse code decoder. Tone detector with adjustable speed / pitch / bandwidth. Long-press for sub-band freq picker">CW</button>
-            <button class="kpbtn" id="btnDominoex" title="DominoEX — 18-tone IFK+ multi-path robust keyboard chat. fldigi-vendored. Long-press for sub-mode picker">DOMI</button>
+            <button class="kpbtn" id="btnContestia" title="Faster contest-oriented variant of Olivia. fldigi-vendored. Long-press for sub-mode picker">CTSA</button>
+            <button class="kpbtn" id="btnCw" title="Morse code decoder. Tone detector with adjustable speed / pitch / bandwidth. Long-press for sub-band freq picker">CW</button>
+            <button class="kpbtn" id="btnDominoex" title="18-tone IFK+ multi-path robust keyboard chat. fldigi-vendored. Long-press for sub-mode picker">DOMI</button>
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnEcss" title="ECSS — finds the strongest carrier near the cursor and aligns the SSB passband to it">ECSS</button>
-            <button class="kpbtn" id="btnWefax" title="WEFAX — analog HF weather-fax image decoder. Long-press for station picker (DWD / NOAA / JMH / …)">FAX</button>
-            <button class="kpbtn" id="btnFreedv" title="FreeDV — open-source HF digital voice (Codec2). 1600/700D/700E/2020 modes auto-detected. Server decodes via codec2's freedv_rx binary and streams decoded voice back to the speakers">FDV</button>
+            <button class="kpbtn" id="btnWefax" title="Analog HF weather-fax image decoder. Long-press for station picker (DWD / NOAA / JMH / …)">FAX</button>
+            <button class="kpbtn" id="btnFreedv" title="Open-source HF digital voice (Codec2). 1600/700D/700E/2020 modes auto-detected. Server decodes via codec2's freedv_rx binary and streams decoded voice back to the speakers">FDV</button>
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
-            <button class="kpbtn" id="btnFsq" title="FSQ — Fast Simple QSO. Low-baud-rate IFK+ chat for NVIS / EMCOMM. fldigi-vendored. Long-press for sub-mode picker">FSQ</button>
-            <button class="kpbtn" id="btnFst4" title="FST4 — modern WSJT weak-signal QSO mode (4-GFSK, 60-1800 s slots). Replaces JT9 on LF/MF DX. Long-press for freq picker">FST4</button>
-            <button class="kpbtn" id="btnFst4w" title="FSTW — modern WSPR replacement. fst4d -W with configurable 60/120/300/900/1800 s slots. Default FSTW-120 on 14.0956 MHz USB">FSTW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
+            <button class="kpbtn" id="btnFsq" title="Fast Simple QSO. Low-baud-rate IFK+ chat for NVIS / EMCOMM. fldigi-vendored. Long-press for sub-mode picker">FSQ</button>
+            <button class="kpbtn" id="btnFst4" title="Modern WSJT weak-signal QSO mode (4-GFSK, 60-1800 s slots). Replaces JT9 on LF/MF DX. Long-press for freq picker">FST4</button>
+            <button class="kpbtn" id="btnFst4w" title="Modern WSPR replacement. fst4d -W with configurable 60/120/300/900/1800 s slots. Default FST4W-120 on 14.0956 MHz USB">FST4W</button>
             <button class="kpbtn c" data-cmd="scan">SCAN</button>
           </div>
         </div>
@@ -1352,39 +1585,39 @@ export class Shell {
         <!-- Page 3 — decoders (2/4). -->
         <div class="keypad" id="keypadDec3" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
-            <button class="kpbtn" id="btnFt4" title="FT4 — fast contest variant of FT8 (4-GFSK, 7.5 s slots). Long-press for freq picker">FT4</button>
-            <button class="kpbtn" id="btnFt8" title="FT8 — 8-GFSK weak-signal QSO mode (15 s slots, ~-21 dB SNR). The dominant HF digital mode today. Long-press for freq picker">FT8</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn" id="btnFt4" title="Fast contest variant of FT8 (4-GFSK, 7.5 s slots). Long-press for freq picker">FT4</button>
+            <button class="kpbtn" id="btnFt8" title="8-GFSK weak-signal QSO mode (15 s slots, ~-21 dB SNR). The dominant HF digital mode today. Long-press for freq picker">FT8</button>
             <button class="kpbtn" id="btnHell" title="Feld-Hellschreiber — vintage (1929) image-based text mode. 122.5 baud AM-keyed pixels, decoded by eye like a slow fax. Tune the carrier to ~1000 Hz audio">HELL</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
-            <button class="kpbtn" id="btnHfdl" title="HFDL — Aeronautical HF Data Link decoder via dumphfdl (KiwiSDR IQ-mode path). Decodes aircraft position / ACARS over HF. Long-press for ground-station freq picker">HFDL</button>
+            <button class="kpbtn" id="btnHfdl" title="Aeronautical HF Data Link decoder via dumphfdl (KiwiSDR IQ-mode path). Decodes aircraft position / ACARS over HF. Long-press for ground-station freq picker">HFDL</button>
             <button class="kpbtn" id="btnIsb" title="Independent Sideband — splits LSB → left speaker, USB → right">iSB</button>
-            <button class="kpbtn" id="btnJs8" title="JS8Call — keyboard chat over an FT8-derived OFDM waveform. Slow/Normal/Fast/Turbo sub-modes. Long-press for freq picker">JS8</button>
+            <button class="kpbtn" id="btnJs8" title="Keyboard chat over an FT8-derived OFDM waveform. Slow/Normal/Fast/Turbo sub-modes. Long-press for freq picker">JS8</button>
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
-            <button class="kpbtn" id="btnJt4" title="JT4 — original WSJT EME / weak-tropo mode. 4-FSK, 1-min UTC slots, ~-23 dB SNR. Same jt9 binary with -4 flag">JT4</button>
-            <button class="kpbtn" id="btnJt65" title="JT65 — classic WSJT multi-tone (65-FSK) mode. 1-minute UTC slots, ~-25 dB SNR threshold, historic EME/HF DX mode; defaults to 14.076 MHz USB">JT65</button>
-            <button class="kpbtn" id="btnJt9" title="JT9 — original WSJT-X narrowband mode. 1-minute UTC slots, 9-FSK, ~-27 dB SNR; defaults to 30 m sub-band">JT9</button>
+            <button class="kpbtn" id="btnJt4" title="Original WSJT EME / weak-tropo mode. 4-FSK, 1-min UTC slots, ~-23 dB SNR. Same jt9 binary with -4 flag">JT4</button>
+            <button class="kpbtn" id="btnJt65" title="Classic WSJT multi-tone (65-FSK) mode. 1-minute UTC slots, ~-25 dB SNR threshold, historic EME/HF DX mode; defaults to 14.076 MHz USB">JT65</button>
+            <button class="kpbtn" id="btnJt9" title="Original WSJT-X narrowband mode. 1-minute UTC slots, 9-FSK, ~-27 dB SNR; defaults to 30 m sub-band">JT9</button>
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
-            <button class="kpbtn" id="btnMcw" title="MCW — Modulated CW. Morse keyed on an audio tone and transmitted via AM. Flips mode to AM and routes audio through the existing CW decoder">MCW</button>
-            <button class="kpbtn" id="btnMfsk" title="MFSK — fldigi MFSK family decoder (MFSK4 through MFSK128). Robust keyboard chat. Long-press for sub-mode picker">MFSK</button>
-            <button class="kpbtn" id="btnMt63" title="MT63 — 64-tone OFDM keyboard chat. 500 / 1000 / 2000 Hz sub-modes. Multi-path resistant. fldigi-vendored. Long-press for sub-mode picker">MT63</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
+            <button class="kpbtn" id="btnMcw" title="Modulated CW. Morse keyed on an audio tone and transmitted via AM. Flips mode to AM and routes audio through the existing CW decoder">MCW</button>
+            <button class="kpbtn" id="btnMfsk" title="Fldigi MFSK family decoder (MFSK4 through MFSK128). Robust keyboard chat. Long-press for sub-mode picker">MFSK</button>
+            <button class="kpbtn" id="btnMt63" title="64-tone OFDM keyboard chat. 500 / 1000 / 2000 Hz sub-modes. Multi-path resistant. fldigi-vendored. Long-press for sub-mode picker">MT63</button>
             <button class="kpbtn c" data-cmd="scan">SCAN</button>
           </div>
         </div>
@@ -1392,39 +1625,42 @@ export class Shell {
         <!-- Page 4 — decoders (3/4). -->
         <div class="keypad" id="keypadDec7" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
-            <button class="kpbtn" id="btnNavtex" title="NAVTEX — maritime SITOR-B FEC broadcasts (518 kHz / 490 kHz / 4209.5 kHz). Long-press for station picker">NTEX</button>
-            <button class="kpbtn" id="btnOlivia" title="Olivia — multi-tone MFSK robust keyboard chat. fldigi-vendored. Long-press for sub-mode picker (4/125, 8/250, 16/500, 32/1000, etc.)">OLIV</button>
-            <button class="kpbtn" id="btnPacket" title="HF Packet — AX.25 / APRS HF decoder via direwolf. 300 baud AFSK on 30 m. Long-press for freq picker">PKT</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn" id="btnNavtex" title="Maritime SITOR-B FEC broadcasts (518 kHz / 490 kHz / 4209.5 kHz). Long-press for station picker">NTEX</button>
+            <button class="kpbtn" id="btnOlivia" title="Multi-tone MFSK robust keyboard chat. fldigi-vendored. Long-press for sub-mode picker (4/125, 8/250, 16/500, 32/1000, etc.)">OLIV</button>
+            <button class="kpbtn" id="btnPacket" title="AX.25 / APRS HF decoder via direwolf. 300 baud AFSK on 30 m. Long-press for freq picker. Decodes APRS payloads (position, weather, status, message, object, item) and telemetry (T# / PARM / UNIT / EQNS / BITS) directly in the panel. While active, AGWPE TCP 8000 also exposes raw frames to external apps (APRSIS32 / UI-View / Xastir, RX-only).">PKT</button>
+            <button class="kpbtn" id="btnPacketVhf" style="display:none" title="AX.25 / APRS VHF packet via direwolf. 1200 baud Bell-202 (1200/2200 Hz AFSK) — dominant on 144 MHz APRS. Default 144.390 MHz US / 144.800 MHz EU; long-press for freq picker. NBFM. Decodes position, weather, telemetry (T# / PARM / UNIT / EQNS / BITS), messages, objects. AGWPE TCP 8000 active while running.">VPKT</button>
+            <button class="kpbtn" id="btnPacket9600" style="display:none" title="9600 baud G3RUH packet (direct FSK, scrambled NRZ). Used on FOX cubesats (435 MHz downlinks) and some 70 cm UHF terrestrial. Needs wideband NBFM audio (≥24 kHz Nyquist); Kiwi sources are bandwidth-limited and won't decode. Long-press for sat freq picker. AGWPE TCP 8000 active while running.">9PKT</button>
+            <button class="kpbtn" id="btnPacketIl2p" style="display:none" title="IL2P framing (Nino Carrillo's Reed-Solomon FEC layer on top of AX.25). VHF 1200 baud Bell-202 carrier with FEC frames — decodes through QRM/QSB that plain AX.25 misses. Same dial frequencies as VPKT; long-press for picker. AGWPE TCP 8000 active while running.">ILP</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
-            <button class="kpbtn" id="btnPocs" title="POCS — POCSAG pager decoder via multimon-ng. Decodes 512 / 1200 / 2400 baud pager messages (address, function, alpha / numeric / tone). Requires npm run build:selcal to build the multimon-ng binary first.">POCS</button>
-            <button class="kpbtn" id="btnPsk31b" title="PSK — Phase-shift-keying chat decoder (BPSK31, QPSK31, BPSK63, etc.). fldigi-vendored. Long-press for sub-mode picker">PSK</button>
-            <button class="kpbtn" id="btnQ65" title="Q65 — modern WSJT-X weak-signal mode (2021). 65-FSK + Reed-Solomon, 1-min slots, ~-25 dB SNR; defaults to 14.080 MHz USB">Q65</button>
+            <button class="kpbtn" id="btnPocs" title="POCSAG pager decoder via multimon-ng. Decodes 512 / 1200 / 2400 baud pager messages (address, function, alpha / numeric / tone). Requires npm run build:selcal to build the multimon-ng binary first.">POCS</button>
+            <button class="kpbtn" id="btnPsk31b" title="Phase-shift-keying chat decoder (BPSK31, QPSK31, BPSK63, etc.). fldigi-vendored. Long-press for sub-mode picker">PSK</button>
+            <button class="kpbtn" id="btnQ65" title="Modern WSJT-X weak-signal mode (2021). 65-FSK + Reed-Solomon, 1-min slots, ~-25 dB SNR; defaults to 14.080 MHz USB">Q65</button>
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
-            <button class="kpbtn" id="btnQrss" title="QRSS — slow-CW grabber. Sub-Hz audio FFT with very slow time scroll for visual decoding of QRP beacons">QRSS</button>
-            <button class="kpbtn" id="btnRtty" title="RTTY — radioteletype FSK decoder. Configurable baud / shift (45/50/75/100 bd, 170/425/850 Hz). fldigi-vendored. Long-press for preset picker">RTTY</button>
-            <button class="kpbtn" id="btnSelcal" title="SELCAL — aviation HF selective-calling decoder via multimon-ng. 2-of-16 tone-pair codes. Tune an HF aero channel (8.891 / 5.598 / 11.336 / 13.306 MHz USB)">SELC</button>
+            <button class="kpbtn" id="btnQrss" title="Slow-CW grabber. Sub-Hz audio FFT with very slow time scroll for visual decoding of QRP beacons">QRSS</button>
+            <button class="kpbtn" id="btnRtty" title="Radioteletype FSK decoder. Configurable baud / shift (45/50/75/100 bd, 170/425/850 Hz). fldigi-vendored. Long-press for preset picker">RTTY</button>
+            <button class="kpbtn" id="btnSelcal" title="Aviation HF selective-calling decoder via multimon-ng. 2-of-16 tone-pair codes. Tune an HF aero channel (8.891 / 5.598 / 11.336 / 13.306 MHz USB)">SELC</button>
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
-            <button class="kpbtn" id="btnSstv" title="SSTV — analog Slow-Scan TV via slowrxd. Robot/Scottie/Martin/PD modes auto-detected from VIS code. Defaults to 14.230 MHz USB (20 m SSTV calling)">SSTV</button>
-            <button class="kpbtn" id="btnSitor" title="STOR — SITOR-B maritime FEC broadcast decoder (sibling protocol to NAVTEX). 100 baud / 170 Hz FSK. Long-press for station picker">STOR</button>
-            <button class="kpbtn" id="btnThor" title="Thor — IFK+ multi-path robust chat (DominoEX sibling tuned for HF). fldigi-vendored. Long-press for sub-mode picker">THOR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
+            <button class="kpbtn" id="btnSstv" title="Analog Slow-Scan TV via slowrxd. Robot/Scottie/Martin/PD modes auto-detected from VIS code. Defaults to 14.230 MHz USB (20 m SSTV calling)">SSTV</button>
+            <button class="kpbtn" id="btnSitor" title="Maritime FEC broadcast decoder (sibling protocol to NAVTEX). 100 baud / 170 Hz FSK. Long-press for station picker">SITOR-B</button>
+            <button class="kpbtn" id="btnThor" title="IFK+ multi-path robust chat (DominoEX sibling tuned for HF). fldigi-vendored. Long-press for sub-mode picker">THOR</button>
             <button class="kpbtn c" data-cmd="scan">SCAN</button>
           </div>
         </div>
@@ -1432,26 +1668,26 @@ export class Shell {
         <!-- Page 5 — decoders (4/4). -->
         <div class="keypad" id="keypadDec8" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
-            <button class="kpbtn" id="btnThrob" title="Throb — 9-tone pulse-position modulation chat mode. T1/T2/T4 base + X1/X2/X4 with FEC. fldigi-vendored decoder">THRB</button>
-            <button class="kpbtn" id="btnWspr15" title="WSPR-15 — 15-minute period WSPR variant for LF/MF (137/475 kHz). UTC-aligned :00/:15/:30/:45 boundaries; tap to start standby">W15</button>
-            <button class="kpbtn" id="btnWspr" title="WSPR — Weak Signal Propagation Reporter. 2-min UTC slots, 4-FSK, ~-29 dB SNR. Decodes CALL + GRID + dBm beacon spots via wsprd. Long-press for freq picker">WSPR</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn" id="btnThrob" title="9-tone pulse-position modulation chat mode. T1/T2/T4 base + X1/X2/X4 with FEC. fldigi-vendored decoder">THRB</button>
+            <button class="kpbtn" id="btnWspr15" title="15-minute period WSPR variant for LF/MF (137/475 kHz). UTC-aligned :00/:15/:30/:45 boundaries; tap to start standby">W15</button>
+            <button class="kpbtn" id="btnWspr" title="Weak Signal Propagation Reporter. 2-min UTC slots, 4-FSK, ~-29 dB SNR. Decodes CALL + GRID + dBm beacon spots via wsprd. Long-press for freq picker">WSPR</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
-            <button class="kpbtn" id="btnWwv" title="WWV — time-station decoder (WWV / WWVH on 2.5 / 5 / 10 / 15 / 20 MHz). Decodes the BCD time-code on the 100 Hz sub-carrier">WWV</button>
+            <button class="kpbtn" id="btnWwv" title="Time-station decoder (WWV / WWVH on 2.5 / 5 / 10 / 15 / 20 MHz). Decodes the BCD time-code on the 100 Hz sub-carrier">WWV</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
@@ -1459,9 +1695,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
@@ -1473,17 +1709,17 @@ export class Shell {
              across pages 6 → 7. -->
         <div class="keypad" id="keypadDec4" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnAntc" title="ANTC — anti-carrier visualizer. Shows the residual carrier offset after the SAM PLL has locked (useful for tuning ECSS-style)">ANTC</button>
             <button class="kpbtn" id="btnDlds" title="Delay-Doppler scattering function — HF channel sounder">DLDS</button>
             <button class="kpbtn" id="btnDopp" title="DOPP — Doppler tracker. Displays frequency-drift slope of the strongest in-band signal vs time (HF DX rising / falling fade)">DOPP</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn" id="btnEye" title="EYE — eye-diagram visualizer for the IQ symbol stream (requires IQ mode)">EYE</button>
             <button class="kpbtn" id="btnFmnt" title="Voice formant tracker (F1/F2/F3 vs time)">FMNT</button>
@@ -1491,8 +1727,8 @@ export class Shell {
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnKurt" title="Sample kurtosis vs time — Gaussian noise ≈ 3, impulsive QRN ≫ 3, tone-dominated &lt; 3">KURT</button>
             <button class="kpbtn" id="btnSDial" title="METR — analog-style S-meter dial reading the smoothed RSSI">METR</button>
@@ -1500,9 +1736,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn" id="btnPpmc" title="PPMC — Kiwi ppm-clock visualizer. Measures the receiver's local-oscillator drift against a known reference carrier">PPMC</button>
             <button class="kpbtn" id="btnRfi" title="RFI — RFI sleuth. Long-term cumulative spectrum that exposes constantly-on local interference (PLT, switch-mode PSU, plasma TV…)">RFI</button>
             <button class="kpbtn" id="btnScope" title="SCOP — audio oscilloscope on the demodulated signal. Triggered, with adjustable level and polarity">SCOP</button>
@@ -1513,17 +1749,17 @@ export class Shell {
         <!-- Page 7 — visualizers (2/2). -->
         <div class="keypad" id="keypadDec5" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnSfrc" title="SFRC — sferic / lightning visualizer. Detects and counts wideband impulse spikes characteristic of distant thunderstorms">SFRC</button>
             <button class="kpbtn" id="btnVect" title="VECT — vector / Lissajous scope: x vs delayed-x on the audio. Reveals modulation symmetry / periodicity">VECT</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
@@ -1531,8 +1767,8 @@ export class Shell {
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <!-- WLSB / WUSB are conditionally surfaced by the IQ-domain
                  cleanup chain; kept inline (display:none) so the
@@ -1546,9 +1782,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
@@ -1560,26 +1796,26 @@ export class Shell {
              alphabetically across pages 8 → 11. -->
         <div class="keypad" id="keypadDec6" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnStanag3g" title="3GAL — STANAG 4538 (3G ALE) network frequencies. Distinct from the 2G ALE list.">3GAL</button>
             <button class="kpbtn" id="btnAero" title="AERO — non-VOLMET oceanic aviation HF voice (NAT/CAR/CWP/SAM/INO).">AERO</button>
             <button class="kpbtn" id="btnAfricaBc" title="AFRC — African regional SW broadcasters (TWR Africa, Channel Africa, Voice of Nigeria, BBC Africa relay).">AFRC</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn" id="btnAirdrill" title="AIDR — NATO / USAF HF exercise nets (Cope Tiger / Red Flag / Bold Quest, etc.).">AIDR</button>
-            <button class="kpbtn" id="btnAmtor" title="AMTR — Amateur AMTOR / SITOR FEC nets (mostly historical, occasionally still active on 20 m).">AMTR</button>
+            <button class="kpbtn" id="btnAmtor" title="Amateur AMTOR / SITOR FEC nets (mostly historical, occasionally still active on 20 m).">AMTOR</button>
             <button class="kpbtn" id="btnAsiaBc" title="ASIA — Asian regional SW broadcasters (VOV, Thai NBT, AIR World Service, PBC, TRT).">ASIA</button>
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnBeacons" title="BCON — frequency picker for NCDXF / IBP beacons (14.100 / 18.110 / 21.150 / 24.930 / 28.200 MHz round-robin)">BCON</button>
             <button class="kpbtn" id="btnCap" title="CAP — US Civil Air Patrol HF (auxiliary USAF, cadet / emergency / SAR).">CAP</button>
@@ -1587,9 +1823,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn" id="btnClandestine" title="CLND — clandestine SW broadcasters (Sound of Hope, Voice of Tibet, Echo of Hope, Voice of Korea, etc.).">CLND</button>
             <button class="kpbtn" id="btnCoast" title="CSTV — coastal-station HF voice broadcasts (USCG NMN / NMG / NMC / NOJ weather and safety bulletins).">CSTV</button>
             <button class="kpbtn" id="btnCoastcw" title="CSCW — museum / special-event commercial coastal CW (KSM Pt. Reyes, K6KPH).">CSCW</button>
@@ -1600,17 +1836,17 @@ export class Shell {
         <!-- Page 9 — frequency-list pickers (2/4). -->
         <div class="keypad" id="keypadDec9" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnDgps" title="DGPS — LF/MF Differential GPS reference beacons (~283.5–325 kHz, MSK-encoded). Overlaps the NDB band.">DGPS</button>
             <button class="kpbtn" id="btnDrm" title="DRM — Digital Radio Mondiale broadcasters (AIR / Romania / Vatican / KTWR / WINB). Listen with the DRM demod.">DRM</button>
             <button class="kpbtn" id="btnDxcluster" title="DXCL — DX cluster voice / CW calling frequencies (CW DX centers and SSB DX windows by band).">DXCL</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn" id="btnEmbassy" title="DIPL — diplomatic / state-department HF carriers (Russian / Chinese / Iranian MFA RTTY and data).">DIPL</button>
             <button class="kpbtn" id="btnEmcomm" title="ECOM — formal emergency / disaster nets (IARU emergency channels, RACES, Red Cross, SATERN).">ECOM</button>
@@ -1618,8 +1854,8 @@ export class Shell {
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnHfdm" title="HFDM — HF data-modem fixed-station carriers (MIL-STD-188-110/141C, French Navy, Russian Smerch, etc.).">HFDM</button>
             <button class="kpbtn" id="btnHfgcs" title="HFGC — USAF HF Global Communications System (4724/6739/8992/11175/13200/15016 USB).">HFGC</button>
@@ -1627,9 +1863,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn" id="btnLw" title="LW — European longwave broadcast (153–279 kHz). BBC R4, Romanian Antena Satelor, Algerian Chaîne 1, etc.">LW</button>
             <button class="kpbtn" id="btnMars" title="MARS — US Army/Navy/AF MARS + Canadian CFARS military auxiliary networks.">MARS</button>
             <button class="kpbtn" id="btnMarsEu" title="MRSE — European MARS-equivalent amateur radio societies (RNARS, RAFARS, BARS, DARS, NARS).">MRSE</button>
@@ -1640,17 +1876,17 @@ export class Shell {
         <!-- Page 10 — frequency-list pickers (3/4). -->
         <div class="keypad" id="keypadDec10" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnMept" title="MEPT — Manned Experimental Propagation Test QRPp / QRSS beacon windows on each band.">MEPT</button>
             <button class="kpbtn" id="btnMilv" title="MILV — frequency picker for military / government voice nets (US Air Force HF-GCS, NATO, Russian VOLMET-style)">MILV</button>
             <button class="kpbtn" id="btnMarpac" title="MPAC — Pacific-specific maritime nets and coast stations (AMSA Charleville / Wiluna, NZ Maritime, JCS Tokyo).">MPAC</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn" id="btnMaritime" title="MARN — frequency picker for maritime voice / weather / DSC channels">MARN</button>
             <button class="kpbtn" id="btnMwdx" title="MWDX — clear-channel medium-wave DX targets (NA Class A, marquee EU and Asian MW stations).">MWDX</button>
@@ -1658,21 +1894,21 @@ export class Shell {
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnNumbers" title="NUM — Priyom-catalogued numbers / clandestine stations (E07/E11/G06/M14/V07/HM01/etc.).">NUM</button>
-            <button class="kpbtn" id="btnPactor" title="PACT — listenable Winlink / Pactor message-gateway HF calling channels.">PACT</button>
+            <button class="kpbtn" id="btnPactor" title="Listenable Winlink / Pactor message-gateway HF calling channels.">PACTOR</button>
             <button class="kpbtn" id="btnPirate" title="PIRA — informal European pirate and US freebander stretches (3.9 / 4.95 / 6.2 / 6.9 MHz).">PIRA</button>
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn" id="btnRusmil" title="RUSM — Russian strategic / fleet military HF networks (Briz, Akula, Krug, Sviaz). Distinct from NATO-centric MILV.">RUSM</button>
             <button class="kpbtn" id="btnScien" title="SCI — frequency picker for scientific / propagation-research stations (ionosondes, riometers, OTH calibrators)">SCI</button>
-            <button class="kpbtn" id="btnSitorA" title="SITA — maritime SITOR-A interactive (ARQ) calling channels, distinct from broadcast SITOR-B in NAVTEX.">SITA</button>
+            <button class="kpbtn" id="btnSitorA" title="Maritime SITOR-A interactive (ARQ) calling channels, distinct from broadcast SITOR-B in NAVTEX.">SITOR-A</button>
             <button class="kpbtn c" data-cmd="scan">SCAN</button>
           </div>
         </div>
@@ -1680,17 +1916,17 @@ export class Shell {
         <!-- Page 11 — frequency-list pickers (4/4). -->
         <div class="keypad" id="keypadDec11" style="display:none">
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="am">AM</button>
-            <button class="kpbtn m" data-mode="nbfm">NBFM</button>
-            <button class="kpbtn m" data-mode="iq">IQ</button>
+            <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn" id="btnSkynet" title="SKYN — RAF / NATO Skynet UK military HF (3.146 / 4.742 / 6.733 / 9.031 / 14.353 MHz USB).">SKYN</button>
             <button class="kpbtn" id="btnStanag2" title="STAN — known persistent MIL-STD-188-110 / STANAG 4285 / 4539 NATO HF data carriers.">STAN</button>
             <button class="kpbtn" id="btnSwbroad" title="SWBC — marquee shortwave broadcasters (BBC, VOA, RFI, CRI, RRI, KBS, NHK, Vatican, WRMI, WBCQ, WWCR).">SWBC</button>
             <button class="kpbtn c" data-cmd="dec">PAGE</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sam">SAM</button>
-            <button class="kpbtn m" data-mode="cw">CW</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="nb">NB</button>
             <button class="kpbtn" id="btnTimeStations" title="TIME — frequency picker for time stations (WWV/WWVH/CHU/RWM/JJY/BPM/HLA)">TIME</button>
             <button class="kpbtn" id="btnTrafnets" title="TNET — amateur traffic / maritime / mobile nets (MMSN, SATERN, ARES, etc.).">TNET</button>
@@ -1698,8 +1934,8 @@ export class Shell {
             <button class="kpbtn t" data-toggle="band">BAND</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sal">SAL</button>
-            <button class="kpbtn m" data-mode="lsb">LSB</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn c" data-cmd="antch">NT</button>
             <button class="kpbtn" id="btnVolmet" title="VOLM — frequency picker for VOLMET aviation-weather broadcasts (NY / Gander / Shannon / Karachi / etc.)">VOLM</button>
             <button class="kpbtn" id="btnWfax" title="WFAX — weather-fax broadcast schedules (DWD/NOAA/JMH/Bracknell/Northwood).">WFAX</button>
@@ -1707,9 +1943,9 @@ export class Shell {
             <button class="kpbtn c" data-cmd="filter">BW</button>
           </div>
           <div class="kprow kprow-7">
-            <button class="kpbtn m" data-mode="sau">SAU</button>
-            <button class="kpbtn m" data-mode="usb">USB</button>
-            <button class="kpbtn t" data-toggle="nr">NR</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
+            <button class="kpbtn c" data-cmd="nr">NR</button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
             <button class="kpbtn kpbtn-empty" aria-hidden="true" tabindex="-1"></button>
@@ -2105,6 +2341,19 @@ export class Shell {
       () => { if (this.packetOn) { this.togglePacket(); return; }
               this.exclusiveActivate('packet'); this.togglePacket(); },
       () => this.openPacketFreqPicker());
+    this.bindFtxLongPress(this.$('btnPacketVhf'),
+      () => { if (this.packetVhfOn) { this.togglePacketVhf(); return; }
+              this.exclusiveActivate('packet-vhf'); this.togglePacketVhf(); },
+      () => this.openPacketVhfFreqPicker());
+    this.bindFtxLongPress(this.$('btnPacket9600'),
+      () => { if (this.packet9600On) { this.togglePacket9600(); return; }
+              this.exclusiveActivate('packet-9600'); this.togglePacket9600(); },
+      () => this.openPacket9600FreqPicker());
+    this.bindFtxLongPress(this.$('btnPacketIl2p'),
+      () => { if (this.packetIl2pOn) { this.togglePacketIl2p(); return; }
+              this.exclusiveActivate('packet-il2p'); this.togglePacketIl2p(); },
+      // IL2P shares the VHF freq set — same Bell-202 carrier.
+      () => this.openPacketVhfFreqPicker());
     this.bindFtxLongPress(this.$('btnWspr'),
       () => { if (this.wsprOn) { this.toggleWspr(); return; }
               this.exclusiveActivate('wspr'); this.toggleWspr(); },
@@ -2121,6 +2370,11 @@ export class Shell {
       if (this.scopeOn) { this.toggleScope(); return; }
       this.exclusiveActivate('scope');
       this.toggleScope();
+    });
+    this.$('btnThd').addEventListener('click', () => {
+      if (this.thdOn) { this.toggleThd(); return; }
+      this.exclusiveActivate('thd');
+      this.toggleThd();
     });
     this.$('btnGray').addEventListener('click', () => {
       if (this.grayOn) { this.toggleGray(); return; }
@@ -2538,6 +2792,293 @@ export class Shell {
       this.exclusiveActivate('pocs');
       this.togglePocs();
     });
+    // DSD — one binary, seven UI buttons. Each handler engages
+    // the same decoder with a different `mode` flag; re-tapping the
+    // active mode toggles it off. Switching from one mode to another
+    // tears down the current DsdDecoder and spawns a fresh one.
+    const wireDsd = (btnId: string, mode: DsdMode) => {
+      this.$(btnId).addEventListener('click', () => {
+        if (this.dsdOn && this.dsdMode === mode) { this.toggleDsd(mode); return; }
+        if (this.dsdOn) this.toggleDsd(this.dsdMode);
+        this.exclusiveActivate('dsd');
+        this.toggleDsd(mode);
+      });
+    };
+    wireDsd('btnDstar',  'dstar');
+    wireDsd('btnDmr',    'dmr');
+    wireDsd('btnDmrs',   'dmrs');
+    wireDsd('btnNxdn48', 'nxdn48');
+    wireDsd('btnNxdn96', 'nxdn96');
+    wireDsd('btnYsf',    'ysf');
+    wireDsd('btnDpmr',   'dpmr');
+    wireDsd('btnM17',    'm17');
+    wireDsd('btnP25p1',  'p25p1');
+    wireDsd('btnP25p2',  'p25p2');
+    // multimon-ng extra modes — same toggle pattern as DSD, single
+    // decoder, swap mode on activation.
+    const wireMulti = (btnId: string, mode: MultimonMode) => {
+      this.$(btnId).addEventListener('click', () => {
+        if (this.multimonOn && this.multimonMode === mode) { this.toggleMultimon(mode); return; }
+        if (this.multimonOn) this.toggleMultimon(this.multimonMode);
+        this.exclusiveActivate('multimon');
+        this.toggleMultimon(mode);
+      });
+    };
+    wireMulti('btnFlex',     'flex');
+    wireMulti('btnFlexNext', 'flex_next');
+    // ERMES intentionally not wired — multimon-ng has no ERMES demod
+    // and the protocol is decommissioned. Button stays hidden.
+    wireMulti('btnDtmf',     'dtmf');
+    wireMulti('btnZvei',     'zvei');
+    wireMulti('btnAfsk1200', 'afsk1200');
+    wireMulti('btnUfsk1200', 'ufsk1200');
+    wireMulti('btnClipFsk',  'clipfsk');
+    wireMulti('btnFmsFsk',   'fmsfsk');
+    wireMulti('btnAfsk2400', 'afsk2400');
+    wireMulti('btnHapn4800', 'hapn4800');
+    wireMulti('btnFsk9600',  'fsk9600');
+    wireMulti('btnDpzvei',   'dpzvei');
+    wireMulti('btnCwm',      'morse');
+    wireMulti('btnX10',      'x10');
+    wireMulti('btnEas',      'eas');
+    this.$('multimonCopy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = this.$('multimonText').textContent || '';
+      if (!text) return;
+      this.copyText(text).then(
+        () => this.banner('multimon log copied', 1200),
+        () => this.banner('Copy failed', 1500),
+      );
+    });
+    this.$('multimonClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.$('multimonText').textContent = '';
+    });
+    // Vendored decoders — wire 6 buttons through one shared helper.
+    const wireVendored = (btnId: string,
+                         kind: 'msk144'|'ais'|'acars'|'tetrapol'|'op25'|'lrpt',
+                         endpoint: string,
+                         sink: 'onMsk144'|'onAis'|'onAcars'|'onTetrapol'|'onOp25'|'onLrpt') => {
+      this.$(btnId).addEventListener('click', () => {
+        if (this.vendoredOn && this.vendoredKind === kind) { this.toggleVendored(kind, endpoint, sink); return; }
+        if (this.vendoredOn && this.vendoredKind)
+          this.toggleVendored(this.vendoredKind,
+            this.vendoredEndpointFor(this.vendoredKind),
+            this.vendoredSinkFor(this.vendoredKind));
+        this.exclusiveActivate('vendored');
+        this.toggleVendored(kind, endpoint, sink);
+      });
+    };
+    wireVendored('btnMsk144',  'msk144',  '/ws/decode/msk144',   'onMsk144');
+    wireVendored('btnAis',     'ais',     '/ws/decode/ais',      'onAis');
+    wireVendored('btnAcars',   'acars',   '/ws/decode/acars',    'onAcars');
+    // TETRAPOL intentionally not wired — tetrapol_dump needs a
+    // separate demodulator (GR Python flowgraph) we don't ship.
+    // OP25 needs IQ (cs16 interleaved I,Q) — not audio — so it routes
+    // through the 'lrpt' kind (the existing IQ-in plumbing used by
+    // ADS-B / JAERO / rtl_433 / sonde / etc.) instead of an audio
+    // sink. Endpoint stays /ws/decode/op25 so the bridge can pick
+    // its OP25-specific args.
+    wireVendored('btnOp25',    'lrpt',    '/ws/decode/op25',     'onLrpt');
+    // LRPT goes through the existing wire helper but with RF auto-set.
+    this.$('btnLrpt').addEventListener('click', () => {
+      if (!(this.vendoredOn && this.vendoredKind === 'lrpt')) applyRfProfile('btnLrpt');
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') { this.toggleVendored('lrpt', '/ws/decode/lrpt', 'onLrpt'); return; }
+      if (this.vendoredOn && this.vendoredKind)
+        this.toggleVendored(this.vendoredKind,
+          this.vendoredEndpointFor(this.vendoredKind),
+          this.vendoredSinkFor(this.vendoredKind));
+      this.exclusiveActivate('vendored');
+      this.toggleVendored('lrpt', '/ws/decode/lrpt', 'onLrpt');
+    });
+    // satdump pipeline variants — same kind/endpoint as LRPT but the
+    // client appends ?pipeline= to the WS URL so the bridge runs the
+    // right satdump pipeline. Reused 'lrpt' kind because the bridge
+    // is unchanged. RF auto-set first.
+    this.$('btnHrpt').addEventListener('click', () => { applyRfProfile('btnHrpt'); this.toggleSatdump('hrpt'); });
+    this.$('btnApt') .addEventListener('click', () => { applyRfProfile('btnApt');  this.toggleSatdump('apt');  });
+    // IQ-input vendored binaries — same pattern as LRPT (route through
+    // player.onIq, not an audio sink). Each entry describes the dial
+    // freq (kHz), the IQ output rate the bridge should emit, the WS
+    // output format (UC8 for dump978; int16 for the rest), and whether
+    // the active source must be rtl_tcp (Kiwi can't reach GHz bands).
+    type RfProfile = { freqKHz: number; outHz: number; fmt: 'uc8' | 'int16'; rtlOnly: boolean };
+    const ironRfProfile: Record<string, RfProfile> = {
+      btnAdsb:   { freqKHz: 1_090_000, outHz: 2_000_000, fmt: 'int16', rtlOnly: true  },
+      btnVdl2:   { freqKHz:   136_975, outHz: 1_050_000, fmt: 'int16', rtlOnly: true  },
+      btnUat:    { freqKHz:   978_000, outHz: 2_083_334, fmt: 'uc8',   rtlOnly: true  },
+      btnWmbus:  { freqKHz:   868_950, outHz: 1_600_000, fmt: 'int16', rtlOnly: true  },
+      btnRds:    { freqKHz:   100_000, outHz:   240_000, fmt: 'int16', rtlOnly: true  },
+      btnHrpt:   { freqKHz: 1_700_000, outHz: 3_000_000, fmt: 'int16', rtlOnly: true  },
+      btnApt:    { freqKHz:   137_500, outHz:    50_000, fmt: 'int16', rtlOnly: false },
+      btnLrpt:   { freqKHz:   137_900, outHz:   150_000, fmt: 'int16', rtlOnly: false },
+      btnJaero:  { freqKHz: 1_545_000, outHz: 1_000_000,  fmt: 'int16', rtlOnly: true  }, // IQ-in via inmarsat-sniffer fifo
+      btnCospas: { freqKHz:   406_025, outHz: 0,          fmt: 'int16', rtlOnly: true  }, // audio-in
+      btnStdc:   { freqKHz: 1_537_700, outHz: 1_000_000, fmt: 'int16', rtlOnly: true  }, // IQ-in via inmarsat-sniffer fifo (shares the JAERO binary)
+      btnRtl433: { freqKHz:   433_920, outHz:   250_000,  fmt: 'uc8',   rtlOnly: true  }, // IQ-in
+      btnSonde:  { freqKHz:   403_000, outHz: 0,          fmt: 'int16', rtlOnly: true  }, // audio-in (NBFM demod)
+      btnLora:   { freqKHz:   868_100, outHz:   500_000,  fmt: 'int16', rtlOnly: true  }, // EU868 LoRaWAN CH0
+      btnLtr:    { freqKHz:   851_000, outHz:    24_000,  fmt: 'int16', rtlOnly: true  }, // 851 MHz US business UHF default
+      btnTimesig:{ freqKHz:        77.5, outHz: 0,        fmt: 'int16', rtlOnly: false }, // DCF77 LF — works on Kiwi
+    };
+    const applyRfProfile = (btnId: string) => {
+      const p = ironRfProfile[btnId];
+      if (!p) return;
+      if (p.rtlOnly && !this.isRtlSource()) {
+        this.banner(`${btnId.replace('btn','').toUpperCase()} needs an rtl_tcp source — switch RTL.`, 3500);
+        return;
+      }
+      // Auto-tune the dial. setFreqKHz on the active client takes effect
+      // immediately; the dial readout follows on the next refresh().
+      this.freqKHz = p.freqKHz;
+      this.client?.setFreqKHz?.(p.freqKHz);
+      // Tell the rtl_tcp bridge to emit at the rate the decoder wants.
+      const rtl = this.client as RtlTcpClient | null;
+      if (rtl && typeof rtl.setOutRate === 'function') {
+        if (p.outHz > 0) rtl.setOutRate(p.outHz);
+        rtl.setOutFormat(p.fmt);
+      }
+      this.refresh();
+    };
+    const wireVendoredRf = (btnId: string, kind: 'lrpt'|'msk144', endpoint: string,
+                            sink: 'onMsk144'|'onLrpt') => {
+      this.$(btnId).addEventListener('click', () => {
+        if (!(this.vendoredOn && this.vendoredKind === kind)) {
+          applyRfProfile(btnId);
+        }
+        if (this.vendoredOn && this.vendoredKind === kind) { this.toggleVendored(kind, endpoint, sink); return; }
+        if (this.vendoredOn && this.vendoredKind)
+          this.toggleVendored(this.vendoredKind,
+            this.vendoredEndpointFor(this.vendoredKind),
+            this.vendoredSinkFor(this.vendoredKind));
+        this.exclusiveActivate('vendored');
+        this.toggleVendored(kind, endpoint, sink);
+      });
+    };
+    wireVendoredRf('btnAdsb',  'lrpt', '/ws/decode/adsb',  'onLrpt');
+    wireVendoredRf('btnVdl2',  'lrpt', '/ws/decode/vdl2',  'onLrpt');
+    wireVendoredRf('btnUat',   'lrpt', '/ws/decode/uat',   'onLrpt');
+    // WMBus retired — wmbusmeters needs pre-demodulated telegrams,
+    // not raw IQ. Use rtl_433 at 868.300 MHz for wmbus traffic instead.
+    wireVendoredRf('btnRds',   'lrpt', '/ws/decode/rds',   'onLrpt');
+    // DSC reuses the multimon-ng bridge.
+    wireMulti('btnDsc', 'dsc');
+    // 5-tone selective-calling family — same multimon-ng pipeline.
+    wireMulti('btnCcir',  'ccir');
+    wireMulti('btnCcitt', 'ccitt');
+    wireMulti('btnEea',   'eea');
+    wireMulti('btnEia',   'eia');
+    wireMulti('btnEuro',  'euro');
+    // JAERO + Cospas-Sarsat — audio-in vendored binaries. Use the
+    // 'msk144' kind (audio-routed via the sink) with dedicated
+    // endpoints so the toggle state machine knows to send PCM samples
+    // through the player's onMsk144 hook into the decoder bridge.
+    this.$('btnJaero').addEventListener('click', () => {
+      applyRfProfile('btnJaero');
+      // inmarsat-sniffer is IQ-in, not audio-in — switch routing to
+      // the IQ branch (kind='lrpt' is the IQ-routing flag).
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') this.toggleVendored('lrpt', '/ws/decode/jaero', 'onLrpt');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('lrpt', '/ws/decode/jaero', 'onLrpt'); }
+    });
+    this.$('btnCospas').addEventListener('click', () => {
+      applyRfProfile('btnCospas');
+      if (this.vendoredOn && this.vendoredKind === 'msk144') this.toggleVendored('msk144', '/ws/decode/cospas', 'onMsk144');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('msk144', '/ws/decode/cospas', 'onMsk144'); }
+    });
+    // STD-C now uses inmarsat-sniffer (the JAERO binary) with
+    // --mode=stdc. That's IQ-in (cs16 over fifo), so route via the
+    // 'lrpt' kind which carries cs16 IQ from rtl_tcp/OWRX, not the
+    // 'msk144' kind which carries audio.
+    this.$('btnStdc').addEventListener('click', () => {
+      applyRfProfile('btnStdc');
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') this.toggleVendored('lrpt', '/ws/decode/stdc', 'onLrpt');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('lrpt', '/ws/decode/stdc', 'onLrpt'); }
+    });
+    // rtl_433 — IQ-in (routes through player.onIq via the 'lrpt' kind).
+    this.$('btnRtl433').addEventListener('click', () => {
+      applyRfProfile('btnRtl433');
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') this.toggleVendored('lrpt', '/ws/decode/rtl433', 'onLrpt');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('lrpt', '/ws/decode/rtl433', 'onLrpt'); }
+    });
+    // SONDE — audio-in. Default sub-mode is rs41 (most common globally).
+    this.$('btnSonde').addEventListener('click', () => {
+      applyRfProfile('btnSonde');
+      if (this.vendoredOn && this.vendoredKind === 'msk144') this.toggleVendored('msk144', '/ws/decode/sonde?sub=rs41', 'onMsk144');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('msk144', '/ws/decode/sonde?sub=rs41', 'onMsk144'); }
+    });
+    // LoRa — IQ-in. Default params: BW=125k, SF=7, CR=4/5, EU868 CH0.
+    this.$('btnLora').addEventListener('click', () => {
+      applyRfProfile('btnLora');
+      const ep = '/ws/decode/lora?bw=125000&sf=7&cr=1&rate=500000';
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') this.toggleVendored('lrpt', ep, 'onLrpt');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('lrpt', ep, 'onLrpt'); }
+    });
+    // LTR — IQ-in via GopherTrunk. Decimated to 24 kHz for the
+    // sub-audible signalling decode.
+    this.$('btnLtr').addEventListener('click', () => {
+      applyRfProfile('btnLtr');
+      if (this.vendoredOn && this.vendoredKind === 'lrpt') this.toggleVendored('lrpt', '/ws/decode/ltr', 'onLrpt');
+      else { this.exclusiveActivate('vendored'); this.toggleVendored('lrpt', '/ws/decode/ltr', 'onLrpt'); }
+    });
+    // TIME-signal decoder retired — no AM-envelope/pulse-width demod
+    // layer to turn LF audio into bits for dokutan/dcf77-decode.
+    // Use btnTimeStations (frequency picker) for manual time-station
+    // listening; no automated decoding for now.
+    this.$('vendoredCopy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = this.$('vendoredText').textContent || '';
+      if (!text) return;
+      this.copyText(text).then(
+        () => this.banner('log copied', 1200),
+        () => this.banner('Copy failed', 1500),
+      );
+    });
+    this.$('vendoredClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.$('vendoredText').textContent = '';
+    });
+    this.$('vendoredImgSave').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const img = this.$('vendoredImg') as HTMLImageElement;
+      const url = img.dataset.blobUrl;
+      if (!url) return;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = img.dataset.fileName || 'lrpt.png';
+      a.click();
+    });
+    this.$('dsdCopy').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = this.$('dsdText').textContent || '';
+      if (!text) return;
+      this.copyText(text).then(
+        () => this.banner('DSD log copied', 1200),
+        () => this.banner('Copy failed', 1500),
+      );
+    });
+    this.$('dsdClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.$('dsdText').textContent = '';
+    });
+    // DSD output gain — persistent across mode switches via
+    // localStorage. Visible in the panel as "<gain>×". Active only
+    // when a DSD decoder is up; clamped 0..6.
+    const setDsdGain = (g: number) => {
+      const clamped = Math.max(0, Math.min(6, g));
+      this.dsdGain = clamped;
+      localStorage.setItem('radiom.dsdGain', String(clamped));
+      const lbl = this.$('dsdVolVal');
+      if (lbl) lbl.textContent = `${clamped.toFixed(1)}×`;
+      this.dsdDecoder?.setGain(clamped);
+    };
+    this.$('dsdVolDown').addEventListener('click', (e) => { e.stopPropagation(); setDsdGain(this.dsdGain - 0.2); });
+    this.$('dsdVolUp').addEventListener('click',   (e) => { e.stopPropagation(); setDsdGain(this.dsdGain + 0.2); });
+    // Restore persisted gain at boot so the readout matches reality.
+    const persisted = parseFloat(localStorage.getItem('radiom.dsdGain') ?? '1.8');
+    if (Number.isFinite(persisted)) {
+      this.dsdGain = persisted;
+      this.$('dsdVolVal').textContent = `${persisted.toFixed(1)}×`;
+    }
     this.$('pocsCopy').addEventListener('click', (e) => {
       e.stopPropagation();
       const text = this.$('pocsText').textContent || '';
@@ -2686,7 +3227,12 @@ export class Shell {
     this.$('btnDgps').addEventListener('click',    () => this.openDgpsPicker());
     this.$('btnSwbroad').addEventListener('click', () => this.openSwbroadPicker());
     this.$('btnTrafnets').addEventListener('click',() => this.openTrafnetsPicker());
-    this.$('btnPactor').addEventListener('click',  () => this.openPactorPicker());
+    // PACTOR has no open-source decoder (proprietary SCS waveform);
+    // the button is purely a tuning aid. Single tap explains that;
+    // long-press surfaces the freq list.
+    this.bindFtxLongPress(this.$('btnPactor'),
+      () => this.banner('PACTOR — no FOSS decoder. Long-press for freq list.', 2500),
+      () => this.openPactorPicker());
     this.$('btnStanag3g').addEventListener('click',() => this.openStanag3gPicker());
     this.$('btnCoast').addEventListener('click',   () => this.openCoastPicker());
     this.$('btnEmcomm').addEventListener('click',  () => this.openEmcommPicker());
@@ -2705,8 +3251,18 @@ export class Shell {
     this.$('btnMarpac').addEventListener('click',  () => this.openMarpacPicker());
     this.$('btnMarsEu').addEventListener('click',  () => this.openMarsEuPicker());
     this.$('btnHfdm').addEventListener('click',    () => this.openHfdmPicker());
-    this.$('btnSitorA').addEventListener('click',  () => this.openSitorAPicker());
-    this.$('btnAmtor').addEventListener('click',   () => this.openAmtorPicker());
+    // SITOR-A is half-duplex ARQ — undecodable as a passive listener.
+    // Same pattern as PACTOR: explain on tap, freq list on long-press.
+    this.bindFtxLongPress(this.$('btnSitorA'),
+      () => this.banner('SITOR-A — ARQ, undecodable passively. Long-press for freq list.', 2500),
+      () => this.openSitorAPicker());
+    // AMTOR re-uses the SITOR-B decoder under the hood. Short tap →
+    // toggle SITOR-B (so the user actually hears/sees a decode rather
+    // than landing in a freq list); long-press → AMTOR freq picker.
+    this.bindFtxLongPress(this.$('btnAmtor'),
+      () => { if (this.sitorOn) { this.toggleSitor(); return; }
+              this.exclusiveActivate('sitor'); this.toggleSitor(); },
+      () => this.openAmtorPicker());
     this.$('btnLists').addEventListener('click',   () => this.openListsPicker());
     this.$('btnSPlot').addEventListener('click', () => this.toggleSPlot());
     this.bindFtxLongPress(
@@ -2951,7 +3507,14 @@ export class Shell {
       });
     });
     this.refreshLangButtons();
-    this.$('server').addEventListener('click', () => {
+    // KiwiSDR / OpenWebRx — mutually exclusive source buttons in the
+    // top bar. A single tap (a) switches the active source to that
+    // button and (b) opens that source's server picker so the operator
+    // can choose where to connect. Visual `.active` highlight follows
+    // `radiom.activeSource`.
+    this.$('kiwiPicker').addEventListener('click', () => {
+      localStorage.setItem('radiom.activeSource', 'kiwi');
+      this.refreshSourceButtonState();
       openServerList((url, entry) => {
         (this.$('server') as HTMLInputElement).value = url;
         localStorage.setItem('radiom.lastServer', url);
@@ -2959,6 +3522,52 @@ export class Shell {
         this.seedUsersFromEntry(entry);
         if (this.powered) this.connect();
         this.refresh();
+      });
+    });
+    // OpenWebRx: short tap → server picker; long-press while already
+    // connected → profile picker for the active server.
+    {
+      const btn = this.$('owrxPicker');
+      let pressTimer: number | null = null;
+      let longFired = false;
+      const cancel = () => { if (pressTimer != null) { clearTimeout(pressTimer); pressTimer = null; } };
+      const shortTap = () => {
+        localStorage.setItem('radiom.activeSource', 'owrx');
+        this.refreshSourceButtonState();
+        openOwrxList((url, entry) => {
+          localStorage.setItem('radiom.lastOwrxServer', url);
+          (this.$('server') as HTMLInputElement).value = url;
+          if (this.powered) this.disconnect();
+          if (this.powered) this.connect();
+          const name = entry?.name ? ` — ${entry.name.slice(0, 50)}` : '';
+          this.banner(`OpenWebRX: ${url}${name}`, 2500);
+        });
+      };
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        longFired = false;
+        cancel();
+        pressTimer = setTimeout(() => {
+          pressTimer = null;
+          longFired = true;
+          this.openOwrxProfilePicker();
+        }, 550) as unknown as number;
+      });
+      btn.addEventListener('pointerup',     () => { cancel(); if (!longFired) shortTap(); });
+      btn.addEventListener('pointercancel', cancel);
+      btn.addEventListener('pointerleave',  cancel);
+    }
+    // rtl_tcp source — open picker on tap, switch source, reconnect.
+    this.$('rtlPicker').addEventListener('click', () => {
+      localStorage.setItem('radiom.activeSource', 'rtl');
+      this.refreshSourceButtonState();
+      openRtlList((url, entry) => {
+        localStorage.setItem('radiom.lastRtlServer', url);
+        (this.$('server') as HTMLInputElement).value = url;
+        if (this.powered) this.disconnect();
+        if (this.powered) this.connect();
+        const name = entry?.name ? ` — ${entry.name.slice(0, 50)}` : '';
+        this.banner(`rtl_tcp: ${url}${name}`, 2500);
       });
     });
 
@@ -2971,6 +3580,21 @@ export class Shell {
       const c = t.getAttribute('data-cmd');
       const tg = t.getAttribute('data-toggle');
       const bw = t.getAttribute('data-bw');
+      // Toggle-off: tapping a picker-opening button while its matching
+      // panel is already on screen closes the panel instead of reopening.
+      // Each picker tags its modal with data-picker-id so we can match
+      // here without coupling to the picker's internals.
+      const CMD_TO_PICKER_ID: Record<string, string> = {
+        modePicker: 'mode', dspPicker: 'dsp', infoPicker: 'info',
+        dispPicker: 'disp', decAPicker: 'dec-A', decBPicker: 'dec-B',
+        freqPicker: 'freq',
+        filter: 'bw',
+      };
+      const pickerId = (c && CMD_TO_PICKER_ID[c]) || (tg === 'band' ? 'band' : null);
+      if (pickerId) {
+        const existing = document.querySelector(`.band-modal[data-picker-id="${pickerId}"]`);
+        if (existing) { existing.remove(); return; }
+      }
       if (bw) { this.applyBandwidth(+bw); return; }
       if (m) this.setMode(m as Mode);
       else if (k) this.appendDigit(k);
@@ -2982,6 +3606,12 @@ export class Shell {
         const pb = defaultPassbandFor(b.mode);
         this.lowCut = pb.lowCut; this.highCut = pb.highCut;
         this.client?.setTune({ mode: b.mode, freqKHz: center, lowCutHz: pb.lowCut, highCutHz: pb.highCut });
+        // Re-assert the squelch after a band/mode change. Without this,
+        // the Kiwi keeps a stale squelch state across the mode swap and
+        // the audio chops every few seconds until the operator jiggles
+        // the SQL knob to retrigger setSquelch.
+        this.client?.setSquelch(this.sql);
+        this.player.setSquelchGate(this.sql > 0 ? -111 + this.sql : null);
         this.recenter();
         this.refresh();
         this.banner(`${b.name}: ${b.loKHz}–${b.hiKHz} kHz ${b.mode.toUpperCase()}`, 2500);
@@ -2991,7 +3621,7 @@ export class Shell {
 
     // Knobs (drag vertically)
     this.$$('.knob').forEach(el => {
-      const id = el.dataset.knob as 'vol' | 'sql' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg';
+      const id = el.dataset.knob as 'vol' | 'sql' | 'gate' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg';
       this.bindKnob(el, id);
     });
 
@@ -3101,6 +3731,776 @@ export class Shell {
     this.bindTuneOnElement(this.$('fft') as HTMLCanvasElement);
   }
 
+  /** True when the active receiver source is an OpenWebRX server. The
+   *  picker writes this localStorage key. Waterfall geometry (tune-from-
+   *  click, cursor placement, freq labels) needs a different model for
+   *  OWRX because the bins arriving from OpenWebRxClient are already a
+   *  client-side slice centred on the tune freq. */
+  private isOwrxSource(): boolean {
+    return localStorage.getItem('radiom.activeSource') === 'owrx';
+  }
+  /** Symmetric helper alongside isOwrxSource() — used by future
+   *  per-source UI branches. Currently only referenced for symmetry. */
+  isRtlSource(): boolean {
+    return localStorage.getItem('radiom.activeSource') === 'rtl';
+  }
+
+  /** Source buttons are mutually exclusive — apply the `.active`
+   *  class to whichever matches the persisted source. Called whenever
+   *  the source is switched (picker callbacks + initial render). */
+  private refreshSourceButtonState(): void {
+    const src = localStorage.getItem('radiom.activeSource') ?? 'kiwi';
+    const ids: Array<[string, string]> = [
+      ['kiwiPicker', 'kiwi'],
+      ['owrxPicker', 'owrx'],
+      ['rtlPicker',  'rtl'],
+    ];
+    for (const [id, kind] of ids) {
+      const el = this.$(id) as HTMLElement | null;
+      el?.classList.toggle('active', src === kind);
+    }
+  }
+
+
+  /** Open one half of the decoder matrix. DECA = analog / narrow-band
+   *  digital / imagery / NDB-class beacons. DECB = weak-signal /
+   *  WSJT-X / military / utility. Same band-modal theme as the other
+   *  pickers; cells dispatch to the canonical decoder button on its
+   *  now-hidden decoder page, so the existing open / toggle / long-press
+   *  logic is reused unchanged. */
+  private openDecPicker(_half: 'A' | 'B'): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'dec';
+    // DEC is the merged former DECA + DECB — one scrollable list. The
+    // signature still takes the half argument so existing call sites
+    // keep compiling; both halves resolve to the same combined list.
+    const DEC_A: Array<{ label: string; selector: string }> = [
+      // Demod-adjacent
+      { label: 'FreeDV', selector: '#btnFreedv' },
+      // Digital text (narrow-band keyboard / utility modes)
+      { label: 'CW',     selector: '#btnCw' },
+      { label: 'RTTY',   selector: '#btnRtty' },
+      { label: 'PSK',    selector: '#btnPsk31b' },
+      { label: 'MFSK',   selector: '#btnMfsk' },
+      { label: 'OLIVIA', selector: '#btnOlivia' },
+      { label: 'Contestia', selector: '#btnContestia' },
+      { label: 'DominoEX',  selector: '#btnDominoex' },
+      { label: 'THOR',   selector: '#btnThor' },
+      { label: 'THROB',  selector: '#btnThrob' },
+      { label: 'FSQ',    selector: '#btnFsq' },
+      { label: 'MT63',   selector: '#btnMt63' },
+      { label: 'AMTOR',  selector: '#btnAmtor' },
+      { label: 'PACTOR', selector: '#btnPactor' },
+      { label: 'NAVTEX', selector: '#btnNavtex' },
+      { label: 'SITOR-B',selector: '#btnSitor' },
+      { label: 'SITOR-A',selector: '#btnSitorA' },
+      { label: 'SELCAL', selector: '#btnSelcal' },
+      { label: 'HF Packet', selector: '#btnPacket' },
+      { label: 'VHF Packet', selector: '#btnPacketVhf' },
+      { label: '9600 Packet', selector: '#btnPacket9600' },
+      { label: 'IL2P Packet', selector: '#btnPacketIl2p' },
+      // Imagery
+      { label: 'WEFAX', selector: '#btnWefax' },
+    ];
+    const DEC_B: Array<{ label: string; selector: string }> = [
+      // Beacon / weak-signal decoders (true decoders only; pure freq
+      // pickers like BCON / MEPT / DGPS moved to the INFO panel).
+      { label: 'QRSS', selector: '#btnQrss' },
+      { label: 'WWV',  selector: '#btnWwv' },
+      { label: 'POCSAG', selector: '#btnPocs' },
+      // WSJT-X family
+      { label: 'FT8',  selector: '#btnFt8' },
+      { label: 'FT4',  selector: '#btnFt4' },
+      { label: 'JT4',  selector: '#btnJt4' },
+      { label: 'JT65', selector: '#btnJt65' },
+      { label: 'JT9',  selector: '#btnJt9' },
+      { label: 'Q65',  selector: '#btnQ65' },
+      { label: 'JS8',  selector: '#btnJs8' },
+      { label: 'FST4', selector: '#btnFst4' },
+      { label: 'FST4W',selector: '#btnFst4w' },
+      { label: 'WSPR', selector: '#btnWspr' },
+      { label: 'WSPR-15', selector: '#btnWspr15' },
+      // Military / utility
+      { label: 'ALE',  selector: '#btnAle' },
+      { label: 'HFDL', selector: '#btnHfdl' },
+      // VHF/UHF digital voice (dsd-fme). Single binary, 9 modes.
+      { label: 'D-STAR',  selector: '#btnDstar' },
+      { label: 'DMR',     selector: '#btnDmr' },
+      { label: 'DMR-stereo', selector: '#btnDmrs' },
+      { label: 'NXDN-48', selector: '#btnNxdn48' },
+      { label: 'NXDN-96', selector: '#btnNxdn96' },
+      { label: 'YSF',     selector: '#btnYsf' },
+      { label: 'dPMR',    selector: '#btnDpmr' },
+      { label: 'M17',     selector: '#btnM17' },
+      { label: 'P25-P1',  selector: '#btnP25p1' },
+      { label: 'P25-P2',  selector: '#btnP25p2' },
+      // multimon-ng extras (binary already vendored for POCSAG/SELCAL).
+      { label: 'FLEX',     selector: '#btnFlex' },
+      { label: 'FLEX_NEXT', selector: '#btnFlexNext' },
+      // ERMES retired — multimon-ng has no ERMES demod, protocol
+      // decommissioned. Button stays hidden.
+      { label: 'DTMF',     selector: '#btnDtmf' },
+      { label: 'ZVEI',     selector: '#btnZvei' },
+      { label: 'AFSK1200', selector: '#btnAfsk1200' },
+      { label: 'UFSK1200', selector: '#btnUfsk1200' },
+      { label: 'AFSK2400', selector: '#btnAfsk2400' },
+      { label: 'HAPN4800', selector: '#btnHapn4800' },
+      { label: 'FSK9600',  selector: '#btnFsk9600' },
+      { label: 'DZ/PZVEI', selector: '#btnDpzvei' },
+      { label: 'CWM',      selector: '#btnCwm' },
+      { label: 'CLIPFSK',  selector: '#btnClipFsk' },
+      { label: 'FMSFSK',   selector: '#btnFmsFsk' },
+      { label: 'X10',      selector: '#btnX10' },
+      { label: 'EAS',      selector: '#btnEas' },
+      // Vendored binaries (separate build stages).
+      { label: 'MSK144',   selector: '#btnMsk144' },
+      { label: 'AIS',      selector: '#btnAis' },
+      { label: 'ACARS',    selector: '#btnAcars' },
+      // TETRAPOL retired — needs upstream demod we don't ship.
+      { label: 'OP25',     selector: '#btnOp25' },
+      { label: 'LRPT',     selector: '#btnLrpt' },
+      { label: 'HRPT',     selector: '#btnHrpt' },
+      { label: 'APT',      selector: '#btnApt' },
+      { label: 'ADS-B',    selector: '#btnAdsb' },
+      { label: 'VDL-2',    selector: '#btnVdl2' },
+      { label: 'UAT',      selector: '#btnUat' },
+      // WMBus retired — use rtl_433 at 868.300 MHz.
+      { label: 'RDS',      selector: '#btnRds' },
+      { label: 'DSC',      selector: '#btnDsc' },
+      { label: 'AERO',     selector: '#btnJaero' },
+      { label: 'CSPAS',    selector: '#btnCospas' },
+      { label: 'STD-C',    selector: '#btnStdc' },
+      // 5-tone selective-calling family.
+      { label: 'CCIR',     selector: '#btnCcir' },
+      { label: 'CCITT',    selector: '#btnCcitt' },
+      { label: 'EEA',      selector: '#btnEea' },
+      { label: 'EIA',      selector: '#btnEia' },
+      { label: 'EURO',     selector: '#btnEuro' },
+      { label: 'rtl_433',  selector: '#btnRtl433' },
+      { label: 'SONDE',    selector: '#btnSonde' },
+      { label: 'LoRa',     selector: '#btnLora' },
+      { label: 'LTR',      selector: '#btnLtr' },
+      // TIME-signal decoder retired (btnTimesig); btnTimeStations
+      // picker still works for manual tuning.
+    ];
+    // Merge both halves and sort by the visible protocol name (the
+    // description text pulled from the source button's `title`
+    // attribute). The label column is hidden, so sorting by label
+    // would produce a list that looked unordered to the operator.
+    // Description always begins with the protocol name (e.g.
+    // "FT8 — ...") so a localeCompare on the description sorts
+    // alphabetically by protocol.
+    type DecEntry = { label: string; selector: string; title: string };
+    const ENTRIES: DecEntry[] = [...DEC_A, ...DEC_B].map(e => ({
+      ...e,
+      title: document.querySelector<HTMLElement>(e.selector)?.getAttribute('title') ?? e.label,
+    }));
+    // Sort by protocol name (the short label) — case-insensitive so
+    // "Olivia" / "Thor" / "Throb" mix naturally with the all-caps
+    // labels (FT8, JT9, …).
+    ENTRIES.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    // Use the same row template as the frequency pickers (rtty-list /
+    // rtty-row / rtty-row-name / rtty-row-meta). Label sits on top, the
+    // help description sits below as the meta line — matches the look
+    // and feel of every freq/sub-mode picker in the app.
+    const root = document.createElement('div');
+    root.className = 'band-modal rtty-picker freq-picker dec-picker';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="rtty-list">
+        ${ENTRIES.map(e => {
+          const active = !!document.querySelector<HTMLElement>(e.selector)?.classList.contains('active');
+          return `
+            <button class="rtty-row ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">
+              <div class="rtty-row-name">${escapeAttr(e.label)}</div>
+              <div class="rtty-row-meta">${escapeAttr(e.title)}</div>
+            </button>`;
+        }).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    // Scroll the active row into view (if any decoder is currently on).
+    // Defer to the next frame so the modal has its final size from
+    // anchorPickerOverWaterfall before scrollIntoView measures it.
+    requestAnimationFrame(() => {
+      const activeRow = root.querySelector<HTMLElement>('.rtty-row.active');
+      if (activeRow) activeRow.scrollIntoView({ block: 'center', behavior: 'auto' });
+    });
+    this.bindPickerLongPress(root, (src) => {
+      // Long-press: dispatch the canonical button's long-press handler
+      // (exposed by bindFtxLongPress as `__longPress`) — usually opens
+      // the decoder's sub-mode / freq picker. Decoders without a
+      // long-press hook (AMTOR, ECSS, …) fall back to firing a normal
+      // click so a long-press never silently no-ops.
+      const lp = (src as HTMLElement & { __longPress?: () => void }).__longPress;
+      if (lp) lp(); else src.click();
+    });
+  }
+
+  /** Wire pointerdown/up on each `.band-btn` inside a picker so the
+   *  underlying decoder button's tap vs long-press behaviour is
+   *  preserved when reached through the matrix. Short tap → `.click()`.
+   *  Long-press (≥500 ms) → `onLongPress(src)`. */
+  private bindPickerLongPress(root: HTMLElement,
+                              onLongPress: (src: HTMLElement) => void): void {
+    // Accept three picker row types:
+    //  - .band-btn  → matrix pickers (MODE / DSP / INFO / DISP / band)
+    //  - .help-row  → legacy DEC list (kept for safety, unused now)
+    //  - .rtty-row  → DEC list (matches the frequency-picker format)
+    root.querySelectorAll<HTMLElement>('button.band-btn[data-sel],.help-row[data-sel],button.rtty-row[data-sel]').forEach((tile) => {
+      let timer: number | null = null;
+      let longFired = false;
+      const cancel = () => { if (timer != null) { clearTimeout(timer); timer = null; } };
+      tile.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        longFired = false;
+        cancel();
+        timer = setTimeout(() => {
+          timer = null;
+          longFired = true;
+          const sel = tile.dataset.sel!;
+          const src = document.querySelector<HTMLElement>(sel);
+          // Close the picker first so the freq-picker (or whatever
+          // the long-press surfaces) lands in the empty waterfall
+          // area rather than stacking under the list.
+          root.remove();
+          if (src) onLongPress(src);
+        }, 500) as unknown as number;
+      });
+      tile.addEventListener('pointerup',     cancel);
+      tile.addEventListener('pointerleave',  cancel);
+      tile.addEventListener('pointercancel', cancel);
+      tile.addEventListener('click', (e) => {
+        if (longFired) { e.stopImmediatePropagation(); longFired = false; return; }
+        const sel = tile.dataset.sel!;
+        const src = document.querySelector<HTMLElement>(sel);
+        // Single tap: dismiss the list immediately, then trigger the
+        // underlying decoder button. Its click handler either opens
+        // the decoder's panel or its sub-mode/sub-band picker — both
+        // need the waterfall area clear of the DEC list to render.
+        root.remove();
+        src?.click();
+      });
+    });
+    // Tap outside any tile (on the modal backdrop) dismisses.
+    root.addEventListener('click', (ev) => {
+      if (ev.target === root) root.remove();
+    });
+  }
+
+  /** Open the visualization-panel matrix. Same band-modal theme as the
+   *  DSP / INFO pickers. Each cell dispatches to the canonical button
+   *  (which is on a now-hidden decoder page) so each visualization
+   *  retains its existing open/close/toggle logic. */
+  private openDispPicker(): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'disp';
+    const ENTRIES: Array<{ label: string; selector: string }> = [
+      { label: 'ANTC', selector: '#btnAntc' },
+      { label: 'DLDS', selector: '#btnDlds' },
+      { label: 'DOPP', selector: '#btnDopp' },
+      { label: 'EYE',  selector: '#btnEye' },
+      { label: 'FMNT', selector: '#btnFmnt' },
+      { label: 'IQV',  selector: '#btnIqView' },
+      { label: 'KURT', selector: '#btnKurt' },
+      { label: 'METR', selector: '#btnSDial' },
+      { label: 'OTHR', selector: '#btnOthr' },
+      { label: 'PPMC', selector: '#btnPpmc' },
+      { label: 'RFI',  selector: '#btnRfi' },
+      { label: 'SCOP', selector: '#btnScope' },
+      { label: 'SFRC', selector: '#btnSfrc' },
+      { label: 'VECT', selector: '#btnVect' },
+      { label: 'ACON', selector: '#btnAcon' },
+      { label: 'SPEC', selector: '#btnAudioFft' },
+      { label: 'AFFT', selector: '#btnThd' },
+      { label: 'ZOOM', selector: '#btnZoom' },
+      { label: 'SPLT', selector: '#btnSPlot' },
+    ];
+    // Same shape as openDecPicker: rtty-row layout with label on top
+    // and the source button's `title` (help text) as the meta line,
+    // sorted alphabetically, scroll-to-active, long-press passthrough.
+    // We piggyback on the existing .dec-picker CSS so the fullscreen
+    // layout overrides apply (it just adjusts max-width / overflow).
+    type DispEntry = { label: string; selector: string; title: string };
+    const decorated: DispEntry[] = ENTRIES.map(e => ({
+      ...e,
+      title: document.querySelector<HTMLElement>(e.selector)?.getAttribute('title') ?? e.label,
+    }));
+    decorated.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    const root = document.createElement('div');
+    root.className = 'band-modal rtty-picker freq-picker dec-picker disp-picker';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="rtty-list">
+        ${decorated.map(e => {
+          const active = !!document.querySelector<HTMLElement>(e.selector)?.classList.contains('active');
+          return `
+            <button class="rtty-row ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">
+              <div class="rtty-row-name">${escapeAttr(e.label)}</div>
+              <div class="rtty-row-meta">${escapeAttr(e.title)}</div>
+            </button>`;
+        }).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    // Scroll the active row (if any visualizer is on) into view, same
+    // deferred-to-next-frame trick as the DEC picker.
+    requestAnimationFrame(() => {
+      const activeRow = root.querySelector<HTMLElement>('.rtty-row.active');
+      if (activeRow) activeRow.scrollIntoView({ block: 'center', behavior: 'auto' });
+    });
+    this.bindPickerLongPress(root, (src) => {
+      // Long-press: dispatch the canonical button's long-press handler
+      // (e.g. SCOP / FMNT have sub-mode pickers). Fall back to a normal
+      // click for buttons that have no long-press binding.
+      const lp = (src as HTMLElement & { __longPress?: () => void }).__longPress;
+      if (lp) lp(); else src.click();
+    });
+  }
+
+  /** Open the lookups / info matrix. Same shape as the DSP picker:
+   *  each cell dispatches to the canonical button (now hidden) so the
+   *  underlying open-modal / fetch logic stays in one place. */
+  private openInfoPicker(): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'info';
+    // INFO is now reserved for live / derived / search tools only.
+    // Every "pure frequency picker" (a static curated list of dial
+    // frequencies for a service or band) moved to the FREQ picker.
+    const ENTRIES: Array<{ label: string; selector: string }> = [
+      { label: 'EIBI', selector: '#btnEibi' },     // live shortwave schedule
+      { label: 'PSKR', selector: '#btnPskr' },     // PSKReporter spots
+      { label: 'NETS', selector: '#btnNets' },     // active ham nets
+      { label: 'WNET', selector: '#btnWnet' },     // WSPRnet
+      { label: 'GRAY', selector: '#btnGray' },     // gray-line propagation
+      { label: 'SRCH', selector: '#btnLists' },    // search across all freqs
+      { label: 'SID',  selector: '#btnSigId2' },   // signal-ID lookup
+    ];
+    const root = document.createElement('div');
+    root.className = 'band-modal';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="band-grid">
+        ${ENTRIES.map(e => {
+          const src = document.querySelector<HTMLElement>(e.selector);
+          const active = !!src?.classList.contains('active');
+          return `<button class="band-btn ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">${escapeAttr(e.label)}</button>`;
+        }).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    root.addEventListener('click', (ev) => {
+      const t = (ev.target as HTMLElement).closest('button.band-btn') as HTMLElement | null;
+      if (t) {
+        const sel = t.dataset.sel;
+        if (sel) document.querySelector<HTMLElement>(sel)?.click();
+        // Most INFO buttons open their own modal — close this picker on
+        // selection so the new one isn't covered.
+        root.remove();
+        return;
+      }
+      if (ev.target === root) root.remove();
+    });
+  }
+
+  /** Open the FREQ picker — every "pure frequency-list" picker (a
+   *  curated static list of dial frequencies for a service / band)
+   *  lives here. Live and derived lookups (EIBI / PSKR / NETS /
+   *  WNET / GRAY / SRCH / SID) stay in the INFO picker.
+   *
+   *  Same band-grid layout + matrix-click dispatch as INFO. Each
+   *  cell re-dispatches a click on the underlying hidden button so
+   *  the freq-picker overlay it spawns lives in one place. */
+  private openFreqPicker(): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'freq';
+    const ENTRIES: Array<{ label: string; selector: string }> = [
+      // Amateur / utility freq pickers
+      { label: 'BCON', selector: '#btnBeacons' },
+      { label: 'NDB',  selector: '#btnNdb' },
+      { label: 'VLFB', selector: '#btnVlfb' },
+      { label: 'MILV', selector: '#btnMilv' },
+      { label: 'MARN', selector: '#btnMaritime' },
+      { label: 'AERO', selector: '#btnAero' },
+      { label: 'VOLM', selector: '#btnVolmet' },
+      { label: 'TIME', selector: '#btnTimeStations' },
+      { label: 'SCI',  selector: '#btnScien' },
+      { label: 'NUM',  selector: '#btnNumbers' },
+      { label: 'DXCL', selector: '#btnDxcluster' },
+      { label: 'DGPS', selector: '#btnDgps' },
+      { label: 'GMDS', selector: '#btnGmdss' },
+      { label: 'HFDM', selector: '#btnHfdm' },
+      { label: 'MEPT', selector: '#btnMept' },
+      { label: 'MWDX', selector: '#btnMwdx' },
+      // Broadcast freq pickers
+      { label: 'CB',   selector: '#btnCb' },
+      { label: 'LW',   selector: '#btnLw' },
+      { label: 'AFRC', selector: '#btnAfricaBc' },
+      { label: 'ASIA', selector: '#btnAsiaBc' },
+      { label: 'LATM', selector: '#btnLatamBc' },
+      { label: 'SWBC', selector: '#btnSwbroad' },
+      { label: 'CLND', selector: '#btnClandestine' },
+      { label: 'DIPL', selector: '#btnEmbassy' },
+      { label: 'PIRA', selector: '#btnPirate' },
+      { label: 'AIDR', selector: '#btnAirdrill' },
+      // Military / nets freq pickers
+      { label: 'CAP',  selector: '#btnCap' },
+      { label: 'TNET', selector: '#btnTrafnets' },
+      { label: 'ECOM', selector: '#btnEmcomm' },
+      { label: 'SKYN', selector: '#btnSkynet' },
+      { label: 'HFGC', selector: '#btnHfgcs' },
+      { label: 'MARS', selector: '#btnMars' },
+      { label: 'MRSE', selector: '#btnMarsEu' },
+      { label: 'RUSM', selector: '#btnRusmil' },
+      { label: 'MPAC', selector: '#btnMarpac' },
+      { label: 'CSTV', selector: '#btnCoast' },
+      { label: 'CSCW', selector: '#btnCoastcw' },
+    ];
+    const root = document.createElement('div');
+    root.className = 'band-modal';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="band-grid">
+        ${ENTRIES.map(e => {
+          const src = document.querySelector<HTMLElement>(e.selector);
+          const active = !!src?.classList.contains('active');
+          return `<button class="band-btn ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">${escapeAttr(e.label)}</button>`;
+        }).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    root.addEventListener('click', (ev) => {
+      const t = (ev.target as HTMLElement).closest('button.band-btn') as HTMLElement | null;
+      if (t) {
+        const sel = t.dataset.sel;
+        if (sel) document.querySelector<HTMLElement>(sel)?.click();
+        // Most FREQ buttons open their own freq-list overlay — close
+        // this picker on selection so the new one isn't covered.
+        root.remove();
+        return;
+      }
+      if (ev.target === root) root.remove();
+    });
+  }
+
+  /** Open the signal-processor matrix as a band-modal-style picker.
+   *  Each cell re-dispatches a click on the canonical processor button
+   *  elsewhere in the UI, so toggle / cycle logic stays in one place
+   *  and the active-state highlight stays in sync. */
+  private openDspPicker(): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'dsp';
+    const ENTRIES: Array<{ label: string; selector: string }> = [
+      { label: 'AGC', selector: '#btnAgc' },
+      { label: 'NB',  selector: '[data-cmd="nb"]' },
+      { label: 'NT',  selector: '[data-cmd="antch"]' },
+      { label: 'NR',  selector: '[data-cmd="nr"]' },
+      { label: 'CP',  selector: '[data-toggle="comp"]' },
+      { label: 'NB2', selector: '#btnNb2' },
+      { label: 'NT2', selector: '#btnAmnotch' },
+      { label: 'NR2', selector: '#btnRfw' },
+      { label: 'VT',  selector: '#btnVtrk3' },
+      { label: 'AFF', selector: '#btnAfrm' },
+      { label: 'EQ',  selector: '#btnEq' },
+      { label: 'GEN', selector: '#btnModes' },
+    ];
+
+    const root = document.createElement('div');
+    root.className = 'band-modal';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="band-grid">
+        ${ENTRIES.map(e => {
+          const src = document.querySelector<HTMLElement>(e.selector);
+          const active = !!src?.classList.contains('active');
+          return `<button class="band-btn ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">${escapeAttr(e.label)}</button>`;
+        }).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    root.addEventListener('click', (ev) => {
+      const t = (ev.target as HTMLElement).closest('button.band-btn') as HTMLElement | null;
+      if (t) {
+        const sel = t.dataset.sel;
+        if (sel) {
+          const src = document.querySelector<HTMLElement>(sel);
+          src?.click();
+          // Reflect the post-toggle active state without closing.
+          setTimeout(() => {
+            const after = document.querySelector<HTMLElement>(sel);
+            t.classList.toggle('active', !!after?.classList.contains('active'));
+          }, 0);
+        }
+        return;
+      }
+      if (ev.target === root) root.remove();
+    });
+  }
+
+  /** Demodulation-mode picker. The list is filtered by the active
+   *  receiver source — Kiwi exposes a different set of demod modes than
+   *  mainline OpenWebRX (no SAM/SAL/SAU/IQ on OWRX, NBFM aliases to NFM).
+   *  Picking a mode is equivalent to tapping the old per-mode keypad
+   *  shortcuts. */
+  private openModePicker(): void {
+    this.closeAllBandModals();
+    const PICKER_ID = 'mode';
+    const isOwrx = this.isOwrxSource();
+    type Entry = { mode: Mode; label: string; hint?: string };
+    const KIWI_MODES: Entry[] = [
+      { mode: 'am',   label: 'AM',   hint: 'Amplitude modulation' },
+      { mode: 'sam',  label: 'SAM',  hint: 'Synchronous AM (both sidebands)' },
+      { mode: 'sal',  label: 'SAL',  hint: 'Synchronous AM (lower sideband only)' },
+      { mode: 'sau',  label: 'SAU',  hint: 'Synchronous AM (upper sideband only)' },
+      { mode: 'nbfm', label: 'NBFM', hint: 'Narrowband FM' },
+      { mode: 'cw',   label: 'CW',   hint: 'Continuous wave / Morse' },
+      { mode: 'lsb',  label: 'LSB',  hint: 'Lower sideband SSB' },
+      { mode: 'usb',  label: 'USB',  hint: 'Upper sideband SSB' },
+      { mode: 'iq',   label: 'IQ',   hint: 'Raw complex baseband (Kiwi-only)' },
+    ];
+    // OpenWebRX mainline: nfm/wfm/am/lsb/usb/cw plus dmr/dstar/etc which
+    // radiom doesn't have client decoders for. NBFM is radiom's name for
+    // nfm; pick that. WFM has no current radiom equivalent, expose as
+    // its own slot (maps via OpenWebRxClient — falls back to nfm if
+    // unmapped). SAM is server-side on OpenWebRX (mode "am" already
+    // includes sync-style envelope detection).
+    const OWRX_MODES: Entry[] = [
+      { mode: 'nbfm', label: 'NFM',  hint: 'Narrowband FM' },
+      { mode: 'wfm',  label: 'WFM',  hint: 'Wideband FM (broadcast). Uses HD audio (48 kHz)' },
+      { mode: 'am',   label: 'AM',   hint: 'Amplitude modulation' },
+      { mode: 'lsb',  label: 'LSB',  hint: 'Lower sideband' },
+      { mode: 'usb',  label: 'USB',  hint: 'Upper sideband' },
+      { mode: 'cw',   label: 'CW',   hint: 'Morse — narrow USB' },
+    ];
+    const list = isOwrx ? OWRX_MODES : KIWI_MODES;
+    const current = this.mode;
+
+    const root = document.createElement('div');
+    // Reuse the band-modal theme: compact grid of labelled buttons, one
+    // per mode. Matches the look of BAND / BW / other quick-pick modals
+    // rather than the server-list cards used elsewhere.
+    root.className = 'band-modal';
+    root.dataset.pickerId = PICKER_ID;
+    root.innerHTML = `
+      <div class="band-grid">
+        ${list.map(e => `
+          <button class="band-btn ${e.mode === current ? 'active' : ''}" data-mode="${escapeAttr(e.mode)}" title="${escapeAttr(e.hint ?? '')}">${escapeAttr(e.label)}</button>
+        `).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    root.addEventListener('click', (e) => {
+      const t = (e.target as HTMLElement).closest('button.band-btn') as HTMLElement | null;
+      if (t) {
+        const m = t.dataset.mode as Mode | undefined;
+        if (m) { this.setMode(m); root.remove(); return; }
+      }
+      if (e.target === root) root.remove();
+    });
+  }
+
+  /** The visualizer-toggle buttons that the DISP picker dispatches
+   *  through. When any of them carries `.active`, the corresponding
+   *  visualizer panel is on top of the waterfall — we surface a small
+   *  × chip in the top-right of the waterfall so the operator can
+   *  dismiss the overlay without re-opening the DISP picker. */
+  // Every button listed in the DISP picker. The BACK key (and the ×
+  // close chip) iterate this list and click any with .active to
+  // tear them down. Keep this in lock-step with the DISP picker
+  // entries — anything new added to DISP must land here too, or
+  // BACK won't close it.
+  private static readonly VIZ_BUTTON_IDS = [
+    'btnAntc','btnDlds','btnDopp','btnEye','btnFmnt','btnIqView','btnKurt',
+    'btnSDial','btnOthr','btnPpmc','btnRfi','btnScope','btnSfrc','btnVect',
+    'btnAcon','btnAudioFft','btnThd','btnZoom','btnSPlot',
+  ];
+
+  /** Every decoder button reachable from DECA / DECB. Used by the BACK
+   *  button and the × chip so an active decoder panel can be closed
+   *  the same way visualizer overlays are. */
+  private static readonly DECODER_BUTTON_IDS = [
+    'btnEcss','btnMcw','btnFreedv','btnIsb',
+    'btnCw','btnRtty','btnPsk31b','btnMfsk','btnOlivia','btnContestia',
+    'btnDominoex','btnThor','btnThrob','btnFsq','btnMt63','btnAmtor',
+    'btnPactor','btnNavtex','btnSitor','btnSitorA','btnHell','btnSelcal',
+    'btnPacket','btnPacketVhf','btnPacket9600','btnPacketIl2p','btnWefax','btnWfax','btnSstv',
+    'btnQrss','btnWwv','btnPocs',
+    'btnFt8','btnFt4','btnJt4','btnJt65','btnJt9','btnQ65','btnJs8',
+    'btnFst4','btnFst4w','btnWspr','btnWspr15',
+    'btnStanag','btnStanag4539','btnStanag3g','btnStanag2',
+    'btnAle','btnHfdl','btnDrm',
+    // DSD digital-voice family (D-STAR / DMR / NXDN / YSF / dPMR / M17 / P25).
+    'btnDstar','btnDmr','btnDmrs','btnNxdn48','btnNxdn96','btnYsf','btnDpmr',
+    'btnM17','btnP25p1','btnP25p2',
+    // multimon-ng extras.
+    'btnFlex','btnFlexNext','btnDtmf','btnZvei','btnAfsk1200','btnUfsk1200','btnAfsk2400','btnHapn4800','btnFsk9600','btnDpzvei','btnCwm','btnClipFsk','btnFmsFsk','btnX10','btnEas',
+    // Vendored binaries (MSK144 / AIS / ACARS / TETRAPOL / OP25 / LRPT).
+    'btnMsk144','btnAis','btnAcars','btnOp25','btnLrpt',
+    // Batch 7 additions (HRPT / APT / ADS-B / VDL-2 / UAT / WMBus / RDS / DSC).
+    'btnHrpt','btnApt','btnAdsb','btnVdl2','btnUat','btnRds','btnDsc',
+    // Aviation: JAERO (Inmarsat AERO) + Cospas-Sarsat 406 MHz.
+    'btnJaero','btnCospas',
+    // Maritime: Inmarsat STD-C (SOLAS messaging).
+    'btnStdc',
+    // Paging-adjacent 5-tone selective calling.
+    'btnCcir','btnCcitt','btnEea','btnEia','btnEuro',
+    // IoT / telemetry.
+    'btnRtl433','btnSonde','btnLora',
+    // Trunked / dispatch.
+    'btnLtr',
+    // Time-signal decoder retired — no demod layer.
+  ];
+
+  /** What the BACK keypad button + the × chip on the waterfall both do.
+   *  Removes whatever is in the foreground of the waterfall area, in
+   *  priority order: open picker matrix → active visualizer overlay →
+   *  active decoder panel. Each "active" decoder/visualizer button is
+   *  click()-ed to toggle it off through its existing handler. */
+  private closeForegroundOverlay(): void {
+    const modal = document.querySelector('.band-modal');
+    if (modal) { modal.remove(); return; }
+    let closedAny = false;
+    for (const id of Shell.VIZ_BUTTON_IDS) {
+      const el = document.getElementById(id);
+      if (el && el.classList.contains('active')) { el.click(); closedAny = true; }
+    }
+    if (closedAny) return;
+    for (const id of Shell.DECODER_BUTTON_IDS) {
+      const el = document.getElementById(id);
+      if (el && el.classList.contains('active')) el.click();
+    }
+  }
+
+  private installVizCloseChip(): void {
+    const chip = this.$('btnCloseViz') as HTMLElement | null;
+    if (!chip) return;
+    const visibleSelector =
+      [...Shell.VIZ_BUTTON_IDS, ...Shell.DECODER_BUTTON_IDS]
+        .map((id) => `#${id}.active`).join(',');
+    const refresh = () => {
+      chip.style.display = document.querySelector(visibleSelector) ? '' : 'none';
+    };
+    // Initial state.
+    refresh();
+    // Observe class changes on each visualizer button so we don't need
+    // to hook each toggle path individually.
+    const cb = () => refresh();
+    const mo = new MutationObserver(cb);
+    for (const id of [...Shell.VIZ_BUTTON_IDS, ...Shell.DECODER_BUTTON_IDS]) {
+      const el = document.getElementById(id);
+      if (el) mo.observe(el, { attributes: true, attributeFilter: ['class'] });
+    }
+    // Tap → close whatever's in the foreground (same as the BACK
+    // keypad button).
+    chip.addEventListener('click', () => {
+      this.closeForegroundOverlay();
+      refresh();
+    });
+  }
+
+  /** Close every band-modal picker currently on screen. Used as a
+   *  guard at the entry of each picker so opening a new panel always
+   *  replaces (not stacks) the previous one in a single click. */
+  private closeAllBandModals(): void {
+    document.querySelectorAll('.band-modal').forEach((el) => el.remove());
+  }
+
+  /** Anchor a band-modal picker over the waterfall area (instead of
+   *  the full viewport) so it doesn't cover the LED status bar or the
+   *  knobs/keypad below. The modal's flex `safe center` alignment
+   *  centers the grid when it fits and falls back to start-alignment
+   *  with scrolling when there are too many tiles to show at once.
+   *  Also lays the grid out roughly square (cols ≈ rows) so big
+   *  pickers don't sprawl as a long, narrow strip. */
+  private anchorPickerOverWaterfall(root: HTMLElement): void {
+    const wf = this.$('wf') as HTMLElement | null;
+    if (!wf) return;
+    const r = wf.getBoundingClientRect();
+    root.style.inset = 'auto';
+    root.style.left = `${r.left}px`;
+    root.style.top = `${r.top}px`;
+    root.style.width = `${r.width}px`;
+    root.style.height = `${r.height}px`;
+    // Square-ish column count. The default CSS uses auto-fit which
+    // packs as many columns as fit horizontally — but for a 44-tile
+    // INFO picker on a wide screen that's still a long, low rectangle.
+    // ceil(sqrt(N)) is a good "square" target; for small grids it
+    // naturally stays compact.
+    const grid = root.querySelector<HTMLElement>('.band-grid');
+    if (grid) {
+      const n = grid.querySelectorAll('.band-btn').length;
+      if (n > 0) {
+        const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      }
+    }
+  }
+
+  /** Modal listing every (SDR, profile) advertised by the connected
+   *  OpenWebRX server. Tap an entry → `selectprofile` is sent to the
+   *  client; the server retunes the hardware and pushes a new config. */
+  private openOwrxProfilePicker(): void {
+    if (!this.isOwrxSource()) {
+      this.banner('Switch to an OpenWebRX server first', 2000);
+      return;
+    }
+    if (!this.owrxProfiles.length) {
+      this.banner('No profiles yet — connect first', 2000);
+      return;
+    }
+    const sel = this.owrxSelectedProfile;
+    const root = document.createElement('div');
+    root.className = 'modal';
+    root.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-bar">
+          <div style="flex:1; font-weight:600; padding:0 8px;">Receivers &amp; profiles</div>
+          <button class="btn-close" aria-label="close">✕</button>
+        </div>
+        <div class="srv-list">
+          ${this.owrxProfiles.map(p => `
+            <div class="srv-row" data-pid="${escapeAttr(p.id)}">
+              <div class="srv-meta">
+                <div class="srv-title">${escapeAttr(p.name || p.id)} ${p.id === sel ? '· <span style="color:#0a0">active</span>' : ''}</div>
+                <div class="srv-sub">${escapeAttr(p.id)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(root);
+    const close = () => root.remove();
+    root.querySelector('.btn-close')?.addEventListener('click', close);
+    root.addEventListener('click', (e) => { if (e.target === root) close(); });
+    root.querySelectorAll('.srv-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const id = (row as HTMLElement).dataset.pid;
+        if (!id) return;
+        const client = this.client as OpenWebRxClient | null;
+        client?.selectProfileById?.(id);
+        this.banner(`Profile: ${id}`, 2200);
+        close();
+      });
+    });
+  }
+
+  /** Apply Vol × (RF for OWRX only) to the player. OpenWebRX has
+   *  server-side AGC and no client RF gain control, so the RF knob is
+   *  repurposed as a post-decode preamp (0..120 → ×0..×4 on top of Vol;
+   *  50 is unity). Kiwi keeps RF as the hardware-side manGain it
+   *  already controls; here we only adjust the audio output. */
+  private applyOutputGain(): void {
+    let g = (this.vol / 100) * 2.5;
+    if (this.isOwrxSource()) g *= Math.max(0, this.rfGain) / 50;
+    this.player.setGain(g);
+  }
+
   private bindTuneOnElement(el: HTMLElement) {
     let active = false;
     let lastSent = 0;
@@ -3112,10 +4512,22 @@ export class Shell {
       const r = el.getBoundingClientRect();
       const x = Math.max(0, Math.min(r.width - 1, e.clientX - r.left));
       const frac = x / r.width;
-      const totalBins = 1024 * (1 << this.zoom);
-      const binAt = this.wfStart + frac * 1024;
-      const freqHz = binAt * (this.bandwidthHz / totalBins);
-      const f = Math.round(freqHz / 100) / 10; // round to 0.1 kHz
+      let f: number;
+      if (this.isOwrxSource()) {
+        // OpenWebRX model: the rendered waterfall covers `bandwidthHz`
+        // centred on `owrxViewCenterKHz` (a separate value from the dial
+        // freq — the view only moves when the dial walks outside the
+        // window, so the cursor can actually track the dial inside it).
+        const spanKHz = this.bandwidthHz / 1000;
+        const centreKHz = this.owrxViewCenterKHz ?? this.freqKHz;
+        const loKHz = centreKHz - spanKHz / 2;
+        f = Math.round((loKHz + frac * spanKHz) * 10) / 10;
+      } else {
+        const totalBins = 1024 * (1 << this.zoom);
+        const binAt = this.wfStart + frac * 1024;
+        const freqHz = binAt * (this.bandwidthHz / totalBins);
+        f = Math.round(freqHz / 100) / 10; // round to 0.1 kHz
+      }
       if (f <= 0) return;
       if (Math.abs(f - this.freqKHz) >= 0.05) {
         this.freqKHz = f;
@@ -3158,9 +4570,28 @@ export class Shell {
 
   /** Place the FFT *and* waterfall cursors at the column for the tuned freq. */
   private refreshCursor() {
-    const totalBins = 1024 * (1 << this.zoom);
-    const binAtFreq = (this.freqKHz * 1000 / this.bandwidthHz) * totalBins;
-    const tRaw = (binAtFreq - this.wfStart) / 1024;
+    let tRaw: number;
+    let loKHz: number;
+    let hiKHz: number;
+    if (this.isOwrxSource()) {
+      // OpenWebRX renders a window of `bandwidthHz` centred on
+      // owrxViewCenterKHz. Cursor position is the dial freq's offset
+      // within that window — moves as the dial moves, only snaps to
+      // centre when the dial walks outside the window and the client
+      // re-anchors.
+      const spanKHz = this.bandwidthHz / 1000;
+      const centreKHz = this.owrxViewCenterKHz ?? this.freqKHz;
+      loKHz = centreKHz - spanKHz / 2;
+      hiKHz = centreKHz + spanKHz / 2;
+      tRaw = spanKHz > 0 ? (this.freqKHz - loKHz) / spanKHz : 0.5;
+    } else {
+      const totalBins = 1024 * (1 << this.zoom);
+      const binAtFreq = (this.freqKHz * 1000 / this.bandwidthHz) * totalBins;
+      tRaw = (binAtFreq - this.wfStart) / 1024;
+      const hzPerBin = this.bandwidthHz / totalBins;
+      loKHz = (this.wfStart * hzPerBin) / 1000;
+      hiKHz = ((this.wfStart + 1024) * hzPerBin) / 1000;
+    }
     const inView = tRaw >= 0 && tRaw <= 1;
     const t = Math.max(0, Math.min(1, tRaw));
     this.spectrum.setCursor(null);
@@ -3175,9 +4606,6 @@ export class Shell {
     setCursor('fftCursor');
     setCursor('wfCursor');
 
-    const hzPerBin = this.bandwidthHz / totalBins;
-    const loKHz = (this.wfStart * hzPerBin) / 1000;
-    const hiKHz = ((this.wfStart + 1024) * hzPerBin) / 1000;
     const labelLo = formatLabelKHz(loKHz);
     const labelHi = formatLabelKHz(hiKHz);
     this.$('fftFreqLo').textContent = labelLo;
@@ -3221,10 +4649,11 @@ export class Shell {
   }
 
 
-  private bindKnob(el: HTMLElement, id: 'vol' | 'sql' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg') {
+  private bindKnob(el: HTMLElement, id: 'vol' | 'sql' | 'gate' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg') {
     let startY = 0, startVal = 0, active = false;
     const sens = id === 'vol'   ? 0.5
                : id === 'sql'   ? 0.5
+               : id === 'gate'  ? 0.5    // 0..100 over the gate's threshold range
                : id === 'rf'    ? 0.6    // dB per pixel (0..120)
                : id === 'wlo'   ? 0.6    // bytes (0..255) per pixel
                : id === 'whi'   ? 0.6
@@ -3250,9 +4679,10 @@ export class Shell {
     });
   }
 
-  private getKnob(id: 'vol' | 'sql' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg'): number {
+  private getKnob(id: 'vol' | 'sql' | 'gate' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg'): number {
     return id === 'vol'   ? this.vol
          : id === 'sql'   ? this.sql
+         : id === 'gate'  ? this.gate
          : id === 'rf'    ? this.rfGain
          : id === 'lof'   ? this.lowCut
          : id === 'hif'   ? this.highCut
@@ -3261,11 +4691,11 @@ export class Shell {
          : this.vTrackGain;
   }
 
-  private setKnob(id: 'vol' | 'sql' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg', v: number) {
+  private setKnob(id: 'vol' | 'sql' | 'gate' | 'rf' | 'lof' | 'hif' | 'wlo' | 'whi' | 'vtg', v: number) {
     if (id === 'vol') {
       this.vol = clamp(v, 0, 100);
       // 0..100 → 0..2.5× gain (unity at ~40%, +8 dB at max).
-      this.player.setGain((this.vol / 100) * 2.5);
+      this.applyOutputGain();
     } else if (id === 'sql') {
       this.sql = clamp(v, 0, 40);
       this.client?.setSquelch(this.sql);
@@ -3274,6 +4704,12 @@ export class Shell {
       // 0..40 knob onto a dBm threshold above the noise floor (~-110).
       // 0 = gate fully open.
       this.player.setSquelchGate(this.sql > 0 ? -111 + this.sql : null);
+    } else if (id === 'gate') {
+      this.gate = clamp(Math.round(v), 0, 100);
+      localStorage.setItem('radiom.gate', String(this.gate));
+      // 0 = gate off (null threshold). 1..100 → -100..-1 dBFS.
+      const dbfs = this.gate > 0 ? -100 + this.gate : null;
+      this.player.setNoiseGate(dbfs);
     } else if (id === 'rf') {
       this.rfGain = clamp(Math.round(v), 0, 120);
       localStorage.setItem('radiom.rfGain', String(this.rfGain));
@@ -3281,6 +4717,10 @@ export class Shell {
       // other AGC mode the value is held for the next time the user
       // cycles to OFF.
       if (this.agcMode === 'off') this.client?.setAgc(false, this.rfGain);
+      // OpenWebRX has server-side AGC and no client RF gain control.
+      // Repurpose the RF knob as a client-side preamp so the operator
+      // can compensate for quiet receivers.
+      if (this.isOwrxSource()) this.applyOutputGain();
     } else if (id === 'lof') {
       this.lowCut = clamp(Math.round(v), -8000, this.highCut - 50);
       this.applyPassband();
@@ -3388,7 +4828,13 @@ export class Shell {
     localStorage.setItem('radiom.agcMode', this.agcMode);
     this.client?.setAgcMode(this.agcMode, this.rfGain);
     this.refreshAgcButton();
-    this.banner(`AGC: ${this.agcMode.toUpperCase()}`, 1200);
+    // OpenWebRX has server-side AGC and exposes no client knob. Use the
+    // RF knob as the preamp gain instead — the button just shows a hint.
+    if (this.isOwrxSource()) {
+      this.banner('AGC server-side on OWRX — use RF knob for level', 2200);
+    } else {
+      this.banner(`AGC: ${this.agcMode.toUpperCase()}`, 1200);
+    }
   }
 
   private refreshAgcButton() {
@@ -4261,6 +5707,13 @@ export class Shell {
    *  the cursor calculation in refreshCursor() matches what the server will
    *  send (centered on freqKHz). */
   private recenter() {
+    if (this.isOwrxSource()) {
+      // OWRX: the client-side slice owns view geometry; just re-anchor
+      // the visible window on the dial freq.
+      this.client?.setZoom(this.zoom, this.freqKHz);
+      this.refreshCursor();
+      return;
+    }
     const totalBins = 1024 * (1 << this.zoom);
     const binAtFreq = (this.freqKHz * 1000 / this.bandwidthHz) * totalBins;
     this.wfStart = Math.max(0, Math.min(totalBins - 1024, Math.round(binAtFreq - 512)));
@@ -4275,15 +5728,28 @@ export class Shell {
    *  ends up with the cursor "sticking" to the edge they're panning
    *  toward — the most natural behaviour for scanning across a band. */
   private panBy(deltaBins: number) {
-    const totalBins = 1024 * (1 << this.zoom);
-    this.wfStart = Math.max(0, Math.min(totalBins - 1024, this.wfStart + deltaBins));
-    const centerBin = this.wfStart + 512;
-    const centerKHz = (centerBin / totalBins) * (this.bandwidthHz / 1000);
-    this.client?.setZoom(this.zoom, centerKHz);
-
-    const hzPerBin = this.bandwidthHz / totalBins;
-    const loKHz = (this.wfStart * hzPerBin) / 1000;
-    const hiKHz = ((this.wfStart + 1024) * hzPerBin) / 1000;
+    let loKHz: number, hiKHz: number;
+    if (this.isOwrxSource()) {
+      // OWRX path: bandwidthHz is the *visible window*, not the SDR's
+      // full span, so the Kiwi-style 1024*(1<<zoom) accounting collapses.
+      // Pan by the same fraction of the visible window (deltaBins is in
+      // 1024-pixel canvas units, so deltaBins/1024 is the pan ratio).
+      const spanKHz = this.bandwidthHz / 1000;
+      const currentCentreKHz = this.owrxViewCenterKHz ?? this.freqKHz;
+      const newCentreKHz = currentCentreKHz + (deltaBins / 1024) * spanKHz;
+      this.client?.setZoom(this.zoom, newCentreKHz);
+      loKHz = newCentreKHz - spanKHz / 2;
+      hiKHz = newCentreKHz + spanKHz / 2;
+    } else {
+      const totalBins = 1024 * (1 << this.zoom);
+      this.wfStart = Math.max(0, Math.min(totalBins - 1024, this.wfStart + deltaBins));
+      const centerBin = this.wfStart + 512;
+      const centerKHz = (centerBin / totalBins) * (this.bandwidthHz / 1000);
+      this.client?.setZoom(this.zoom, centerKHz);
+      const hzPerBin = this.bandwidthHz / totalBins;
+      loKHz = (this.wfStart * hzPerBin) / 1000;
+      hiKHz = ((this.wfStart + 1024) * hzPerBin) / 1000;
+    }
     const margin = (hiKHz - loKHz) * 0.05;
     let clamped = this.freqKHz;
     if (clamped < loKHz + margin) clamped = loKHz + margin;
@@ -4371,6 +5837,9 @@ export class Shell {
     if (this.ssbfOn)       this.toggleSsbFiltered(this.ssbfSide);
     if (this.qrssOn)       this.toggleQrss();
     if (this.packetOn)     this.togglePacket();
+    if (this.packetVhfOn)  this.togglePacketVhf();
+    if (this.packet9600On) this.togglePacket9600();
+    if (this.packetIl2pOn) this.togglePacketIl2p();
     if (this.wsprOn)       this.toggleWspr();
     if (this.wspr15On)     this.toggleWspr15();
     if (this.jt9On)        this.toggleJt9();
@@ -4386,6 +5855,12 @@ export class Shell {
     if (this.jt4On)        this.toggleJt4();
     if (this.selcalOn)     this.toggleSelcal();
     if (this.pocsOn)       this.togglePocs();
+    if (this.dsdOn)        this.toggleDsd(this.dsdMode);
+    if (this.multimonOn)   this.toggleMultimon(this.multimonMode);
+    if (this.vendoredOn && this.vendoredKind)
+      this.toggleVendored(this.vendoredKind,
+        this.vendoredEndpointFor(this.vendoredKind),
+        this.vendoredSinkFor(this.vendoredKind));
     if (this.mcwOn)        this.toggleMcw();
     if (this.js8On)        this.toggleJs8();
     if (this.fst4On)       this.toggleFst4();
@@ -4399,6 +5874,7 @@ export class Shell {
     if (this.sDialOn)      this.toggleSDial();
     if (this.driftOn)      this.toggleDrift();
     if (this.scopeOn)      this.toggleScope();
+    if (this.thdOn)        this.toggleThd();
     if (this.grayOn)       this.toggleGray();
     if (this.vectOn)       this.toggleVect();
     if (this.iqEyeOn)      this.toggleIqEye();
@@ -4411,18 +5887,12 @@ export class Shell {
   }
 
   private async connect() {
-    const raw = (this.$('server') as HTMLInputElement).value.trim();
-    const [host, portStr] = raw.split(':');
-    const port = +(portStr || '8073');
-    if (!host) return;
-    localStorage.setItem('radiom.lastServer', raw);
+    const source = (localStorage.getItem('radiom.activeSource') as 'kiwi' | 'owrx' | 'rtl') || 'kiwi';
     this.client?.disconnect();
-    if (this.rxChans == null) this.seedUsersFromEntry(findServerEntry(raw));
-    this.refresh();
 
     try {
       const sr = await this.player.start((s) => this.log(s));
-      this.player.setGain((this.vol / 100) * 2.5);
+      this.applyOutputGain();
       this.player.setVoiceTrackGain(this.vTrackGain);
       this.player.setVoiceTrack2Gain(this.vTrackGain);
       this.player.setVoiceTrack3Gain(this.vTrackGain);
@@ -4431,132 +5901,110 @@ export class Shell {
       this.log('audio start FAILED: ' + (e as Error).message);
     }
 
-    this.client = new KiwiClient(
-      { host, port, ident: this.settings.callSign, geoLocation: this.settings.geoLocation },
-      {
-        onStatus: (s) => {
-          // If the user has powered off in the meantime, ignore late
-          // status callbacks from the (still-tearing-down) KiwiClient —
-          // otherwise the LED would briefly resume blinking amber after
-          // the receiver was turned off.
-          if (!this.powered) { this.setLedDot('off'); return; }
-          this.setLedDot(s.connected ? 'on' : 'connecting');
-        },
-        onMessage: (kv) => {
-          if (kv._debug) { this.log(kv._debug); return; }
-          // MSG frames count as liveness — the no-data watchdog only
-          // checked audio/wf, but on a kiwi where audio_init=0 (e.g.
-          // requires keepalive ramp-up) the connection looks dead even
-          // though MSGs keep arriving every second.
-          this.lastFrameTs = Date.now();
-          // Keep the latest value of every kv key (no history) so the
-          // Settings → "Show stats" panel can list them.
-          for (const k in kv) this.lastKv[k] = kv[k];
-          this.refreshKiwiDiag();
-          if (kv.audio_rate) this.player.setInputRate(+kv.audio_rate);
-          // sample_rate is the *actual* rate (e.g. 11998.877) — supersedes the
-          // nominal audio_rate=12000 to keep the resampler in lock-step.
-          if (kv.sample_rate) this.player.setInputRate(+kv.sample_rate);
-          if (kv.bandwidth) {
-            const bw = +kv.bandwidth;
-            if (bw > 0 && bw !== this.bandwidthHz) {
-              this.bandwidthHz = bw;
-              this.recenter();
-            }
-          }
-          // rx_chans = total slots on this Kiwi.
-          if (kv.rx_chans != null) {
-            const n = +kv.rx_chans;
-            if (n > 0) { this.rxChans = n; this.refresh(); }
-          }
-          // user_cb (modern firmware): JSON array of listener entries.
-          if (kv.user_cb && kv.user_cb.startsWith('[')) {
-            try {
-              const arr = JSON.parse(kv.user_cb);
-              if (Array.isArray(arr)) {
-                this.usersOnline = arr.filter((u: { i?: number }) => u && u.i != null).length;
-                this.refresh();
-              }
-            } catch { /* malformed JSON */ }
-          }
-          // stats_cb (modern firmware): JSON of board health stats.
-          if (kv.stats_cb && kv.stats_cb.startsWith('{')) {
-            try {
-              const s = JSON.parse(kv.stats_cb) as {
-                ci?: number[]; cu?: number[]; cs?: number[];
-                ga?: number; gf?: number; gc?: number;
-                wsr?: number; sr?: number;
-              };
-              // CPU = 100 - idle. ci is per-core idle %; first core is enough.
-              if (Array.isArray(s.ci) && s.ci.length > 0) {
-                this.cpuPct = Math.max(0, Math.min(100, 100 - s.ci[0]));
-              }
-              if (s.ga != null) this.gpsLocked = s.ga > 0;
-              this.refresh();
-            } catch { /* malformed JSON */ }
-          }
-          // Legacy / alternate keys.
-          if (kv.cpu_pct != null) { this.cpuPct = +kv.cpu_pct; this.refresh(); }
-          if (kv.temp_c != null) { this.tempC = +kv.temp_c; this.refresh(); }
-          if (kv.mem_avail != null) { this.memAvailKB = +kv.mem_avail; this.refresh(); }
-          if (kv.adc_ov != null) { this.adcOv = +kv.adc_ov; this.refresh(); }
-          if (kv.audio_dropped_samples != null) { this.droppedAudio = +kv.audio_dropped_samples; this.refresh(); }
-          if (kv.wf_dropped_frames != null) { this.droppedWf = +kv.wf_dropped_frames; this.refresh(); }
-          if (kv.wf_fps != null) { this.wfFps = +kv.wf_fps; this.refresh(); }
-          if (kv.wf_fps_max != null) { this.wfFpsMax = +kv.wf_fps_max; this.refresh(); }
-          if (kv.zoom_max != null) { this.zoomMax = +kv.zoom_max; this.refresh(); }
-          if (kv.version_maj != null || kv.version_min != null) {
-            const maj = kv.version_maj ?? this.fwVersion?.split('.')[0]?.replace(/^v/, '') ?? '?';
-            const min = kv.version_min ?? this.fwVersion?.split('.')[1] ?? '?';
-            this.fwVersion = `v${maj}.${min}`;
-            this.refresh();
-          }
-          if (kv.gps_locked != null) { this.gpsLocked = kv.gps_locked === '1' || kv.gps_locked.toLowerCase() === 'true'; this.refresh(); }
-          if (kv.gps_good != null) { this.gpsLocked = +kv.gps_good > 0; this.refresh(); }
-          // Plain numeric users key (older firmware).
-          if (kv.users != null && /^\d+$/.test(kv.users)) {
-            this.usersOnline = +kv.users;
-            this.refresh();
-          }
-          const parts = Object.entries(kv).map(([k, v]) => {
-            if (!v) return k;
-            const short = v.length > 80 ? v.slice(0, 77) + '…' : v;
-            return `${k}=${short}`;
-          });
-          this.log('MSG ' + parts.join(' '));
-        },
-        onAudio: (f) => {
-          this.lastFrameTs = Date.now();
-          this.player.pushAudio(f);
-          // Update s-meter from RSSI (smoothed).
-          const a = 0.2;
-          this.smeterDbm = this.smeterDbm * (1 - a) + f.rssiDbm * a;
-          // S-PLOT capture — append the raw (un-smoothed) RSSI so the
-          // plot retains the dynamic range of the underlying signal.
-          if (this.sPlotOn) this.sPlotPushSample(f.rssiDbm);
-        },
-        // The averaged-FFT heatmap is permanently hidden, so don't feed
-        // bins into the FftAverager — pushFrame would otherwise allocate
-        // a Uint8Array copy and re-sum every stored frame each push, all
-        // for output that's never rendered.
-        onWaterfall: (f) => {
-          this.lastFrameTs = Date.now();
-          this.lastWfBins = f.bins;
-          this.lastWfXBinServer = f.xBinServer;
-          this.spectrum.pushFrame(f);
-          if (this.wfAutoMode > 0) this.feedWfHist(f.bins);
-        },
-        onError: (e) => { this.log('ERR ' + e.message); this.captureCloseDiag(e.message); this.refreshKiwiDiag(); },
-        onClose: () => { this.log('socket closed'); this.refreshKiwiDiag(); },
+    // Shared handler bundle — both sources adapt their wire format into
+    // Kiwi-shaped AudioFrame / WaterfallFrame / kv messages, so the same
+    // closures work for either. KV keys that only one source emits (e.g.
+    // Kiwi's `audio_rate`, OpenWebRX's `clients`) just fall through the
+    // ifs for the other source.
+    const handlers = {
+      onStatus: (s: KiwiStatus) => {
+        if (!this.powered) { this.setLedDot('off'); return; }
+        this.setLedDot(s.connected ? 'on' : 'connecting');
       },
-    );
+      onMessage: this.makeKvHandler(),
+      onAudio: (f: AudioFrame) => {
+        this.lastFrameTs = Date.now();
+        this.player.pushAudio(f);
+        const a = 0.2;
+        this.smeterDbm = this.smeterDbm * (1 - a) + f.rssiDbm * a;
+        if (this.sPlotOn) this.sPlotPushSample(f.rssiDbm);
+      },
+      onWaterfall: (f: WaterfallFrame) => {
+        this.lastFrameTs = Date.now();
+        this.lastWfBins = f.bins;
+        this.lastWfXBinServer = f.xBinServer;
+        this.spectrum.pushFrame(f);
+        if (this.wfAutoMode > 0) this.feedWfHist(f.bins);
+      },
+      onError: (e: Error) => { this.log('ERR ' + e.message); this.captureCloseDiag(e.message); this.refreshKiwiDiag(); },
+      onClose: () => { this.log('socket closed'); this.refreshKiwiDiag(); },
+    } as const;
+
+    let originLabel: string;
+    if (source === 'owrx') {
+      const url = localStorage.getItem('radiom.lastOwrxServer') || '';
+      if (!url) { this.log('no OpenWebRX server picked'); return; }
+      // Pick an output rate that's an integer divisor of the player's
+      // AudioContext sample rate so the upsample is exactly ×N (no
+      // fractional resampling). Same algorithm the native OWRX page
+      // uses. Apply to the player BEFORE the first audio frame arrives.
+      const ctxSR = this.player.getAudioRate?.() ?? 48000;
+      const outRate = OpenWebRxClient.pickOutputRate(ctxSR, 8000, 12000) ?? 12000;
+      this.player.setInputRate(outRate);
+      this.log(`owrx output_rate=${outRate} (ctxSR=${ctxSR})`);
+      this.refresh();
+      this.client = new OpenWebRxClient(
+        {
+          url: owrxWsUrl(url),
+          ident: this.settings.callSign,
+          audioOutRate: outRate,
+          ctxSampleRate: ctxSR,
+        },
+        handlers,
+      );
+      originLabel = `OpenWebRX ${url}`;
+    } else if (source === 'rtl') {
+      const url = localStorage.getItem('radiom.lastRtlServer') || (this.$('server') as HTMLInputElement).value.trim();
+      if (!url || !/^[\w.-]+:\d+$/.test(url)) {
+        this.log('no rtl_tcp server picked (expecting host:port)');
+        return;
+      }
+      // rtl_tcp is pure IQ. We don't get audio frames — the player's
+      // existing IQ pipeline (HFDL / ISB / etc.) handles whatever the
+      // user picks for demod. Set the input rate hint to the decimated
+      // output (250 kS/s default).
+      this.player.setInputRate(250_000);
+      this.refresh();
+      const rtlClient = new RtlTcpClient(
+        { url, centerHz: Math.round(this.freqKHz * 1000) },
+        {
+          onMessage: handlers.onMessage,
+          onError:   handlers.onError,
+          onClose:   handlers.onClose,
+          onStatus:  (s) => handlers.onStatus?.({
+            connected: s.connected, sampleRate: 250_000,
+            centerFreq: Math.round(this.freqKHz * 1000), bandwidth: 250_000,
+          } as KiwiStatus),
+          // RTL emits IQ samples directly — route to player.onIq so the
+          // existing IQ-consuming decoders (HFDL/ISB/SSBf/LRPT) work.
+          onIq: (iq) => { this.player.onIq?.(iq); },
+        },
+      );
+      // The wrapper exposes connect()/setTune() shape the shell expects.
+      // RtlTcpClient already opens its WS in the constructor; the
+      // shell's `this.client.connect()` below is a no-op for it.
+      this.client = rtlClient;
+      originLabel = `rtl_tcp ${url}`;
+    } else {
+      const raw = (this.$('server') as HTMLInputElement).value.trim();
+      const [host, portStr] = raw.split(':');
+      const port = +(portStr || '8073');
+      if (!host) return;
+      localStorage.setItem('radiom.lastServer', raw);
+      if (this.rxChans == null) this.seedUsersFromEntry(findServerEntry(raw));
+      this.refresh();
+      originLabel = `${host}:${port}`;
+      this.client = new KiwiClient(
+        { host, port, ident: this.settings.callSign, geoLocation: this.settings.geoLocation },
+        handlers,
+      );
+    }
     this.client.connect();
     // Hide any leftover no-data banner from a previous session.
     const ndlInit = this.root.querySelector('#noDataLabel') as HTMLElement | null;
     if (ndlInit) ndlInit.style.display = 'none';
-    // No-data watchdog: when no audio/wf frame arrives for >10 s
-    // (after the connection was at least once alive), surface a banner
-    // and tear down the connection.
+    // No-data watchdog: when no audio/wf frame arrives for >12 s, surface
+    // a banner and tear down the connection.
     this.lastFrameTs = Date.now();
     if (this.wfAutoMode > 0) this.startWfAutoTimer();
     if (this.noDataTimer != null) clearInterval(this.noDataTimer);
@@ -4568,19 +6016,149 @@ export class Shell {
         this.disconnect();
       }
     }, 1000) as unknown as number;
-    // Apply current state once connected.
+    // Apply current state once connected. OpenWebRxClient's no-op stubs
+    // (NR/ADPCM/NB/AGC/WfSpeed) make the unconditional calls safe for
+    // either source.
     this.client.setTune({ mode: this.mode, freqKHz: this.freqKHz, lowCutHz: this.lowCut, highCutHz: this.highCut });
     this.client.setSquelch(this.sql);
     this.player.setSquelchGate(this.sql > 0 ? -111 + this.sql : null);
-    this.client.setNoiseReduction(this.toggles.nr);
+    this.player.setNoiseGate(this.gate > 0 ? -100 + this.gate : null);
+    this.client.setNoiseReduction(this.nrMode);
     this.client.setAdpcm(this.toggles.adpcm);
     this.client.setWfSpeed(this.wfSpeed);
     if (this.nbMode > 0) this.client.setNoiseBlanker(this.nbMode);
     if (this.agcMode !== 'med') this.client.setAgcMode(this.agcMode, this.rfGain);
     this.player.setCompressor(this.toggles.comp);
-    this.player.setGain((this.vol / 100) * 2.5);
+    this.applyOutputGain();
     this.recenter();
-    this.log(`connecting to ${host}:${port}`);
+    this.log(`connecting to ${originLabel}`);
+  }
+
+  /** Factored kv-message handler so both KiwiClient and OpenWebRxClient
+   *  can share the same closure. Keys an OpenWebRX never emits (rx_chans,
+   *  user_cb, stats_cb, etc.) just fall through their ifs harmlessly. */
+  private makeKvHandler(): (kv: Record<string, string>) => void {
+    return (kv) => {
+      if (kv._debug) { this.log(kv._debug); return; }
+      this.lastFrameTs = Date.now();
+      for (const k in kv) this.lastKv[k] = kv[k];
+      this.refreshKiwiDiag();
+      if (kv.audio_rate) this.player.setInputRate(+kv.audio_rate);
+      if (kv.sample_rate) this.player.setInputRate(+kv.sample_rate);
+      if (kv.bandwidth) {
+        const bw = +kv.bandwidth;
+        if (bw > 0 && bw !== this.bandwidthHz) {
+          this.bandwidthHz = bw;
+          this.recenter();
+        }
+      }
+      if (kv.rx_chans != null) {
+        const n = +kv.rx_chans;
+        if (n > 0) { this.rxChans = n; this.refresh(); }
+      }
+      if (kv.user_cb && kv.user_cb.startsWith('[')) {
+        try {
+          const arr = JSON.parse(kv.user_cb);
+          if (Array.isArray(arr)) {
+            this.usersOnline = arr.filter((u: { i?: number }) => u && u.i != null).length;
+            this.refresh();
+          }
+        } catch { /* malformed JSON */ }
+      }
+      if (kv.stats_cb && kv.stats_cb.startsWith('{')) {
+        try {
+          const s = JSON.parse(kv.stats_cb) as {
+            ci?: number[]; ga?: number;
+          };
+          if (Array.isArray(s.ci) && s.ci.length > 0) {
+            this.cpuPct = Math.max(0, Math.min(100, 100 - s.ci[0]));
+          }
+          if (s.ga != null) this.gpsLocked = s.ga > 0;
+          this.refresh();
+        } catch { /* malformed JSON */ }
+      }
+      if (kv.cpu_pct != null) { this.cpuPct = +kv.cpu_pct; this.refresh(); }
+      if (kv.temp_c != null) { this.tempC = +kv.temp_c; this.refresh(); }
+      if (kv.mem_avail != null) { this.memAvailKB = +kv.mem_avail; this.refresh(); }
+      if (kv.adc_ov != null) { this.adcOv = +kv.adc_ov; this.refresh(); }
+      if (kv.audio_dropped_samples != null) { this.droppedAudio = +kv.audio_dropped_samples; this.refresh(); }
+      if (kv.wf_dropped_frames != null) { this.droppedWf = +kv.wf_dropped_frames; this.refresh(); }
+      if (kv.wf_fps != null) { this.wfFps = +kv.wf_fps; this.refresh(); }
+      if (kv.wf_fps_max != null) { this.wfFpsMax = +kv.wf_fps_max; this.refresh(); }
+      if (kv.zoom_max != null) { this.zoomMax = +kv.zoom_max; this.refresh(); }
+      if (kv.version_maj != null || kv.version_min != null) {
+        const maj = kv.version_maj ?? this.fwVersion?.split('.')[0]?.replace(/^v/, '') ?? '?';
+        const min = kv.version_min ?? this.fwVersion?.split('.')[1] ?? '?';
+        this.fwVersion = `v${maj}.${min}`;
+        this.refresh();
+      }
+      if (kv.gps_locked != null) { this.gpsLocked = kv.gps_locked === '1' || kv.gps_locked.toLowerCase() === 'true'; this.refresh(); }
+      if (kv.gps_good != null) { this.gpsLocked = +kv.gps_good > 0; this.refresh(); }
+      if (kv.users != null && /^\d+$/.test(kv.users)) {
+        this.usersOnline = +kv.users;
+        this.refresh();
+      }
+      // OpenWebRX-only key: server-side listener count.
+      if (kv.clients != null && /^\d+$/.test(kv.clients)) {
+        this.usersOnline = +kv.clients;
+        this.refresh();
+      }
+      // OpenWebRX: full profile list (one entry per SDR + per band
+       // preset on the server). Cached so the long-press picker can show
+       // them without re-querying.
+      if (kv.owrx_profiles_json) {
+        try {
+          const arr = JSON.parse(kv.owrx_profiles_json) as Array<{ id: string; name: string }>;
+          if (Array.isArray(arr)) this.owrxProfiles = arr;
+        } catch { /* ignore malformed */ }
+      }
+      if (kv.owrx_selected_profile != null) {
+        this.owrxSelectedProfile = kv.owrx_selected_profile || null;
+      }
+      // OWRX: when the operator picks a profile via the picker, the
+      // client snaps the dial to the new band's centre. Mirror that on
+      // the shell so the LED dial, cursor, and decoder freq stay in sync.
+      if (kv.owrx_dial_freq_khz != null && /^-?\d/.test(kv.owrx_dial_freq_khz)) {
+        const f = parseFloat(kv.owrx_dial_freq_khz);
+        if (Number.isFinite(f) && f > 0) {
+          this.freqKHz = f;
+          this.owrxViewCenterKHz = f;
+          this.refresh();
+          this.refreshCursor();
+        }
+      }
+      // OpenWebRX-only key: centre of the currently rendered FFT slice.
+      // Cursor + click-to-tune math reads this so the cursor tracks the
+      // dial within the visible window.
+      // Allow a leading '-' — VLF/LF profiles centred near 0 Hz produce
+      // negative clamped view-centres when the visible window spans the
+      // origin (e.g. centre=10 kHz, span=20 kHz → window lo = -10 kHz).
+      if (kv.owrx_view_center_khz != null && /^-?\d/.test(kv.owrx_view_center_khz)) {
+        const v = parseFloat(kv.owrx_view_center_khz);
+        if (Number.isFinite(v) && v !== this.owrxViewCenterKHz) {
+          // If the view-centre jumped further than the visible span
+          // (i.e. the dial walked outside the window and the client
+          // re-anchored), the historical rows currently on the
+          // waterfall canvas are now misaligned — they show old
+          // bins under a freq scale that no longer matches. Clear so
+          // the new range scrolls in on a fresh canvas. Matches how
+          // KiwiSDR feels when the view auto-recenters.
+          const spanKHz = this.bandwidthHz / 1000;
+          if (this.owrxViewCenterKHz != null && spanKHz > 0 &&
+              Math.abs(v - this.owrxViewCenterKHz) > spanKHz) {
+            this.spectrum.clearWaterfall();
+          }
+          this.owrxViewCenterKHz = v;
+          this.refreshCursor();
+        }
+      }
+      const parts = Object.entries(kv).map(([k, v]) => {
+        if (!v) return k;
+        const short = v.length > 80 ? v.slice(0, 77) + '…' : v;
+        return `${k}=${short}`;
+      });
+      this.log('MSG ' + parts.join(' '));
+    };
   }
 
   private disconnect() {
@@ -4658,6 +6236,21 @@ export class Shell {
           this.pending = null;
         }
         break;
+      case 'mhz':
+        // Same as 'set' but the typed digits are interpreted as MHz —
+        // multiply by 1000 to get kHz. Lets the operator type "144"
+        // for 144 000 kHz (2 m) or "14.180" for 14 180 kHz (20 m USB)
+        // without spelling out every digit.
+        if (this.pending) {
+          const f = parseFloat(this.pending);
+          if (Number.isFinite(f) && f > 0) {
+            this.freqKHz = f * 1000;
+            this.client?.setFreqKHz(this.freqKHz);
+            this.recenter();
+          }
+          this.pending = null;
+        }
+        break;
       case 'del':
         if (this.pending && this.pending.length > 0) {
           this.pending = this.pending.slice(0, -1) || null;
@@ -4683,6 +6276,21 @@ export class Shell {
         break;
       case 'seek': this.seek(); break;
       case 'filter': this.openFilterPicker(); break;
+      case 'modePicker': this.openModePicker(); break;
+      case 'dspPicker':  this.openDspPicker();  break;
+      case 'infoPicker': this.openInfoPicker(); break;
+      case 'dispPicker': this.openDispPicker(); break;
+      case 'decAPicker': this.openDecPicker('A'); break;
+      case 'decBPicker': this.openDecPicker('B'); break;
+      case 'freqPicker': this.openFreqPicker(); break;
+      // Proxy commands — these click the canonical button (which is now
+      // hidden in the topbar fnrow). Keeps the existing open-modal /
+      // toggle logic in one place.
+      case 'gen': document.querySelector<HTMLElement>('#btnModes')?.click(); break;
+      case 'sid': document.querySelector<HTMLElement>('#btnSigId2')?.click(); break;
+      case 'back': this.closeForegroundOverlay(); break;
+      // NOTE: 'mem' is handled by the openPresetsModal case earlier in
+      // this switch — the proxy form duplicates that case and never runs.
       case 'dec': this.toggleKeypadDec(); break;
       case 'speedBtn': this.cycleSpeed(); break;
       case 'cent':
@@ -4696,6 +6304,23 @@ export class Shell {
         this.client?.setNoiseBlanker(this.nbMode);
         const names = ['off', 'std', 'auto', "Wild's"];
         this.banner(`NB: ${names[this.nbMode]}`, 1500);
+        break;
+      }
+      case 'nr': {
+        // Source-aware cycle: KiwiSDR's NR has always been a boolean
+        // toggle (preserve that behaviour exactly). OpenWebRX exposes a
+        // 4-position enum (off/wdsp/lms/spec).
+        const N = this.isOwrxSource() ? 4 : 2;
+        this.nrMode = (this.nrMode + 1) % N;
+        this.client?.setNoiseReduction(this.nrMode);
+        const names = this.isOwrxSource()
+          ? ['off', 'wdsp', 'lms', 'spec']
+          : ['off', 'on'];
+        const label = this.isOwrxSource()
+          ? `NR: ${names[this.nrMode]}`
+          : `NR ${names[this.nrMode]} (server-side; some Kiwis ignore)`;
+        this.banner(label, 1500);
+        this.$$('button[data-cmd="nr"]').forEach(b => b.classList.toggle('active', this.nrMode > 0));
         break;
       }
       default:
@@ -4913,6 +6538,9 @@ export class Shell {
     void s.callSign;
     this.refreshKiwiDiag();
     this.applyWhisper();
+    // Large-tuning-steps row visibility (Settings → Display).
+    const largeRow = document.getElementById('freqRowLarge');
+    if (largeRow) largeRow.style.display = s.showLargeTuningRow ? '' : 'none';
     // Waterfall FPS — moved from the (now-hidden) FPS button to Settings.
     if (Number.isFinite(s.wfSpeed) && s.wfSpeed !== this.wfSpeed) {
       this.wfSpeed = s.wfSpeed;
@@ -5214,6 +6842,10 @@ export class Shell {
         baseline.push(`${used}/${kv.rx_chans} slots`);
       }
       if (kv.audio_rate) baseline.push(`${(+kv.audio_rate / 1000).toFixed(1)} kHz audio`);
+      // OpenWebRX coverage — current profile's centre ± samp_rate/2,
+      // formatted server-side by OpenWebRxClient. Shown so the operator
+      // knows the tunable range without trial-and-error.
+      if (kv.owrx_coverage_label) baseline.push(kv.owrx_coverage_label);
       if (Object.keys(kv).length === 0) baseline.push('no Kiwi MSG yet');
       else baseline.push('OK');
       el.textContent = baseline.join(' · ');
@@ -5394,6 +7026,12 @@ export class Shell {
   private navtexOn = false;
   private navtexDecoder: NAVTEXDecoder | null = null;
   private packetOn = false;
+  private packetVhfOn = false;
+  private packetVhfDecoder: PacketDecoder | null = null;
+  private packet9600On = false;
+  private packet9600Decoder: PacketDecoder | null = null;
+  private packetIl2pOn = false;
+  private packetIl2pDecoder: PacketDecoder | null = null;
   private packetDecoder: PacketDecoder | null = null;
   private wsprOn = false;
   private wsprDecoder: WsprDecoder | null = null;
@@ -5431,6 +7069,25 @@ export class Shell {
   private selcalDecoder: SelcalDecoder | null = null;
   private pocsOn = false;
   private pocsDecoder: PocsagDecoder | null = null;
+  /** DSD digital-voice metadata decoder. Single instance — mode flag
+   *  switches between D-STAR / DMR / NXDN / YSF / dPMR / M17 / P25. */
+  private dsdOn = false;
+  private dsdMode: DsdMode = 'dmr';
+  private dsdDecoder: DsdDecoder | null = null;
+  /** Operator-adjustable gain for the decoded DSD voice (multiplier
+   *  applied to the per-decoder GainNode). 1.8× default to compensate
+   *  for IMBE/AMBE output sitting quieter than analog speech. */
+  private dsdGain = 1.8;
+  /** Generic multimon-ng modes — single decoder instance, mode flag
+   *  swapped when the operator picks a different protocol. */
+  private multimonOn = false;
+  private multimonMode: MultimonMode = 'flex';
+  private multimonDecoder: MultimonDecoder | null = null;
+  /** Vendored-binary decoders — one shared state slot since they all
+   *  emit into the same text panel and only one runs at a time. */
+  private vendoredOn = false;
+  private vendoredKind: 'msk144'|'ais'|'acars'|'tetrapol'|'op25'|'lrpt'|null = null;
+  private vendoredDecoder: VendoredDecoder | null = null;
   /** Most recent received SSTV image — kept around so the SAVE
    *  button can drop it to disk. */
   private sstvLastImage: SstvImage | null = null;
@@ -5440,6 +7097,25 @@ export class Shell {
   private fst4Decoder: Fst4Decoder | null = null;
   // Audio oscilloscope state — captured float samples and trigger config.
   private scopeOn = false;
+  // High-resolution audio FFT panel — 16384-point single-sided FFT of
+  // the demodulated audio, 0..6 kHz (Nyquist @ 12 kHz input). Same
+  // Int16 feed as the SCOP panel via player.onThd. The ~1.4-s window
+  // gives ~0.73 Hz bin resolution.
+  private thdOn = false;
+  private thdBuf = new Float32Array(16384);
+  private thdBufWrite = 0;
+  private thdRaf: number | null = null;
+  /** Hover cursor X (CSS px from canvas left). Null when pointer is
+   *  outside the canvas — no cursor drawn, status line shows defaults. */
+  private thdCursorX: number | null = null;
+  private thdCursorBound = false;
+  /** Running-average ring for spectrum smoothing — last N magnitude
+   *  arrays summed bin-wise. Mean = sum / actualFrames. */
+  private static readonly THD_AVG_LEN = 80;
+  private thdMagHist: Float32Array[] = [];
+  private thdMagSum: Float32Array | null = null;
+  private thdMagWrite = 0;
+  private thdMagFilled = 0;
   private scopeBuf = new Float32Array(4096);   // ring of recent audio
   private scopeBufWrite = 0;
   private scopeRaf: number | null = null;
@@ -6354,12 +8030,13 @@ export class Shell {
                      : dec6.style.display !== 'none' ? 'dec6'
                      : dec9.style.display !== 'none' ? 'dec9'
                      : decA.style.display !== 'none' ? 'decA' : 'decB';
+    // Skip the 4 decoder pages (dec / dec3 / dec7 / dec8) in the
+    // cycle — they're now reachable only through the DECA / DECB
+    // list picker. The buttons stay in the DOM so the picker can
+    // .click() them; they're just no longer browsable from the
+    // keypad PAGE cycle.
     const next: K =
-      visible === 'num'  ? 'dec'  :
-      visible === 'dec'  ? 'dec3' :
-      visible === 'dec3' ? 'dec7' :
-      visible === 'dec7' ? 'dec8' :
-      visible === 'dec8' ? 'dec4' :
+      visible === 'num'  ? 'dec4' :
       visible === 'dec4' ? 'dec5' :
       visible === 'dec5' ? 'dec6' :
       visible === 'dec6' ? 'dec9' :
@@ -6367,16 +8044,17 @@ export class Shell {
       visible === 'decA' ? 'decB' :
                            'num';
     num.style.display  = next === 'num'  ? '' : 'none';
-    dec.style.display  = next === 'dec'  ? '' : 'none';
-    dec3.style.display = next === 'dec3' ? '' : 'none';
-    dec7.style.display = next === 'dec7' ? '' : 'none';
-    dec8.style.display = next === 'dec8' ? '' : 'none';
     dec4.style.display = next === 'dec4' ? '' : 'none';
     dec5.style.display = next === 'dec5' ? '' : 'none';
     dec6.style.display = next === 'dec6' ? '' : 'none';
     dec9.style.display = next === 'dec9' ? '' : 'none';
     decA.style.display = next === 'decA' ? '' : 'none';
     decB.style.display = next === 'decB' ? '' : 'none';
+    // Decoder pages stay hidden — list picker is the only access path.
+    dec.style.display  = 'none';
+    dec3.style.display = 'none';
+    dec7.style.display = 'none';
+    dec8.style.display = 'none';
   }
 
   /** Open the decoder-reference modal. Introspects every keypad-pad
@@ -6491,6 +8169,7 @@ export class Shell {
   private openFilterPicker() {
     const root = document.createElement('div');
     root.className = 'band-modal ftx-picker';
+    root.dataset.pickerId = 'bw';
     root.innerHTML = `
       <div class="band-grid">
         ${FILTER_WIDTHS.map((w) => {
@@ -11271,6 +12950,192 @@ export class Shell {
     ctx.stroke();
   }
 
+  /** High-resolution audio FFT panel — 16384-pt single-sided
+   *  log-magnitude spectrum of the demodulated audio, 0..6 kHz. */
+  private toggleThd() {
+    this.thdOn = !this.thdOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnThd');
+    const panel = this.$('thdPanel');
+    btn.classList.toggle('active', this.thdOn);
+    panel.style.display = this.thdOn ? '' : 'none';
+    if (this.thdOn) {
+      this.thdBuf.fill(0);
+      this.thdBufWrite = 0;
+      // Wipe the running-average ring so reopening always starts
+      // fresh — otherwise we'd briefly show the stale average from
+      // the previous session.
+      this.thdMagHist = [];
+      this.thdMagSum = null;
+      this.thdMagWrite = 0;
+      this.thdMagFilled = 0;
+      this.player.onThd = (s) => this.feedThd(s);
+      // Hover cursor: track pointer X relative to the canvas so the
+      // draw routine can overlay a vertical line + freq/amplitude
+      // readout. Bind once (canvas element is permanent in the DOM).
+      if (!this.thdCursorBound) {
+        const canvas = this.$('thdCanvas') as HTMLCanvasElement;
+        canvas.addEventListener('pointermove', (e) => {
+          const r = canvas.getBoundingClientRect();
+          this.thdCursorX = e.clientX - r.left;
+        });
+        canvas.addEventListener('pointerleave', () => { this.thdCursorX = null; });
+        this.thdCursorBound = true;
+      }
+      const tick = () => {
+        if (!this.thdOn) { this.thdRaf = null; return; }
+        this.drawThd();
+        this.thdRaf = requestAnimationFrame(tick);
+      };
+      this.thdRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onThd = null;
+      if (this.thdRaf != null) { cancelAnimationFrame(this.thdRaf); this.thdRaf = null; }
+    }
+  }
+
+  private feedThd(samples: Int16Array) {
+    const buf = this.thdBuf;
+    const N = buf.length;
+    let w = this.thdBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.thdBufWrite = w;
+  }
+
+  private drawThd() {
+    const canvas = this.$('thdCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    const N = this.thdBuf.length;          // 16384 (power of 2)
+    const sr = this.player.getInputRate() || 12000;
+    // Linearise + Hann window in one pass.
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    const buf = this.thdBuf;
+    const wIdx = this.thdBufWrite;
+    const twoPiOverN = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const v = buf[(wIdx + i) % N];
+      const w = 0.5 * (1 - Math.cos(twoPiOverN * i));   // Hann
+      re[i] = v * w;
+    }
+    this.fftInPlace(re, im);
+
+    // Single-sided magnitude (DC ignored).
+    const half = N >> 1;
+    const instMag = new Float32Array(half);
+    for (let k = 1; k < half; k++) {
+      instMag[k] = Math.hypot(re[k], im[k]);
+    }
+
+    // ── Running average over the last N FFTs ──
+    // Keep a ring buffer of frame magnitudes plus a running sum so the
+    // per-frame cost stays O(half), independent of ring length.
+    if (this.thdMagSum == null || this.thdMagSum.length !== half) {
+      this.thdMagSum = new Float32Array(half);
+      this.thdMagHist = [];
+      this.thdMagWrite = 0;
+      this.thdMagFilled = 0;
+    }
+    const sum = this.thdMagSum;
+    const hist = this.thdMagHist;
+    const RING = Shell.THD_AVG_LEN;
+    if (hist.length < RING) {
+      // Filling the ring: just push and add into the sum.
+      hist.push(instMag);
+      for (let k = 1; k < half; k++) sum[k] += instMag[k];
+      this.thdMagFilled = hist.length;
+    } else {
+      // Steady state: replace the oldest slot, updating the sum in-place.
+      const idx = this.thdMagWrite;
+      const old = hist[idx];
+      for (let k = 1; k < half; k++) sum[k] += instMag[k] - old[k];
+      hist[idx] = instMag;
+      this.thdMagWrite = (idx + 1) % RING;
+    }
+    const denom = this.thdMagFilled || 1;
+    const mag = new Float32Array(half);
+    let maxMag = 1e-12;
+    for (let k = 1; k < half; k++) {
+      const m = sum[k] / denom;
+      mag[k] = m;
+      if (m > maxMag) maxMag = m;
+    }
+
+    // Display range: clamp to 0..6 kHz. At sr=12 kHz this is the full
+    // single-sided spectrum; at lower sr (some OWRX profiles request
+    // 8 kHz) we just show what's actually present.
+    const binHz  = sr / N;
+    const drawHi = Math.min(half, Math.floor(6000 / binHz));
+    const span = drawHi;                   // drawLo = 0
+    const dbFloor = -100, dbRange = 100;
+
+    ctx.strokeStyle = '#0c4';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let k = 1; k < span; k++) {
+      const m = mag[k];
+      const db = m > 0 ? 20 * Math.log10(m / maxMag) : dbFloor;
+      const y = H - ((Math.max(dbFloor, db) - dbFloor) / dbRange) * H;
+      const x = (k / span) * W;
+      if (k === 1) ctx.moveTo(x, y);
+      else         ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Frequency-axis tick labels (every 1 kHz).
+    ctx.fillStyle = '#888';
+    ctx.font = `${10 * dpr}px monospace`;
+    for (let f = 1000; f < drawHi * binHz; f += 1000) {
+      const x = ((f / binHz) / span) * W;
+      ctx.fillRect(x, H - 4 * dpr, 1 * dpr, 4 * dpr);
+      ctx.fillText(`${f / 1000}k`, x + 2 * dpr, H - 5 * dpr);
+    }
+
+    // ── Hover cursor: vertical yellow line at the pointer X with a
+    //    bin-snapped freq + amplitude readout (dBFS relative to the
+    //    frame's peak). ──
+    let cursorTxt: string | null = null;
+    if (this.thdCursorX != null) {
+      const cssW = canvas.clientWidth;
+      const xCss = Math.max(0, Math.min(cssW - 1, this.thdCursorX));
+      const xPx = xCss * dpr;
+      // Map back to bin (uses same span/drawHi as the spectrum draw).
+      const frac = xPx / W;
+      const k = Math.max(1, Math.min(span - 1, Math.round(frac * span)));
+      const freqHz = k * binHz;
+      const m = mag[k];
+      const db = m > 0 ? 20 * Math.log10(m / maxMag) : -dbRange;
+      ctx.strokeStyle = '#fd5';
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(xPx, 0); ctx.lineTo(xPx, H);
+      ctx.stroke();
+      cursorTxt = ` · cursor ${freqHz.toFixed(1)} Hz @ ${db.toFixed(1)} dB`;
+    }
+
+    // Status — FFT geometry + cursor readout when hovering.
+    const status = this.$('thdStatus');
+    if (status) {
+      status.textContent =
+        `Audio FFT — ${N} pt · ${binHz.toFixed(2)} Hz/bin · 0–${(drawHi * binHz / 1000).toFixed(2)} kHz · avg ${this.thdMagFilled}/${Shell.THD_AVG_LEN}`
+        + (cursorTxt ?? '');
+    }
+  }
+
   /** Toggle the WSPR-15 batch decoder. UTC-aligned on 15-minute
    *  boundaries (:00/:15/:30/:45). Defaults the dial to 137.500 kHz
    *  USB (the 2200 m WSPR-15 sub-band) if the receiver isn't already
@@ -11682,6 +13547,283 @@ export class Shell {
       this.pocsDecoder?.close();
       this.pocsDecoder = null;
     }
+  }
+
+  /** DSD (D-STAR / DMR / NXDN / YSF / dPMR / M17 / P25) toggle.
+   *  Switching modes while on tears down the active DsdDecoder and
+   *  spawns a fresh one with the new mode flag. */
+  private toggleDsd(mode: DsdMode): void {
+    const wasOn = this.dsdOn;
+    this.dsdOn = !wasOn;
+    this.dsdMode = mode;
+    this.updateWaterfallStream();
+    const panel = this.$('dsdPanel');
+    panel.style.display = this.dsdOn ? '' : 'none';
+    // Highlight whichever of the 10 mode buttons matches the live state.
+    const modeBtnIds: Record<DsdMode, string> = {
+      dstar: 'btnDstar',  dmr: 'btnDmr',  dmrs: 'btnDmrs',
+      nxdn48: 'btnNxdn48', nxdn96: 'btnNxdn96',
+      ysf: 'btnYsf',      dpmr: 'btnDpmr',
+      m17: 'btnM17',
+      p25p1: 'btnP25p1',  p25p2: 'btnP25p2',
+    };
+    for (const id of Object.values(modeBtnIds)) {
+      this.$(id).classList.toggle('active', false);
+    }
+    if (this.dsdOn) {
+      this.$(modeBtnIds[mode]).classList.add('active');
+      this.$('dsdStatus').textContent = `DSD ${mode.toUpperCase()} starting…`;
+      const ctx = this.player.getOrCreateCtx();
+      if (!ctx) {
+        this.$('dsdStatus').textContent = 'DSD — audio context unavailable; click PWR to resume audio';
+        this.dsdOn = false;
+        panel.style.display = 'none';
+        return;
+      }
+      // DSD modes live in VHF/UHF land — Kiwi caps at 30 MHz so the
+      // dial can never reach a DMR/D-STAR/etc. channel from a Kiwi
+      // connection. Banner to avoid silent confusion; the decoder
+      // still spawns (the operator may already be on an OWRX server).
+      if (!this.isOwrxSource() && this.freqKHz < 30_000) {
+        this.banner(`${mode.toUpperCase()} is VHF/UHF — switch to an OpenWebRX server`, 3000);
+      }
+      this.dsdDecoder = new DsdDecoder(mode, {
+        ctx,
+        destination: this.player.getMixer() ?? undefined,
+        onStatus: (s) => { this.$('dsdStatus').textContent = `DSD ${mode.toUpperCase()} — ${s}`; },
+        onEvent:  (ev) => this.appendDsdEvent(ev),
+        onText:   (line) => this.appendDsdText(line),
+      });
+      // Apply the operator's persisted gain to the fresh decoder.
+      this.dsdDecoder.setGain(this.dsdGain);
+      this.player.onDsd = (samples) => this.dsdDecoder?.feed(samples);
+    } else {
+      this.player.onDsd = null;
+      this.dsdDecoder?.close();
+      this.dsdDecoder = null;
+    }
+  }
+
+  private appendDsdEvent(ev: DsdEvent): void {
+    const ts = new Date(ev.tsMs).toISOString().slice(11, 19);
+    const parts = [
+      `${ts}  ${ev.mode.toUpperCase()}`,
+      ev.src  ? `SRC=${ev.src}`  : '',
+      ev.dst  ? `DST=${ev.dst}`  : '',
+      ev.nac  ? `NAC=${ev.nac}`  : '',
+      ev.cc   ? `CC=${ev.cc}`    : '',
+      ev.ran  ? `RAN=${ev.ran}`  : '',
+      ev.slot ? `SLOT=${ev.slot}` : '',
+      ev.sync ? `SYNC=${ev.sync}` : '',
+    ].filter(Boolean);
+    const el = this.$('dsdText');
+    el.textContent = (el.textContent || '') + parts.join('  ') + '\n';
+    const t = el.textContent;
+    if (t.length > 16000) el.textContent = t.slice(t.length - 16000);
+    el.scrollTop = el.scrollHeight;
+    if (ev.src) this.banner(`${ev.mode.toUpperCase()} ${ev.src}${ev.dst ? '→'+ev.dst : ''}`, 1500);
+  }
+
+  private appendDsdText(line: string): void {
+    const el = this.$('dsdText');
+    el.textContent = (el.textContent || '') + line + '\n';
+    const t = el.textContent;
+    if (t.length > 16000) el.textContent = t.slice(t.length - 16000);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  /** Generic multimon-ng modes (FLEX / ERMES / DTMF / ZVEI / AFSK1200 /
+   *  X10 / EAS). Same toggle shape as DSD: one decoder instance, mode
+   *  swapped on activation. Tearing down the existing decoder when the
+   *  operator picks a different mode is handled in the click wiring. */
+  private toggleMultimon(mode: MultimonMode): void {
+    const wasOn = this.multimonOn;
+    this.multimonOn = !wasOn;
+    this.multimonMode = mode;
+    this.updateWaterfallStream();
+    const panel = this.$('multimonPanel');
+    panel.style.display = this.multimonOn ? '' : 'none';
+    const modeBtnIds: Record<MultimonMode, string> = {
+      flex: 'btnFlex',     flex_next: 'btnFlexNext',
+      ufsk1200: 'btnUfsk1200', afsk2400: 'btnAfsk2400',
+      hapn4800: 'btnHapn4800', fsk9600: 'btnFsk9600',
+      dpzvei: 'btnDpzvei', morse: 'btnCwm',
+      clipfsk: 'btnClipFsk', fmsfsk: 'btnFmsFsk',
+      dtmf: 'btnDtmf',     zvei:  'btnZvei',
+      afsk1200: 'btnAfsk1200', x10: 'btnX10',
+      eas:  'btnEas',      dsc:  'btnDsc',
+      ccir: 'btnCcir',     ccitt: 'btnCcitt',
+      eea:  'btnEea',      eia:   'btnEia',
+      euro: 'btnEuro',
+    };
+    for (const id of Object.values(modeBtnIds)) {
+      this.$(id).classList.toggle('active', false);
+    }
+    if (this.multimonOn) {
+      this.$(modeBtnIds[mode]).classList.add('active');
+      this.$('multimonStatus').textContent = `${mode.toUpperCase()} starting…`;
+      this.multimonDecoder = new MultimonDecoder(mode, {
+        onStatus: (s) => { this.$('multimonStatus').textContent = `${mode.toUpperCase()} — ${s}`; },
+        onEvent:  (ev) => this.appendMultimonEvent(ev),
+        onText:   (line) => this.appendMultimonText(line),
+      });
+      this.player.onMultimon = (samples) => this.multimonDecoder?.feed(samples);
+    } else {
+      this.player.onMultimon = null;
+      this.multimonDecoder?.close();
+      this.multimonDecoder = null;
+    }
+  }
+
+  private appendMultimonEvent(ev: MultimonEvent): void {
+    const ts = new Date(ev.tsMs).toISOString().slice(11, 19);
+    const parts = [
+      `${ts}  ${ev.mode.toUpperCase()}`,
+      ev.ric     ? `RIC=${ev.ric}`       : '',
+      ev.fmt     ? `fmt=${ev.fmt}`       : '',
+      ev.kind    ? `kind=${ev.kind}`     : '',
+      ev.digits  ? `digits=${ev.digits}` : '',
+      ev.code    ? `code=${ev.code}`     : '',
+      ev.payload ? `${ev.payload}`       : '',
+    ].filter(Boolean);
+    const el = this.$('multimonText');
+    el.textContent = (el.textContent || '') + parts.join('  ') + '\n';
+    const t = el.textContent;
+    if (t.length > 16000) el.textContent = t.slice(t.length - 16000);
+    el.scrollTop = el.scrollHeight;
+    const tag = ev.ric ?? ev.digits ?? ev.code ?? '';
+    if (tag) this.banner(`${ev.mode.toUpperCase()} ${tag}`, 1500);
+  }
+
+  /** Vendored-binary decoder dispatch — MSK144 / AIS / ACARS /
+   *  TETRAPOL / OP25 / LRPT all share one panel and one decoder
+   *  instance. Switching to a new kind tears down the current
+   *  decoder and spawns a fresh WebSocket to the new endpoint. */
+  private toggleVendored(
+    kind: 'msk144'|'ais'|'acars'|'tetrapol'|'op25'|'lrpt',
+    endpoint: string,
+    sink: 'onMsk144'|'onAis'|'onAcars'|'onTetrapol'|'onOp25'|'onLrpt',
+  ): void {
+    const wasOn = this.vendoredOn;
+    this.vendoredOn = !wasOn;
+    this.vendoredKind = this.vendoredOn ? kind : null;
+    this.updateWaterfallStream();
+    const panel = this.$('vendoredPanel');
+    panel.style.display = this.vendoredOn ? '' : 'none';
+    const allBtnIds = ['btnMsk144','btnAis','btnAcars','btnOp25','btnLrpt'];
+    for (const id of allBtnIds) this.$(id).classList.toggle('active', false);
+    // Derive the display label from the WS endpoint path rather than
+    // the routing `kind` — every IQ-in decoder shares kind='lrpt' but
+    // the operator should see "ADS-B" / "VDL-2" / etc.
+    const epName = (endpoint.match(/\/ws\/decode\/([^/?]+)/)?.[1] ?? kind).toUpperCase();
+    if (this.vendoredOn) {
+      this.$(`btn${kind.charAt(0).toUpperCase()}${kind.slice(1)}`).classList.add('active');
+      this.$('vendoredStatus').textContent = `${epName} starting…`;
+      this.vendoredDecoder = new VendoredDecoder({
+        endpoint,
+        onStatus: (s) => { this.$('vendoredStatus').textContent = `${epName} — ${s}`; },
+        onText:   (line) => this.appendVendoredLine(`${epName}: ${line}`),
+        onEvent:  (ev) => this.appendVendoredLine(`${epName}: ${JSON.stringify(ev)}`),
+        onSpot:   (sp) => this.appendVendoredLine(`${epName} spot: ${JSON.stringify(sp)}`),
+        onImage:  (img) => {
+          this.appendVendoredLine(`${epName} image: ${img.name}`);
+          const el = this.$('vendoredImg') as HTMLImageElement;
+          // Revoke the previous URL so we don't leak.
+          const prev = el.dataset.blobUrl;
+          if (prev) { try { URL.revokeObjectURL(prev); } catch {} }
+          el.src = img.url;
+          el.dataset.blobUrl = img.url;
+          el.dataset.fileName = img.name;
+          el.style.display = '';
+          (this.$('vendoredImgSave') as HTMLElement).style.display = '';
+        },
+      });
+      // MSK144 wants dial freq so spots come back annotated.
+      if (kind === 'msk144') this.vendoredDecoder.sendDial(this.freqKHz);
+      // LRPT runs on raw IQ baseband (satdump expects this); every
+      // other vendored binary takes int16 audio. The RTL-SDR backend
+      // (when added) will also surface its samples through `onIq`, so
+      // LRPT works there too without per-source branching.
+      if (kind === 'lrpt') {
+        const dec = this.vendoredDecoder;
+        this.player.onIq = (iqBytes: Uint8Array) => dec?.feedIq(iqBytes);
+        // Warn if we're on a Kiwi connection in a non-IQ mode — LRPT
+        // needs the IQ pipeline running upstream.
+        if (this.mode !== 'iq' && !this.isOwrxSource()) {
+          this.banner('LRPT needs IQ mode — switch to MODE → IQ', 3000);
+        }
+      } else {
+        this.player[sink] = (samples: Int16Array) => this.vendoredDecoder?.feed(samples);
+      }
+    } else {
+      // Detach whichever sink was wired. exclusiveActivate already
+      // tore down any other IQ consumer, so clearing onIq here is
+      // safe — the only way it could still be set is if the kind we
+      // just stopped was lrpt.
+      const sinks: Array<'onMsk144'|'onAis'|'onAcars'|'onTetrapol'|'onOp25'|'onLrpt'> =
+        ['onMsk144','onAis','onAcars','onTetrapol','onOp25','onLrpt'];
+      for (const s of sinks) this.player[s] = null;
+      if (kind === 'lrpt') this.player.onIq = null;
+      // Tear down the image — the decoder.close() above also revokes
+      // the blob URL it minted, but we still need to clear the <img>
+      // src so the broken-image icon doesn't flash.
+      const img = this.$('vendoredImg') as HTMLImageElement;
+      const prev = img.dataset.blobUrl;
+      if (prev) { try { URL.revokeObjectURL(prev); } catch {} }
+      img.src = '';
+      img.style.display = 'none';
+      delete img.dataset.blobUrl;
+      delete img.dataset.fileName;
+      (this.$('vendoredImgSave') as HTMLElement).style.display = 'none';
+      this.vendoredDecoder?.close();
+      this.vendoredDecoder = null;
+    }
+  }
+
+  private vendoredEndpointFor(kind: 'msk144'|'ais'|'acars'|'tetrapol'|'op25'|'lrpt'): string {
+    return `/ws/decode/${kind}`;
+  }
+
+  /** satdump pipeline selector — reuses the LRPT WS endpoint with a
+   *  `?pipeline=` query param so a single server-side bridge handles
+   *  Meteor M2 LRPT / NOAA HRPT / NOAA APT. */
+  private toggleSatdump(pipeline: 'hrpt' | 'apt'): void {
+    if (this.vendoredOn && this.vendoredKind === 'lrpt') {
+      // Tear down whatever pipeline is running, then start the new one.
+      this.toggleVendored('lrpt', `/ws/decode/lrpt?pipeline=${pipeline}`, 'onLrpt');
+      return;
+    }
+    this.exclusiveActivate('vendored');
+    this.toggleVendored('lrpt', `/ws/decode/lrpt?pipeline=${pipeline}`, 'onLrpt');
+  }
+
+  private vendoredSinkFor(kind: 'msk144'|'ais'|'acars'|'tetrapol'|'op25'|'lrpt'):
+    'onMsk144'|'onAis'|'onAcars'|'onTetrapol'|'onOp25'|'onLrpt' {
+    switch (kind) {
+      case 'msk144':   return 'onMsk144';
+      case 'ais':      return 'onAis';
+      case 'acars':    return 'onAcars';
+      case 'tetrapol': return 'onTetrapol';
+      case 'op25':     return 'onOp25';
+      case 'lrpt':     return 'onLrpt';
+    }
+  }
+
+  private appendVendoredLine(line: string): void {
+    const el = this.$('vendoredText');
+    const ts = new Date().toISOString().slice(11, 19);
+    el.textContent = (el.textContent || '') + `${ts}  ${line}\n`;
+    const t = el.textContent;
+    if (t.length > 16000) el.textContent = t.slice(t.length - 16000);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  private appendMultimonText(line: string): void {
+    const el = this.$('multimonText');
+    el.textContent = (el.textContent || '') + line + '\n';
+    const t = el.textContent;
+    if (t.length > 16000) el.textContent = t.slice(t.length - 16000);
+    el.scrollTop = el.scrollHeight;
   }
 
   private appendPocsPage(p: PocsagPage): void {
@@ -12373,6 +14515,13 @@ export class Shell {
   }
 
   private togglePacket() {
+    // Tear down any sibling packet mode first — all four share the
+    // same panel + `player.onPacket` sink.
+    if (!this.packetOn) {
+      if (this.packetVhfOn)  this.togglePacketVhf();
+      if (this.packet9600On) this.togglePacket9600();
+      if (this.packetIl2pOn) this.togglePacketIl2p();
+    }
     this.packetOn = !this.packetOn;
     this.updateWaterfallStream();
     const btn = this.$('btnPacket');
@@ -12397,6 +14546,119 @@ export class Shell {
       this.player.onPacket = null;
       this.packetDecoder?.close();
       this.packetDecoder = null;
+    }
+  }
+
+  /** VHF Bell-202 packet — same direwolf binary as the HF bridge but
+   *  spawned with the 1200-baud config (?baud=1200 on the WS URL).
+   *  Re-uses the same panel; only one of the two packet modes can be
+   *  active at a time. */
+  private togglePacketVhf() {
+    // If any sibling packet mode is already running, tear it down
+    // first — the panel is shared and they'd clobber each other.
+    if (this.packetOn) this.togglePacket();
+    if (this.packet9600On) this.togglePacket9600();
+    if (this.packetIl2pOn) this.togglePacketIl2p();
+    this.packetVhfOn = !this.packetVhfOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnPacketVhf');
+    const panel = this.$('packetPanel');
+    btn.classList.toggle('active', this.packetVhfOn);
+    panel.style.display = this.packetVhfOn ? '' : 'none';
+    if (this.packetVhfOn) {
+      const sr = this.player.getInputRate() || 12000;
+      this.packetVhfDecoder = new PacketDecoder({
+        sampleRate: sr,
+        baud: 1200,
+        onStatus: (s) => { this.$('packetStatus').textContent = `PACKET-VHF ${s}`; },
+        onLine: (line) => {
+          const el = this.$('packetText');
+          el.textContent = (el.textContent || '') + line + '\n';
+          const t = el.textContent;
+          if (t.length > 8000) el.textContent = t.slice(t.length - 8000);
+          el.scrollTop = el.scrollHeight;
+        },
+      });
+      this.player.onPacket = (s) => this.packetVhfDecoder?.feed(s);
+    } else {
+      this.player.onPacket = null;
+      this.packetVhfDecoder?.close();
+      this.packetVhfDecoder = null;
+    }
+  }
+
+  /** 9600 G3RUH packet — wider audio chain than HF/VHF: the bridge
+   *  upsamples 12k → 48k internally because direwolf needs ≥24 kHz
+   *  Nyquist for the ~9.6 kHz G3RUH baseband. Source must actually
+   *  carry that bandwidth (rtl_tcp/OWRX NBFM) — Kiwi audio (≤6 kHz)
+   *  won't decode. Re-uses the same panel as HF/VHF; the three are
+   *  mutually exclusive. */
+  private togglePacket9600() {
+    if (this.packetOn) this.togglePacket();
+    if (this.packetVhfOn) this.togglePacketVhf();
+    if (this.packetIl2pOn) this.togglePacketIl2p();
+    this.packet9600On = !this.packet9600On;
+    this.updateWaterfallStream();
+    const btn = this.$('btnPacket9600');
+    const panel = this.$('packetPanel');
+    btn.classList.toggle('active', this.packet9600On);
+    panel.style.display = this.packet9600On ? '' : 'none';
+    if (this.packet9600On) {
+      const sr = this.player.getInputRate() || 12000;
+      this.packet9600Decoder = new PacketDecoder({
+        sampleRate: sr,
+        baud: 9600,
+        onStatus: (s) => { this.$('packetStatus').textContent = `PACKET-9600 ${s}`; },
+        onLine: (line) => {
+          const el = this.$('packetText');
+          el.textContent = (el.textContent || '') + line + '\n';
+          const t = el.textContent;
+          if (t.length > 8000) el.textContent = t.slice(t.length - 8000);
+          el.scrollTop = el.scrollHeight;
+        },
+      });
+      this.player.onPacket = (s) => this.packet9600Decoder?.feed(s);
+    } else {
+      this.player.onPacket = null;
+      this.packet9600Decoder?.close();
+      this.packet9600Decoder = null;
+    }
+  }
+
+  /** IL2P framing on the same VHF 1200 Bell-202 carrier as VPKT.
+   *  Direwolf decodes Reed-Solomon-protected frames that vanilla AX.25
+   *  would miss in marginal conditions. Re-uses the same panel as the
+   *  other packet modes; mutually exclusive with HF/VHF/9600. */
+  private togglePacketIl2p() {
+    if (this.packetOn) this.togglePacket();
+    if (this.packetVhfOn) this.togglePacketVhf();
+    if (this.packet9600On) this.togglePacket9600();
+    this.packetIl2pOn = !this.packetIl2pOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnPacketIl2p');
+    const panel = this.$('packetPanel');
+    btn.classList.toggle('active', this.packetIl2pOn);
+    panel.style.display = this.packetIl2pOn ? '' : 'none';
+    if (this.packetIl2pOn) {
+      const sr = this.player.getInputRate() || 12000;
+      this.packetIl2pDecoder = new PacketDecoder({
+        sampleRate: sr,
+        baud: 1200,
+        framing: 'il2p',
+        onStatus: (s) => { this.$('packetStatus').textContent = `PACKET-IL2P ${s}`; },
+        onLine: (line) => {
+          const el = this.$('packetText');
+          el.textContent = (el.textContent || '') + line + '\n';
+          const t = el.textContent;
+          if (t.length > 8000) el.textContent = t.slice(t.length - 8000);
+          el.scrollTop = el.scrollHeight;
+        },
+      });
+      this.player.onPacket = (s) => this.packetIl2pDecoder?.feed(s);
+    } else {
+      this.player.onPacket = null;
+      this.packetIl2pDecoder?.close();
+      this.packetIl2pDecoder = null;
     }
   }
 
@@ -14042,6 +16304,87 @@ export class Shell {
     });
   }
 
+  /** VHF Bell-202 packet picker. NBFM mode; selecting a row turns the
+   *  decoder on automatically (the HF picker does the same). */
+  private openPacketVhfFreqPicker() {
+    this.registerScanSet('Packet-VHF', PACKET_VHF_FREQS.map(f => ({ label: f.label, freqKHz: f.freqKHz, mode: f.mode })));
+    const root = document.createElement('div');
+    root.className = 'band-modal rtty-picker freq-picker';
+    root.innerHTML = `
+      <div class="rtty-list">
+        ${PACKET_VHF_FREQS.map((f, i) => `
+          <button class="rtty-row ${f.freqKHz === this.freqKHz ? 'active' : ''}" data-idx="${i}">
+            <div class="rtty-row-name">${f.label}</div>
+            <div class="rtty-row-meta">${f.freqKHz.toFixed(3)} kHz · ${f.mode.toUpperCase()} · ${f.note}</div>
+          </button>`).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    root.addEventListener('click', (e) => {
+      const t = (e.target as HTMLElement).closest('button.rtty-row') as HTMLElement | null;
+      if (t) {
+        const f = PACKET_VHF_FREQS[+t.dataset.idx!];
+        this.freqKHz = f.freqKHz;
+        this.setMode(f.mode);
+        this.client?.setTune({
+          mode: this.mode, freqKHz: this.freqKHz,
+          lowCutHz: this.lowCut, highCutHz: this.highCut,
+        });
+        if (!this.packetVhfOn) {
+          this.exclusiveActivate('packet-vhf');
+          this.togglePacketVhf();
+        }
+        this.recenter();
+        this.refresh();
+        this.banner(`PACKET-VHF ${(f.freqKHz / 1000).toFixed(3)} MHz`, 1800);
+        root.remove();
+        return;
+      }
+      if (e.target === root) root.remove();
+    });
+  }
+
+  /** 9600 G3RUH packet picker — mostly satellite downlinks. NBFM mode.
+   *  Selecting a row turns the decoder on automatically (same as
+   *  the HF/VHF pickers). */
+  private openPacket9600FreqPicker() {
+    this.registerScanSet('Packet-9600', PACKET_9600_FREQS.map(f => ({ label: f.label, freqKHz: f.freqKHz, mode: f.mode })));
+    const root = document.createElement('div');
+    root.className = 'band-modal rtty-picker freq-picker';
+    root.innerHTML = `
+      <div class="rtty-list">
+        ${PACKET_9600_FREQS.map((f, i) => `
+          <button class="rtty-row ${f.freqKHz === this.freqKHz ? 'active' : ''}" data-idx="${i}">
+            <div class="rtty-row-name">${f.label}</div>
+            <div class="rtty-row-meta">${f.freqKHz.toFixed(3)} kHz · ${f.mode.toUpperCase()} · ${f.note}</div>
+          </button>`).join('')}
+      </div>
+    `;
+    document.body.appendChild(root);
+    root.addEventListener('click', (e) => {
+      const t = (e.target as HTMLElement).closest('button.rtty-row') as HTMLElement | null;
+      if (t) {
+        const f = PACKET_9600_FREQS[+t.dataset.idx!];
+        this.freqKHz = f.freqKHz;
+        this.setMode(f.mode);
+        this.client?.setTune({
+          mode: this.mode, freqKHz: this.freqKHz,
+          lowCutHz: this.lowCut, highCutHz: this.highCut,
+        });
+        if (!this.packet9600On) {
+          this.exclusiveActivate('packet-9600');
+          this.togglePacket9600();
+        }
+        this.recenter();
+        this.refresh();
+        this.banner(`PACKET-9600 ${(f.freqKHz / 1000).toFixed(3)} MHz`, 1800);
+        root.remove();
+        return;
+      }
+      if (e.target === root) root.remove();
+    });
+  }
+
   private openOthrFreqPicker() {
     this.registerScanSet('OTHR', OTHR_FREQS.map(f => ({ label: f.label, freqKHz: f.freqKHz, mode: 'iq' as Mode })));
     const root = document.createElement('div');
@@ -14825,7 +17168,7 @@ export class Shell {
     return this.cwOn || this.rttyOn || this.pskOn || this.psk31bOn || this.oliviaOn ||
            this.mfskOn || this.mt63On || this.fsqOn || this.thorOn || this.dominoexOn ||
            this.wefaxOn || this.navtexOn || this.aleOn || this.hfdlOn || this.autoOn ||
-           this.packetOn || this.wsprOn || this.js8On || this.fst4On || this.scopeOn || this.grayOn || this.vectOn || this.iqEyeOn ||
+           this.packetOn || this.wsprOn || this.js8On || this.fst4On || this.scopeOn || this.thdOn || this.dsdOn || this.multimonOn || this.vendoredOn || this.grayOn || this.vectOn || this.iqEyeOn ||
            this.ft8On || this.faxScanOn || this.audioFftOn;
   }
   /** Sync the waterfall stream's paused-state to whether any decoder /
@@ -14836,7 +17179,7 @@ export class Shell {
     else                      this.client.resumeWaterfall();
   }
 
-  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'scope' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
+  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
     // ── Decoder panels ──
     if (this.cwOn     && name !== 'cw')     this.toggleCw();
     if (this.rttyOn   && name !== 'rtty')   this.toggleRtty();
@@ -14867,9 +17210,16 @@ export class Shell {
     if (this.jt4On    && name !== 'jt4')    this.toggleJt4();
     if (this.selcalOn && name !== 'selcal') this.toggleSelcal();
     if (this.pocsOn   && name !== 'pocs')   this.togglePocs();
+    if (this.dsdOn    && name !== 'dsd')    this.toggleDsd(this.dsdMode);
+    if (this.multimonOn && name !== 'multimon') this.toggleMultimon(this.multimonMode);
+    if (this.vendoredOn && name !== 'vendored' && this.vendoredKind)
+      this.toggleVendored(this.vendoredKind,
+        this.vendoredEndpointFor(this.vendoredKind),
+        this.vendoredSinkFor(this.vendoredKind));
     if (this.js8On    && name !== 'js8')    this.toggleJs8();
     if (this.fst4On   && name !== 'fst4')   this.toggleFst4();
     if (this.scopeOn  && name !== 'scope')  this.toggleScope();
+    if (this.thdOn    && name !== 'thd')    this.toggleThd();
     if (this.grayOn   && name !== 'gray')   this.toggleGray();
     if (this.vectOn   && name !== 'vect')   this.toggleVect();
     if (this.iqEyeOn  && name !== 'eye')    this.toggleIqEye();
@@ -15099,10 +17449,6 @@ export class Shell {
     this.toggles[name] = !this.toggles[name];
     if (name === 'fft') (this.$('fft') as HTMLElement).style.display = this.toggles.fft ? '' : 'none';
     if (name === 'wf')  (this.$('wf')  as HTMLElement).style.display = this.toggles.wf  ? '' : 'none';
-    if (name === 'nr') {
-      this.client?.setNoiseReduction(this.toggles.nr);
-      this.banner(`NR ${this.toggles.nr ? 'on' : 'off'} (server-side; some Kiwis ignore)`, 1500);
-    }
     if (name === 'comp') {
       this.player.setCompressor(this.toggles.comp);
       this.banner(`COMP ${this.toggles.comp ? 'on (+8 dB makeup)' : 'off'}`, 1500);
@@ -15158,10 +17504,15 @@ export class Shell {
     if (this.droppedWf != null && this.droppedWf > 0) stats.push(`wf-drop ${this.droppedWf}`);
     // FPS moved to the top led-status row (#lblFps) — no longer in the
     // bottom stats line.
-    stats.push(this.zoomMax != null ? `Z${this.zoom}/${this.zoomMax}` : `Z${this.zoom}`);
-    if (this.spectrumSpanKHz != null) {
-      const v = this.spectrumSpanKHz;
-      stats.push(`${v < 100 ? v.toFixed(1) : Math.round(v)} kHz`);
+    // OpenWebRX doesn't expose zoom in the Kiwi sense — label the
+    // visible bandwidth slot "BW <kHz>" instead, no separator dot.
+    const v = this.spectrumSpanKHz;
+    const bwStr = v != null ? `${v < 100 ? v.toFixed(1) : Math.round(v)} kHz` : '';
+    if (this.isOwrxSource()) {
+      if (bwStr) stats.push(`BW ${bwStr}`);
+    } else {
+      stats.push(this.zoomMax != null ? `Z${this.zoom}/${this.zoomMax}` : `Z${this.zoom}`);
+      if (bwStr) stats.push(bwStr);
     }
     if (this.fwVersion) stats.push(this.fwVersion);
     this.$('ledStats').textContent = stats.join(' · ');
@@ -15169,6 +17520,7 @@ export class Shell {
     // Knob dials (vol 0..100 → 0..270deg, sql -120..0 → 0..270, lof/hif map -8000..8000)
     this.setDial('vol', this.vol, 0, 100);
     this.setDial('sql', this.sql, 0, 40);
+    this.setDial('gate', this.gate, 0, 100);
     this.setDial('rf',  this.rfGain, 0, 120);
     this.setDial('lof', this.lowCut, -8000, 8000);
     this.setDial('hif', this.highCut, -8000, 8000);
@@ -15201,12 +17553,17 @@ export class Shell {
     });
     this.refreshScanButtons();
     this.$$('button[data-cmd="nb"]').forEach(b => b.classList.toggle('active', this.nbMode > 0));
+    this.$$('button[data-cmd="nr"]').forEach(b => b.classList.toggle('active', this.nrMode > 0));
     this.$$('button[data-bw]').forEach(b => {
       const presetKHz = +b.dataset.bw!;
       b.classList.toggle('active', this.activeBwPreset === presetKHz);
     });
     const nbNames = ['', 'NB-STD', 'NB-AUTO', 'NB-WILD'];
     this.$('lblNb').textContent = nbNames[this.nbMode] || '';
+    // NR badge — index 0 hidden (no badge when off), 1..3 = HI/MED/LO
+    // (threshold decreases → more aggressive filtering).
+    const nrNames = ['', 'NR-HI', 'NR-MED', 'NR-LO'];
+    this.$('lblNr').textContent = nrNames[this.nrMode] || '';
 
     this.saveRadioState();
   }
@@ -16441,12 +18798,17 @@ const RTTY_PRESETS: RttyPreset[] = [
   { name: '1000 Hz shift (custom)',   markHz: 1275, spaceHz: 2275, baud: 45.45 },
 ];
 
-/** Filter bandwidths offered by the FILTERS picker, in kHz. */
+/** Filter bandwidths offered by the FILTERS picker, in kHz.
+ *  Entries above 10 kHz only resolve to live audio when the active
+ *  source's hardware actually samples that wide — KiwiSDR caps at
+ *  ~12 kHz audio so 15/20/25 still work, while 100/150/200 kHz need
+ *  an OWRX backend with WFM-capable hardware (RTL-SDR, Airspy, …). */
 const FILTER_WIDTHS: number[] = [
   0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 0.8,
   1.0, 1.2, 1.5, 1.8, 2.0, 2.1, 2.3, 2.4,
   2.7, 2.8, 3.0, 3.2, 3.6, 4.0, 4.5, 5.0, 6.0,
-  9.0, 10.0,
+  9.0, 10.0, 12.5, 15.0, 20.0, 25.0,
+  100.0, 150.0, 200.0,
 ];
 
 /** FT4 dial frequencies (USB), kHz. */
@@ -16614,7 +18976,7 @@ const OTHR_FREQS: OthrFreq[] = [
  *  LSB on 80/40/30 m. 30 m carries the bulk of casual HF APRS activity;
  *  the others see only sporadic exchanges or net traffic. */
 interface PacketFreq {
-  label: string; freqKHz: number; mode: 'lsb' | 'usb'; note: string;
+  label: string; freqKHz: number; mode: 'lsb' | 'usb' | 'nbfm'; note: string;
 }
 const PACKET_FREQS: PacketFreq[] = [
   // ── 30 m — by far the most active HF APRS band ──────────────────────
@@ -16629,6 +18991,33 @@ const PACKET_FREQS: PacketFreq[] = [
   { label: '17 m packet',     freqKHz: 18106.000, mode: 'usb', note: 'rare' },
   { label: '15 m packet',     freqKHz: 21146.000, mode: 'usb', note: 'rare' },
   { label: '10 m packet',     freqKHz: 28146.000, mode: 'usb', note: 'rare' },
+];
+
+/** VHF Bell-202 (1200 baud) APRS frequencies. NBFM mode. 144.390 MHz is
+ *  by far the most active globally (US standard); 144.800 MHz dominates
+ *  in Europe; 145.825 MHz is the ISS digipeater downlink. */
+const PACKET_VHF_FREQS: PacketFreq[] = [
+  { label: 'APRS (US/CA/AU)',  freqKHz: 144390.000, mode: 'nbfm', note: '1200 bd Bell-202' },
+  { label: 'APRS (EU/UK)',     freqKHz: 144800.000, mode: 'nbfm', note: '1200 bd, IARU R1' },
+  { label: 'APRS (NZ)',        freqKHz: 144575.000, mode: 'nbfm', note: '1200 bd, New Zealand' },
+  { label: 'APRS (JP)',        freqKHz: 144640.000, mode: 'nbfm', note: '1200 bd, Japan' },
+  { label: 'ISS digipeater',   freqKHz: 145825.000, mode: 'nbfm', note: 'orbital APRS downlink' },
+  { label: '220 MHz packet',   freqKHz: 223400.000, mode: 'nbfm', note: 'US 1.25 m secondary' },
+  { label: '70 cm packet',     freqKHz: 432650.000, mode: 'nbfm', note: 'US 9600 / 1200' },
+];
+
+/** 9600 G3RUH packet frequencies. NBFM mode. Mostly satellite
+ *  downlinks since 9600 is dominant on FOX cubesats, plus a couple
+ *  of 70 cm terrestrial calling channels. */
+const PACKET_9600_FREQS: PacketFreq[] = [
+  { label: 'FOX-1A AO-85',     freqKHz: 145978.000, mode: 'nbfm', note: 'cubesat downlink' },
+  { label: 'FOX-1B AO-91',     freqKHz: 145960.000, mode: 'nbfm', note: 'cubesat downlink' },
+  { label: 'FOX-1C AO-95',     freqKHz: 435300.000, mode: 'nbfm', note: 'cubesat downlink' },
+  { label: 'FOX-1D AO-92',     freqKHz: 435350.000, mode: 'nbfm', note: 'cubesat downlink' },
+  { label: 'FOX-1E AO-109',    freqKHz: 435750.000, mode: 'nbfm', note: 'cubesat downlink' },
+  { label: 'ISS 9600 packet',  freqKHz: 437550.000, mode: 'nbfm', note: 'occasional / digipeater' },
+  { label: '70 cm 9600 (US)',  freqKHz: 432650.000, mode: 'nbfm', note: 'terrestrial G3RUH' },
+  { label: '70 cm 9600 (EU)',  freqKHz: 433625.000, mode: 'nbfm', note: 'terrestrial G3RUH' },
 ];
 
 /** Common shape for the new generic-picker entries below. The existing

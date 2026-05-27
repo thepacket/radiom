@@ -1215,8 +1215,27 @@ export class AudioPlayer {
   onSelcal: ((s: Int16Array) => void) | null = null;
   /** Optional sink — used by the POCSAG (multimon-ng) pager decoder. */
   onPocsag: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — used by the DSD (D-STAR/DMR/NXDN/YSF/dPMR/M17/P25)
+   *  digital-voice metadata decoder. Receives the same int16 PCM as
+   *  the other audio decoders. */
+  onDsd: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — generic multimon-ng modes (FLEX / ERMES / DTMF /
+   *  ZVEI / AFSK1200 / X10 / EAS). One sink, mode multiplexed at the
+   *  server end via /ws/decode/multimon?mode=… */
+  onMultimon: ((s: Int16Array) => void) | null = null;
+  /** Optional sinks — vendored-binary decoders (audio→text). */
+  onMsk144:   ((s: Int16Array) => void) | null = null;
+  onAis:      ((s: Int16Array) => void) | null = null;
+  onAcars:    ((s: Int16Array) => void) | null = null;
+  onTetrapol: ((s: Int16Array) => void) | null = null;
+  onOp25:     ((s: Int16Array) => void) | null = null;
+  onLrpt:     ((s: Int16Array) => void) | null = null;
   /** Optional sink — used by the audio oscilloscope panel. */
   onScope: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — used by the THD (total harmonic distortion) panel.
+   *  Same int16 PCM stream as `onScope`; the panel buffers it and runs
+   *  an FFT to locate the fundamental + harmonics. */
+  onThd: ((s: Int16Array) => void) | null = null;
   /** Optional sink — used by the QRSS slow-CW grabber. Receives the
    *  same demodulated int16 PCM stream as the other audio decoders;
    *  QRSS itself runs a long-window audio FFT for sub-Hz resolution. */
@@ -1264,6 +1283,40 @@ export class AudioPlayer {
   setSquelchGate(thresholdDbm: number | null): void {
     this.squelchDbm = thresholdDbm;
   }
+  /** GATE — soft (progressive) audio noise gate / downward expander.
+   *  Threshold in dBFS (rel. 1.0). Null disables.
+   *
+   *  Behaviour matches a Tecsun-680-style soft squelch: there is no
+   *  hard mute. Above threshold the audio passes at unity gain. Below
+   *  threshold each dB of "missing" level costs (RATIO − 1) extra dB
+   *  of output, so a weak signal fades smoothly toward silence rather
+   *  than chopping on and off. A short soft knee around the threshold
+   *  smooths the transition, and a per-frame envelope follower with
+   *  fast attack / slower release prevents the gain from clicking
+   *  between speech consonants.
+   *
+   *  Unlike `setSquelchGate` (driven by Kiwi RSSI metadata, useless on
+   *  OWRX) this works on every source — it looks at the decoded
+   *  audio's amplitude. */
+  private gateDbfs: number | null = null;
+  /** Last applied gain, persisted across frames for the envelope
+   *  follower. 1.0 = fully open, 0 = fully closed. */
+  private gateGain = 1;
+  /** Expander ratio: 4:1 means 1 dB below threshold → 4 dB output
+   *  attenuation. Higher = harder gate; lower = subtler expansion. */
+  private static readonly GATE_RATIO = 4;
+  /** Soft-knee width in dB (centred on threshold). */
+  private static readonly GATE_KNEE_DB = 6;
+  /** EMA coefficients per frame for the envelope smoothing. ~10 ms
+   *  attack / ~150 ms release at typical 1024-sample @ 12 kHz frames
+   *  (≈ 85 ms / frame): use frame-rate-independent τ values mapped
+   *  back to α from the actual frame duration in pushAudio. */
+  private static readonly GATE_ATTACK_MS = 10;
+  private static readonly GATE_RELEASE_MS = 150;
+  setNoiseGate(thresholdDbfs: number | null): void {
+    this.gateDbfs = thresholdDbfs;
+    if (thresholdDbfs == null) this.gateGain = 1;
+  }
   /** When true, Kiwi audio is NOT routed to any decoder sink. Used by the
    *  MODES picker's "feed → decoder" mode so injected test samples aren't
    *  mixed with live Kiwi input. Recorder/FT8/raw sinks remain active. */
@@ -1288,6 +1341,12 @@ export class AudioPlayer {
    *  output node (typically a ChannelMergerNode → destination) since
    *  the mixer is mono. */
   getOrCreateCtx(): AudioContext | null { return this.ensureGraph(); }
+  /** The mono mixer node — VOL/COMP/EQ all feed through this on their
+   *  way to ctx.destination. Decoders that emit their own decoded
+   *  voice (FreeDV, DSD, …) should connect their per-decoder GainNode
+   *  here instead of straight to destination so the VOL knob and the
+   *  PWR/mute path govern them like every other audio source. */
+  getMixer(): GainNode | null { this.ensureGraph(); return this.mixer; }
   /** Source-side sample rate (the rate of the int16 samples fed via the
    *  onRawSamples / onRecord / onFt8 hooks — typically ~12 kHz from Kiwi). */
   getInputRate(): number { return this.inputRate; }
@@ -1328,7 +1387,7 @@ export class AudioPlayer {
     } else {
       src = decodePcmBe(frame.payload);
       // For PCM also produce int16 view for transcriber/recorder/ft8.
-      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onScope || this.onVect || this.onQrss || this.onIqAudio) {
+      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onDsd || this.onMultimon || this.onMsk144 || this.onAis || this.onAcars || this.onTetrapol || this.onOp25 || this.onLrpt || this.onScope || this.onThd || this.onVect || this.onQrss || this.onIqAudio) {
         const n = src.length;
         const i16 = new Int16Array(n);
         for (let i = 0; i < n; i++) i16[i] = src[i] * 32767 | 0;
@@ -1377,7 +1436,16 @@ export class AudioPlayer {
       if (this.onJt4      && int16) this.onJt4(int16);
       if (this.onSelcal   && int16) this.onSelcal(int16);
       if (this.onPocsag   && int16) this.onPocsag(int16);
+      if (this.onDsd      && int16) this.onDsd(int16);
+      if (this.onMultimon && int16) this.onMultimon(int16);
+      if (this.onMsk144   && int16) this.onMsk144(int16);
+      if (this.onAis      && int16) this.onAis(int16);
+      if (this.onAcars    && int16) this.onAcars(int16);
+      if (this.onTetrapol && int16) this.onTetrapol(int16);
+      if (this.onOp25     && int16) this.onOp25(int16);
+      if (this.onLrpt     && int16) this.onLrpt(int16);
       if (this.onScope    && int16) this.onScope(int16);
+      if (this.onThd      && int16) this.onThd(int16);
       if (this.onVect     && int16) this.onVect(int16);
       if (this.onQrss     && int16) this.onQrss(int16);
       if (this.onIqAudio  && int16) this.onIqAudio(int16);
@@ -1388,6 +1456,55 @@ export class AudioPlayer {
     // the audible playback drops to silence below the threshold.
     if (this.squelchDbm != null && frame.rssiDbm < this.squelchDbm) {
       src = new Float32Array(src.length);   // zero-filled
+    }
+    // GATE — soft downward expander on the demodulated audio. Runs
+    // *after* the RSSI squelch so the two stack. See setNoiseGate for
+    // the full design notes; quick summary: above threshold → unity,
+    // below → smooth (RATIO−1)×dB attenuation with a soft knee, EMA-
+    // smoothed with separate attack/release time-constants so it
+    // doesn't click between speech consonants.
+    if (this.gateDbfs != null && src.length > 0) {
+      let sumSq = 0;
+      for (let i = 0; i < src.length; i++) { const v = src[i]; sumSq += v * v; }
+      const rms = Math.sqrt(sumSq / src.length);
+      const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -200;
+      const T = this.gateDbfs;
+      const R = AudioPlayer.GATE_RATIO;
+      const K = AudioPlayer.GATE_KNEE_DB;
+      // Target gain (in dB) from the expander curve with soft knee.
+      // x = level − threshold (positive when above threshold).
+      const x = rmsDb - T;
+      let attenDb: number;
+      if (x >= K / 2) {
+        attenDb = 0;
+      } else if (x <= -K / 2) {
+        attenDb = (R - 1) * (-x);   // below knee: full expansion
+      } else {
+        // Quadratic soft knee: smoothly interpolates from 0 dB attenuation
+        // at +K/2 to (R−1)·(K/2) at −K/2. Standard compressor-knee shape
+        // applied symmetrically.
+        const t = (K / 2 - x) / K;  // 0 at +K/2, 1 at −K/2
+        attenDb = (R - 1) * (K / 2) * t * t;
+      }
+      const targetGain = Math.pow(10, -attenDb / 20);
+      // Frame-rate-independent EMA: choose α from how many ms this
+      // frame represents. Faster α when target < current (release is
+      // actually a fall here since we're "releasing" the attenuation
+      // when audio comes back).
+      const frameMs = (src.length / this.inputRate) * 1000;
+      const tauMs = targetGain < this.gateGain
+        ? AudioPlayer.GATE_ATTACK_MS    // gain dropping → attack (fast)
+        : AudioPlayer.GATE_RELEASE_MS;  // gain rising  → release (slow)
+      const alpha = 1 - Math.exp(-frameMs / Math.max(1, tauMs));
+      this.gateGain += (targetGain - this.gateGain) * alpha;
+      // Apply the smoothed gain to a fresh copy so we don't mutate
+      // whatever upstream holds the original buffer.
+      const g = this.gateGain;
+      if (g < 0.999) {
+        const out = new Float32Array(src.length);
+        for (let i = 0; i < src.length; i++) out[i] = src[i] * g;
+        src = out;
+      }
     }
     if (src.length === 0) return;
     const dstRate = this.ctx.sampleRate;
@@ -1487,7 +1604,16 @@ export class AudioPlayer {
     if (this.onJt4)        this.onJt4(int16);
     if (this.onSelcal)     this.onSelcal(int16);
     if (this.onPocsag)     this.onPocsag(int16);
+    if (this.onDsd)        this.onDsd(int16);
+    if (this.onMultimon)   this.onMultimon(int16);
+    if (this.onMsk144)     this.onMsk144(int16);
+    if (this.onAis)        this.onAis(int16);
+    if (this.onAcars)      this.onAcars(int16);
+    if (this.onTetrapol)   this.onTetrapol(int16);
+    if (this.onOp25)       this.onOp25(int16);
+    if (this.onLrpt)       this.onLrpt(int16);
     if (this.onScope)      this.onScope(int16);
+    if (this.onThd)        this.onThd(int16);
     if (this.onVect)       this.onVect(int16);
     if (this.onIqAudio)    this.onIqAudio(int16);
     if (this.onQrss)       this.onQrss(int16);

@@ -24,3 +24,21 @@ primary_region = 'yyz'
   cpu_kind = 'shared'
   cpus = 1
   memory_mb = 512
+
+# ─── Optional: expose AGW Packet Engine externally ────────────────────
+# direwolf serves the AGWPE binary protocol on TCP 8000 whenever any
+# of the packet decoders is active. By default the port is only
+# reachable inside the fly machine. To let an external APRSIS32 /
+# UI-View / AGWMonitor connect to it, uncomment the block below and
+# `fly deploy`. Fly will allocate a public port on the edge and tunnel
+# raw TCP through to 8000 in the container.
+#
+# [[services]]
+#   internal_port = 8000
+#   protocol = "tcp"
+#   processes = ["app"]
+#   [[services.ports]]
+#     port = 8000
+#   [[services.tcp_checks]]
+#     interval = "15s"
+#     timeout = "2s"

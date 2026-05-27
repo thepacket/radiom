@@ -25,6 +25,9 @@ struct progdefaults_t {
   int    VIEWERtimeout        = 60;
   // mfsk image-save (no-op in RX-only build).
   std::string PicsDir         = "";
+  // Force lowercase on RX. Used by throb (and some other modes) to
+  // normalize decoded characters. Default false → pass-through.
+  bool   rx_lowercase         = false;
 };
 
 extern progdefaults_t progdefaults;

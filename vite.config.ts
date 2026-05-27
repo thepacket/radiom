@@ -140,6 +140,11 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: false,
       },
+      // OpenWebRX directory — receiverbook.de scrape, OpenWebRX-only.
+      '/api/owrx-public': {
+        target: 'http://localhost:8080',
+        changeOrigin: false,
+      },
       '/api/kiwi-rx': {
         target: 'http://localhost:8080',
         changeOrigin: false,
