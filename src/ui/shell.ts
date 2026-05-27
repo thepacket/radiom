@@ -3997,25 +3997,25 @@ export class Shell {
     this.closeAllBandModals();
     const PICKER_ID = 'disp';
     const ENTRIES: Array<{ label: string; selector: string }> = [
-      { label: 'ANTC', selector: '#btnAntc' },
-      { label: 'DLDS', selector: '#btnDlds' },
-      { label: 'DOPP', selector: '#btnDopp' },
-      { label: 'EYE',  selector: '#btnEye' },
-      { label: 'FMNT', selector: '#btnFmnt' },
-      { label: 'IQV',  selector: '#btnIqView' },
-      { label: 'KURT', selector: '#btnKurt' },
-      { label: 'METR', selector: '#btnSDial' },
-      { label: 'OTHR', selector: '#btnOthr' },
-      { label: 'PPMC', selector: '#btnPpmc' },
-      { label: 'RFI',  selector: '#btnRfi' },
-      { label: 'SCOP', selector: '#btnScope' },
-      { label: 'SFRC', selector: '#btnSfrc' },
-      { label: 'VECT', selector: '#btnVect' },
-      { label: 'ACON', selector: '#btnAcon' },
-      { label: 'SPEC', selector: '#btnAudioFft' },
-      { label: 'AFFT', selector: '#btnThd' },
-      { label: 'ZOOM', selector: '#btnZoom' },
-      { label: 'SPLT', selector: '#btnSPlot' },
+      { label: 'Anti-Carrier', selector: '#btnAntc' },
+      { label: 'Delay-Doppler Scattering', selector: '#btnDlds' },
+      { label: 'Doppler Tracker', selector: '#btnDopp' },
+      { label: 'Eye Diagram',  selector: '#btnEye' },
+      { label: 'Voice Format Tracker', selector: '#btnFmnt' },
+      { label: 'Complex-Basement Constellation',  selector: '#btnIqView' },
+      { label: 'Kurtosis vs Time', selector: '#btnKurt' },
+      { label: 'Signal Meter', selector: '#btnSDial' },
+      { label: 'Over-The-Horizon Radar', selector: '#btnOthr' },
+      { label: 'Clock Drift', selector: '#btnPpmc' },
+      { label: 'RFI Visualizer',  selector: '#btnRfi' },
+      { label: 'Audio Scope', selector: '#btnScope' },
+      { label: 'Sferic Lightning Visualizer', selector: '#btnSfrc' },
+      { label: 'Vector / Lissajous Plot', selector: '#btnVect' },
+      { label: 'Audio Constellation', selector: '#btnAcon' },
+      { label: 'Audio Spectrogram', selector: '#btnAudioFft' },
+      { label: 'Audio FFT', selector: '#btnThd' },
+      { label: 'Carrier Zoom', selector: '#btnZoom' },
+      { label: 'Signal over Time Plot', selector: '#btnSPlot' },
     ];
     // Same shape as openDecPicker: rtty-row layout with label on top
     // and the source button's `title` (help text) as the meta line,
@@ -4069,40 +4069,51 @@ export class Shell {
     // INFO is now reserved for live / derived / search tools only.
     // Every "pure frequency picker" (a static curated list of dial
     // frequencies for a service or band) moved to the FREQ picker.
-    const ENTRIES: Array<{ label: string; selector: string }> = [
-      { label: 'EIBI', selector: '#btnEibi' },     // live shortwave schedule
-      { label: 'PSKR', selector: '#btnPskr' },     // PSKReporter spots
-      { label: 'NETS', selector: '#btnNets' },     // active ham nets
-      { label: 'WNET', selector: '#btnWnet' },     // WSPRnet
-      { label: 'GRAY', selector: '#btnGray' },     // gray-line propagation
-      { label: 'SRCH', selector: '#btnLists' },    // search across all freqs
-      { label: 'SID',  selector: '#btnSigId2' },   // signal-ID lookup
+    const INFO_ENTRIES: Array<{ label: string; selector: string; desc: string }> = [
+      { label: 'EIBI', selector: '#btnEibi',
+        desc: 'EIBI shortwave broadcast schedule — overlay live and upcoming HF broadcaster transmissions (station / language / target zone) on the waterfall, sourced from the EIBI master list.' },
+      { label: 'PSK Reporter', selector: '#btnPskr',
+        desc: 'PSKReporter live reception spots — recent monitor reports for FT8 / FT4 / PSK / JS8 / WSPR. Shows which band / mode / DXCC entities are currently audible worldwide.' },
+      { label: 'Amateur Radio Nets', selector: '#btnNets',
+        desc: 'Active amateur-radio nets — curated directory of regularly scheduled HF/VHF nets (traffic, emcomm, technical, regional) with day / time / frequency / mode.' },
+      { label: 'WSPR Beacon Spots', selector: '#btnWnet',
+        desc: 'WSPR beacon spots report on the present frequency.' },
+      { label: 'Gray-line Propagation Map', selector: '#btnGray',
+        desc: 'Gray-line propagation map — the terminator (sunrise / sunset boundary) overlaid on a world map. Useful for predicting peak DX windows on LF / MF / lower HF.' },
+      { label: 'Frequencies', selector: '#btnLists',
+        desc: 'Search every aggregated frequency list at once — type any frequency, label, mode, or list name and matching rows surface live. The row closest to the current tune is highlighted.' },
+      { label: 'Signal Analysis',  selector: '#btnSigId2',
+        desc: 'Capture ~20 s of raw IQ baseband and run a local DSP measurement pass over it: time-domain moments (RMS, crest, skew, kurt, SNR vs estimated noise floor); analytic-signal envelope (AM index, duty cycle, burst / gap stats, 10–90 % rise/fall); magnitude spectrum (centroid, spread, slope, Wiener flatness, Shannon entropy, 95 / 99 % rolloff, occupied BW at −3 / −6 / −20 dB, 8-band power split, sideband symmetry); instantaneous amplitude / frequency / phase moments (σ_aa, γ_max, σ_af, σ_ap, σ_dp, phase-jump rate, FM deviation); fourth-order cumulants |C20|, |C21|, |C40|, |C42|, μ_42; cepstrum pitch estimate; tone list with median spacing + GCD; envelope-autocorrelation symbol-rate candidates and cyclic-spectrum CAF magnitude at each baud. Outputs the raw measurement report only — no protocol classification. Runs entirely locally — switch the receiver to IQ first.' },
     ];
+    type InfoEntry = { label: string; selector: string; title: string };
+    const ENTRIES: InfoEntry[] = INFO_ENTRIES.map(e => ({
+      label: e.label, selector: e.selector, title: e.desc,
+    }));
+    ENTRIES.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
     const root = document.createElement('div');
-    root.className = 'band-modal';
+    root.className = 'band-modal rtty-picker freq-picker dec-picker';
     root.dataset.pickerId = PICKER_ID;
     root.innerHTML = `
-      <div class="band-grid">
+      <div class="rtty-list">
         ${ENTRIES.map(e => {
-          const src = document.querySelector<HTMLElement>(e.selector);
-          const active = !!src?.classList.contains('active');
-          return `<button class="band-btn ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">${escapeAttr(e.label)}</button>`;
+          const active = !!document.querySelector<HTMLElement>(e.selector)?.classList.contains('active');
+          return `
+            <button class="rtty-row ${active ? 'active' : ''}" data-sel="${escapeAttr(e.selector)}">
+              <div class="rtty-row-name">${escapeAttr(e.label)}</div>
+              <div class="rtty-row-meta">${escapeAttr(e.title)}</div>
+            </button>`;
         }).join('')}
       </div>
     `;
     document.body.appendChild(root);
     this.anchorPickerOverWaterfall(root);
-    root.addEventListener('click', (ev) => {
-      const t = (ev.target as HTMLElement).closest('button.band-btn') as HTMLElement | null;
-      if (t) {
-        const sel = t.dataset.sel;
-        if (sel) document.querySelector<HTMLElement>(sel)?.click();
-        // Most INFO buttons open their own modal — close this picker on
-        // selection so the new one isn't covered.
-        root.remove();
-        return;
-      }
-      if (ev.target === root) root.remove();
+    requestAnimationFrame(() => {
+      const activeRow = root.querySelector<HTMLElement>('.rtty-row.active');
+      if (activeRow) activeRow.scrollIntoView({ block: 'center', behavior: 'auto' });
+    });
+    this.bindPickerLongPress(root, (src) => {
+      const lp = (src as HTMLElement & { __longPress?: () => void }).__longPress;
+      if (lp) lp(); else src.click();
     });
   }
 
@@ -4263,13 +4274,14 @@ export class Shell {
       { mode: 'usb',  label: 'USB',  hint: 'Upper sideband SSB' },
       { mode: 'iq',   label: 'IQ',   hint: 'Raw complex baseband (Kiwi-only)' },
     ];
-    // OpenWebRX mainline: nfm/wfm/am/lsb/usb/cw plus dmr/dstar/etc which
-    // radiom doesn't have client decoders for. NBFM is radiom's name for
-    // nfm; pick that. WFM has no current radiom equivalent, expose as
-    // its own slot (maps via OpenWebRxClient — falls back to nfm if
-    // unmapped). SAM is server-side on OpenWebRX (mode "am" already
-    // includes sync-style envelope detection).
-    const OWRX_MODES: Entry[] = [
+    // OpenWebRX MODE list. When connected to OWRX, query the server's
+    // advertised demodulators (sent in the `modes` config message at
+    // handshake) and build the picker from that — so the list matches
+    // exactly what this particular server can demod, including any
+    // digital modes the operator's OWRX install supports (dmr / dstar /
+    // freedv …). Fall back to a static minimum set if the server's
+    // `modes` message hasn't arrived yet.
+    const OWRX_FALLBACK_MODES: Entry[] = [
       { mode: 'nbfm', label: 'NFM',  hint: 'Narrowband FM' },
       { mode: 'wfm',  label: 'WFM',  hint: 'Wideband FM (broadcast). Uses HD audio (48 kHz)' },
       { mode: 'am',   label: 'AM',   hint: 'Amplitude modulation' },
@@ -4277,7 +4289,7 @@ export class Shell {
       { mode: 'usb',  label: 'USB',  hint: 'Upper sideband' },
       { mode: 'cw',   label: 'CW',   hint: 'Morse — narrow USB' },
     ];
-    const list = isOwrx ? OWRX_MODES : KIWI_MODES;
+    const list = isOwrx ? this.buildOwrxModeList(OWRX_FALLBACK_MODES) : KIWI_MODES;
     const current = this.mode;
 
     const root = document.createElement('div');
@@ -4302,6 +4314,57 @@ export class Shell {
       }
       if (e.target === root) root.remove();
     });
+  }
+
+  /** Build the OWRX MODE picker entry list from whatever the connected
+   *  server advertised in its `modes` config message. Each advertised
+   *  modulation gets mapped to the closest radiom Mode value — radiom's
+   *  `nbfm` covers OWRX's `nfm`, etc. Unmapped digital modes
+   *  (dmr/dstar/ysf/freedv/…) appear with a hint that radiom routes
+   *  digital decoding through its own DECO buttons rather than via the
+   *  OWRX mode setter, so picking them tunes the carrier in a sensible
+   *  way (NBFM) and the user activates the matching decoder. Falls back
+   *  to the static list if `modes` hasn't arrived yet. */
+  private buildOwrxModeList(fallback: Array<{ mode: Mode; label: string; hint?: string }>): Array<{ mode: Mode; label: string; hint?: string }> {
+    const client = this.client as OpenWebRxClient | null;
+    const advertised = client?.getServerModes?.() ?? [];
+    if (!advertised.length) return fallback;
+    // OWRX modulation id → radiom Mode (the wire-level value that gets
+    // sent back to OWRX via setTune). Keep this in sync with the
+    // MODE_MAP in openwebrx/client.ts.
+    const RADIOM_MODE: Record<string, Mode> = {
+      nfm: 'nbfm', wfm: 'wfm',
+      am: 'am', sam: 'am',          // OWRX exposes SAM as a synonym in some builds
+      lsb: 'lsb', usb: 'usb',
+      cw: 'cw',
+      // Digital modes — radiom keeps the carrier in NBFM and routes
+      // decoding through the matching DECO button.
+      dmr: 'nbfm', dstar: 'nbfm', nxdn: 'nbfm', ysf: 'nbfm',
+      dpmr: 'nbfm', m17: 'nbfm', p25: 'nbfm',
+      freedv: 'usb',                // FreeDV operates on USB carrier
+    };
+    const out: Array<{ mode: Mode; label: string; hint?: string }> = [];
+    const seenModes = new Set<Mode>();
+    for (const m of advertised) {
+      const target = RADIOM_MODE[m.modulation];
+      if (!target) continue;        // skip modulations radiom can't drive
+      // De-dup at the radiom-mode level. Multiple OWRX entries can
+      // collapse to the same radiom Mode (e.g. dmr/dstar/ysf → nbfm);
+      // keep just the first to avoid four "NFM" buttons.
+      if (seenModes.has(target) && m.type === 'analog') continue;
+      seenModes.add(target);
+      out.push({
+        mode: target,
+        label: m.name,
+        hint: m.type === 'digital'
+          ? `${m.modulation.toUpperCase()} (digital) — server-advertised. Use the matching DECO button after tuning.`
+          : `Server-advertised: ${m.modulation}`,
+      });
+    }
+    // Guarantee at least the analog fallback set so a misconfigured
+    // server with an empty advertised list isn't unrecoverable.
+    if (!out.length) return fallback;
+    return out;
   }
 
   /** The visualizer-toggle buttons that the DISP picker dispatches
@@ -4364,6 +4427,14 @@ export class Shell {
   private closeForegroundOverlay(): void {
     const modal = document.querySelector('.band-modal');
     if (modal) { modal.remove(); return; }
+    // INFO entries (EIBI / PSK Reporter / Ham Networks / WSPRnet Beacon
+    // Activity / Signal Analysis) all render into the .sig-overlay
+    // slot — dismiss it on BACK so the operator doesn't have to fish
+    // for the small × button.
+    if (document.querySelector('.sig-overlay')) { clearSigOverlay(); return; }
+    // INFO · Gray-line Propagation Map is a special viz toggle held
+    // outside VIZ_BUTTON_IDS; it has its own on/off flag + toggler.
+    if (this.grayOn) { this.toggleGray(); return; }
     let closedAny = false;
     for (const id of Shell.VIZ_BUTTON_IDS) {
       const el = document.getElementById(id);
@@ -4994,9 +5065,8 @@ export class Shell {
     clearSigOverlay();
     const lines: string[] = [];
     try {
-      const freqKHz = this.freqKHz;
-      this.banner(`PSKR — querying reports near ${freqKHz.toFixed(3)} kHz…`, 1500);
-      const url = `/api/pskreporter?freqKHz=${freqKHz.toFixed(3)}&halfBandKHz=5&windowMin=15`;
+      this.banner(`PSKR — querying reports across all bands…`, 1500);
+      const url = `/api/pskreporter?windowMin=15`;
       const r = await fetch(url, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json() as {
@@ -5007,10 +5077,10 @@ export class Shell {
       const reports = data.reports || [];
       lines.push(`# PSK Reporter — reception reports`);
       lines.push('');
-      lines.push(`**Frequency:** ${freqKHz.toFixed(3)} kHz ± 5 kHz · **Window:** last 15 min · **Reports:** ${reports.length}`);
+      lines.push(`**Coverage:** all bands · **Window:** last 15 min · **Reports:** ${reports.length}`);
       if (reports.length === 0) {
         lines.push('');
-        lines.push(`*(no reports in window — frequency is quiet on PSK Reporter)*`);
+        lines.push(`*(no reports in window — PSK Reporter is quiet)*`);
       } else {
         // Per-mode summary.
         const byMode: Record<string, number> = {};

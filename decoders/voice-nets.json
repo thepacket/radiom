@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "Curated list of well-known amateur HF voice nets. Public APIs for scheduled net listings don't exist, so this is maintained by hand. Each entry has frequency (kHz), mode, start/end UTC time (HHMM, end < start means wrap across midnight), days mask (1-7 for Mon-Sun, empty = every day), region, and short notes. The radiom NETS endpoint matches the current UTC time + weekday against this list to show what voice nets are active right now. Schedules drift; corrections welcome.",
+  "comment": "Curated list of well-known amateur voice nets across HF / VHF / UHF / microwave. Public APIs for scheduled net listings don't exist, so this is maintained by hand. Each entry has frequency (kHz), mode, start/end UTC time (HHMM, end < start means wrap across midnight), days mask (1-7 for Mon-Sun, empty = every day), region, and short notes. The radiom NETS endpoint matches the current UTC time + weekday against this list to show what voice nets are active right now. Schedules drift; corrections welcome.",
   "nets": [
     { "name": "Maritime Mobile Service Net",        "freqKHz": 14300, "mode": "USB", "startUTC": 1700, "endUTC": 200,  "days": "",        "region": "Worldwide",     "notes": "Marine traffic, weather, position reports" },
     { "name": "Pacific Seafarers' Net",             "freqKHz": 14300, "mode": "USB", "startUTC": 300,  "endUTC": 500,  "days": "",        "region": "Pacific",       "notes": "Position reports, weather, traffic" },
@@ -40,6 +40,19 @@
     { "name": "African DX Net",                     "freqKHz": 14220, "mode": "USB", "startUTC": 1800, "endUTC": 1900, "days": "",        "region": "Africa",        "notes": "African DX traffic" },
 
     { "name": "Cracker Barrel Net",                 "freqKHz": 3855,  "mode": "LSB", "startUTC": 1100, "endUTC": 1300, "days": "",        "region": "SE United States", "notes": "Southeast US ragchew" },
-    { "name": "Hit and Bounce Slow Net",            "freqKHz": 7090,  "mode": "LSB", "startUTC": 100,  "endUTC": 230,  "days": "",        "region": "N America",     "notes": "Slow CW/SSB practice net (informal)" }
+    { "name": "Hit and Bounce Slow Net",            "freqKHz": 7090,  "mode": "LSB", "startUTC": 100,  "endUTC": 230,  "days": "",        "region": "N America",     "notes": "Slow CW/SSB practice net (informal)" },
+
+    { "name": "6 m SSB Calling Frequency",          "freqKHz": 50125, "mode": "USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Worldwide",     "notes": "Sporadic-E + F2 openings monitored for DX contacts" },
+    { "name": "2 m SSB Calling (R2/R3)",            "freqKHz": 144200,"mode": "USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Americas / Asia-Pacific", "notes": "IARU Region 2/3 SSB/CW calling frequency" },
+    { "name": "2 m SSB Calling (R1)",               "freqKHz": 144300,"mode": "USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Europe / Africa", "notes": "IARU Region 1 SSB calling frequency" },
+    { "name": "70 cm SSB Calling Frequency",        "freqKHz": 432100,"mode": "USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Worldwide",     "notes": "Weak-signal / tropo / EME calling frequency" },
+    { "name": "23 cm SSB Calling Frequency",        "freqKHz": 1296200,"mode":"USB", "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Worldwide",     "notes": "1.2 GHz weak-signal calling frequency" },
+
+    { "name": "2 m FM National Simplex Calling",    "freqKHz": 146520,"mode": "FM",  "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "N America",     "notes": "FCC-recognised 2 m FM simplex calling channel" },
+    { "name": "2 m FM Calling (Europe)",            "freqKHz": 145500,"mode": "FM",  "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "Europe",        "notes": "IARU Region 1 FM calling channel (S20)" },
+    { "name": "70 cm FM National Simplex Calling",  "freqKHz": 446000,"mode": "FM",  "startUTC": 0,    "endUTC": 2400, "days": "",        "region": "N America",     "notes": "FCC-recognised 70 cm FM simplex calling channel" },
+
+    { "name": "Pacific Northwest VHF Society Net",  "freqKHz": 144240,"mode": "USB", "startUTC": 200,  "endUTC": 300,  "days": "7",       "region": "Pacific NW (US/Canada)", "notes": "Sunday eve local — weak-signal VHF roundtable" },
+    { "name": "Six Meter Activity Hour",            "freqKHz": 50125, "mode": "USB", "startUTC": 0,    "endUTC": 100,  "days": "6",       "region": "N America",     "notes": "Saturday evening informal 6 m activity push" }
   ]
 }

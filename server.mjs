@@ -274,16 +274,20 @@ const PSK_CACHE_TTL_MS = 60_000;
 async function sendPskReporter(req, res) {
   try {
     const u = new URL(req.url, 'http://x');
-    const freqKHz = parseFloat(u.searchParams.get('freqKHz') ?? '0');
+    const freqKHzRaw = u.searchParams.get('freqKHz');
     const halfBandKHz = parseFloat(u.searchParams.get('halfBandKHz') ?? '5');
     const windowMin = Math.min(60, parseFloat(u.searchParams.get('windowMin') ?? '15'));
-    if (!Number.isFinite(freqKHz) || freqKHz <= 0) {
+    // No freqKHz → "all bands" mode: don't constrain by frange, return
+    // whatever PSK Reporter has reported globally within the window.
+    const allBands = freqKHzRaw == null || freqKHzRaw === '';
+    const freqKHz = allBands ? 0 : parseFloat(freqKHzRaw);
+    if (!allBands && (!Number.isFinite(freqKHz) || freqKHz <= 0)) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'missing freqKHz' }));
     }
-    const flowHz = Math.round((freqKHz - halfBandKHz) * 1000);
-    const fhighHz = Math.round((freqKHz + halfBandKHz) * 1000);
-    const cacheKey = `${flowHz}-${fhighHz}-${windowMin}`;
+    const flowHz = allBands ? 0 : Math.round((freqKHz - halfBandKHz) * 1000);
+    const fhighHz = allBands ? 0 : Math.round((freqKHz + halfBandKHz) * 1000);
+    const cacheKey = allBands ? `all-${windowMin}` : `${flowHz}-${fhighHz}-${windowMin}`;
     const c = pskCache.get(cacheKey);
     if (c && Date.now() - c.ts < PSK_CACHE_TTL_MS) {
       res.writeHead(200, {
@@ -295,11 +299,11 @@ async function sendPskReporter(req, res) {
     // PSK Reporter retrieve API. Returns XML with <receptionReport> rows.
     // flowStartSeconds is negative to look BACK in time from now.
     const params = new URLSearchParams({
-      frange: `${flowHz}-${fhighHz}`,
       flowStartSeconds: String(-Math.round(windowMin * 60)),
       nolocator: '0',
       noactive: '1',
     });
+    if (!allBands) params.set('frange', `${flowHz}-${fhighHz}`);
     const url = `https://retrieve.pskreporter.info/query?${params}`;
     const ctl = new AbortController();
     const tm = setTimeout(() => ctl.abort(), 10_000);
@@ -329,8 +333,8 @@ async function sendPskReporter(req, res) {
       // PSK Reporter's `frange` filter is loose (returns reports
       // ~90 kHz around the request). Apply a strict server-side
       // filter so the client only sees reports actually inside the
-      // requested ±halfBandKHz window.
-      if (freqHzReport < flowHz || freqHzReport > fhighHz) continue;
+      // requested ±halfBandKHz window. Skipped in all-bands mode.
+      if (!allBands && (freqHzReport < flowHz || freqHzReport > fhighHz)) continue;
       reports.push({
         when: parseInt(get('flowStartSeconds') || '0', 10),
         senderCallsign:   get('senderCallsign'),
@@ -480,10 +484,10 @@ async function sendNets(req, res) {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=30' });
       return res.end(netsCache.body);
     }
-    // Pull all HF reports (1.8 MHz - 30 MHz). PSK Reporter's frange
-    // is in Hz.
+    // Pull all amateur-band reports (HF + VHF + UHF + microwave). No
+    // frange so PSK Reporter returns every report in the window —
+    // the BANDS bucket loop below sorts them into amateur sub-bands.
     const params = new URLSearchParams({
-      frange: '1800000-30000000',
       flowStartSeconds: String(-Math.round(windowMin * 60)),
       noactive: '1',
     });
@@ -517,18 +521,27 @@ async function sendNets(req, res) {
       );
     } finally { clearTimeout(tm); }
 
-    // Canonical HF ham bands (lower-MHz, upper-MHz, label).
+    // Canonical amateur bands (lower-MHz, upper-MHz, label) — HF + VHF + UHF + microwave.
     const BANDS = [
-      [1.800,  2.000, '160 m'],
-      [3.500,  4.000,  '80 m'],
-      [5.330,  5.405,  '60 m'],
-      [7.000,  7.300,  '40 m'],
-     [10.100, 10.150,  '30 m'],
-     [14.000, 14.350,  '20 m'],
-     [18.068, 18.168,  '17 m'],
-     [21.000, 21.450,  '15 m'],
-     [24.890, 24.990,  '12 m'],
-     [28.000, 29.700,  '10 m'],
+      [   1.800,    2.000,  '160 m'],
+      [   3.500,    4.000,   '80 m'],
+      [   5.330,    5.405,   '60 m'],
+      [   7.000,    7.300,   '40 m'],
+      [  10.100,   10.150,   '30 m'],
+      [  14.000,   14.350,   '20 m'],
+      [  18.068,   18.168,   '17 m'],
+      [  21.000,   21.450,   '15 m'],
+      [  24.890,   24.990,   '12 m'],
+      [  28.000,   29.700,   '10 m'],
+      [  50.000,   54.000,    '6 m'],
+      [ 144.000,  148.000,    '2 m'],
+      [ 222.000,  225.000, '1.25 m'],
+      [ 420.000,  450.000,   '70 cm'],
+      [ 902.000,  928.000,   '33 cm'],
+      [1240.000, 1300.000,   '23 cm'],
+      [2300.000, 2450.000,   '13 cm'],
+      [3300.000, 3500.000,    '9 cm'],
+      [5650.000, 5925.000,    '5 cm'],
     ];
     const bands = BANDS.map(([lo, hi, label]) => ({
       lo, hi, label,

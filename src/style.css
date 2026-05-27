@@ -989,8 +989,22 @@ body.wefax-ext .wefax-canvas {
   background: rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(63, 143, 196, 0.3);
   border-radius: 4px;
-  overflow-x: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
+  max-height: 60vh;
+  scrollbar-width: thin;
+  scrollbar-color: #3f8fc4 rgba(0, 0, 0, 0.3);
 }
+.sig-overlay-markdown pre::-webkit-scrollbar { width: 10px; height: 10px; }
+.sig-overlay-markdown pre::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+}
+.sig-overlay-markdown pre::-webkit-scrollbar-thumb {
+  background: #3f8fc4;
+  border-radius: 4px;
+}
+.sig-overlay-markdown pre::-webkit-scrollbar-thumb:hover { background: #5fb0e4; }
 .sig-overlay-markdown pre code,
 .sig-overlay-markdown code {
   font: 500 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
@@ -1689,6 +1703,8 @@ body.wefax-ext .wefax-canvas {
 .rtty-row:active { filter: brightness(0.7); }
 .rtty-row-name { font-size: 13px; font-weight: 600; }
 .rtty-row-meta { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+.dec-picker .rtty-row-name { color: var(--led-bg); }
+.dec-picker .rtty-row.active .rtty-row-name { color: var(--led-bg); }
 
 /* PSK fldigi mode picker — compact 3-col grid of short buttons. */
 .psk-mode-picker .rtty-list {

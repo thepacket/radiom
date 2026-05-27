@@ -141,6 +141,18 @@ export interface OpenWebRxClientOptions {
 
 interface ProfileEntry { id: string; name: string; centerFreq?: number; sampRate?: number }
 
+/** One entry from the OpenWebRX server's `modes` config message.
+ *  Shape mirrors what upstream emits: `name` is the human label
+ *  ("FM"), `modulation` is the protocol identifier the OWRX wire
+ *  protocol expects ("nfm"), `type` is "analog" or "digital". */
+export interface OwrxServerMode {
+  name: string;
+  modulation: string;
+  type: 'analog' | 'digital';
+  underlying?: string;
+  requirements?: string[];
+}
+
 /** Ham-band wavelength (m) → centre frequency (MHz). Used so profile names
  *  like "40m" or "80m" can match a target frequency. */
 const HAM_BAND_MHZ: Record<number, number> = {
@@ -180,6 +192,11 @@ export class OpenWebRxClient {
 
   private profiles: ProfileEntry[] = [];
   private selectedProfile: string | null = null;
+  /** Demodulation modes advertised by the connected OWRX server in its
+   *  `modes` config message. Used by the MODE picker so only modes the
+   *  server can actually demod show up. Empty until the server sends
+   *  the message — pickers should fall back to a static list. */
+  private serverModes: OwrxServerMode[] = [];
   private dspStarted = false;
   /** Set when setTune() runs before the first config has arrived; flushed
    *  once we know centerFreq. */
@@ -593,9 +610,28 @@ export class OpenWebRxClient {
         // matching client-side decoders.
         this.h.onMessage?.({ secondary_demod: JSON.stringify(msg.value) });
         break;
+      case 'modes': {
+        // Server-advertised demodulator list. Cache so the shell's MODE
+        // picker can show exactly what this server supports rather than
+        // a static guess; also pass through for debug.
+        const arr = Array.isArray(msg.value) ? msg.value : [];
+        this.serverModes = arr
+          .filter((m: { modulation?: unknown }) => typeof m.modulation === 'string')
+          .map((m: Record<string, unknown>) => ({
+            name: String(m.name ?? m.modulation),
+            modulation: String(m.modulation),
+            type: m.type === 'digital' ? 'digital' : 'analog',
+            underlying: typeof m.underlying === 'string' ? m.underlying : undefined,
+            requirements: Array.isArray(m.requirements) ? (m.requirements as string[]) : undefined,
+          } as OwrxServerMode));
+        this.h.onMessage?.({
+          [`owrx_${msg.type}`]: JSON.stringify(msg.value),
+          owrx_modes_changed: '1',
+        });
+        break;
+      }
       case 'receiver_details':
       case 'features':
-      case 'modes':
       case 'secondary_config':
       case 'metadata':
       case 'dial_frequencies':
@@ -794,6 +830,10 @@ export class OpenWebRxClient {
   /** Snapshot of the currently advertised profile list. */
   getProfiles(): ReadonlyArray<{ id: string; name: string }> { return this.profiles; }
   getSelectedProfile(): string | null { return this.selectedProfile; }
+  /** Snapshot of the OWRX server's advertised demodulator list (from
+   *  its `modes` config message). Empty array until the message
+   *  arrives — callers should fall back to a static list when empty. */
+  getServerModes(): ReadonlyArray<OwrxServerMode> { return this.serverModes; }
 
   private applyTune(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
