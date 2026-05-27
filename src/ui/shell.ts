@@ -209,6 +209,13 @@ export class Shell {
   private sfrcCounts: number[] = [];
   private sfrcLastImpulseTs = 0;
   private sfrcRecentMag = 0;
+  /** Warm-up countdown (in IQ sample pairs) during which strikes are
+   *  *not* counted — the magnitude EMA `sfrcRecentMag` starts at 0, so
+   *  the very first frame's samples all sit at m ≫ mean and would mass-
+   *  trigger the impulse detector. We let ~1 s of audio (≈ 12 000 pairs
+   *  at the 12 kHz IQ rate) feed the EMA before opening the gate. */
+  private sfrcWarmupRemaining = 0;
+  private static readonly SFRC_WARMUP_PAIRS = 12_000;
   /** DOPP carrier-tracking PLL state. */
   private doppPhase = 0;
   private doppFreqHz = 0;          // current locked-frequency offset (Hz)
@@ -886,7 +893,7 @@ export class Shell {
 
           <div id="vectPanel" class="ft8-panel" style="display:none">
             <div class="ft8-actions">
-              <input  class="scope-level" id="vectDelay" type="range" min="1" max="120" value="36" step="1" title="Lissajous delay (samples)" />
+              <input  class="scope-level" id="vectDelay" type="range" min="1" max="3000" value="36" step="1" title="Lissajous delay τ (samples). At the 12 kHz audio rate, τ samples = τ/12 ms, and the quarter-cycle locking frequency f = 1/(4τ) · 12 kHz. Range: τ=1 → ≈ 3 kHz, τ=3000 → ≈ 1 Hz (envelope / Schumann band)." />
               <span   class="scope-level-readout" id="vectDelayVal">36</span>
             </div>
             <div class="ft8-status" id="vectStatus">VECTOR — delay 36 samp · 3.0 ms</div>
@@ -896,7 +903,8 @@ export class Shell {
           <!-- Page-5 IQ visualizer panels. All require mode='iq'. -->
           <div id="sfrcPanel" class="ft8-panel" style="display:none">
             <div class="ft8-actions">
-              <button class="transcript-btn" id="sfrcCopy" type="button">copy</button>
+              <button class="transcript-btn" id="sfrcClear" type="button" title="Clear the rolling strike counts and re-warm the noise-floor EMA (the gate that suppresses the initial spike at session start)">clear</button>
+              <button class="transcript-btn" id="sfrcCopy"  type="button">copy</button>
             </div>
             <div class="ft8-status" id="sfrcStatus">SFRC — sferic monitor (lightning impulses)</div>
             <canvas id="sfrcCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
@@ -3327,6 +3335,17 @@ export class Shell {
     // RFI canvas tap → label / delete the row under the click.
     // SFRC copy button → CSV-style snapshot of the rolling 60-sec strike
     // counts to the clipboard.
+    this.$('sfrcClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Same reset path that the panel-open code runs: zero the
+      // 60-bin counter, drop the EMA, re-arm the warm-up gate so the
+      // first second of rebuilt EMA can't fire the impulse detector.
+      this.sfrcCounts = new Array(60).fill(0);
+      this.sfrcLastImpulseTs = 0;
+      this.sfrcRecentMag = 0;
+      this.sfrcWarmupRemaining = Shell.SFRC_WARMUP_PAIRS;
+      this.banner('SFRC cleared — re-warming noise floor (~1 s)', 1200);
+    });
     this.$('sfrcCopy').addEventListener('click', (e) => {
       e.stopPropagation();
       const total = this.sfrcCounts.reduce((s, v) => s + v, 0);
@@ -4044,7 +4063,7 @@ export class Shell {
       { label: 'Delay-Doppler Scattering', selector: '#btnDlds' },
       { label: 'Doppler Tracker', selector: '#btnDopp' },
       { label: 'Eye Diagram',  selector: '#btnEye' },
-      { label: 'Voice Format Tracker', selector: '#btnFmnt' },
+      { label: 'Voice Formant Tracker (exp)', selector: '#btnFmnt' },
       { label: 'Complex-Basement Constellation',  selector: '#btnIqView' },
       { label: 'Kurtosis vs Time', selector: '#btnKurt' },
       { label: 'Signal Meter', selector: '#btnSDial' },
@@ -4217,6 +4236,12 @@ export class Shell {
       { label: 'CSTV', selector: '#btnCoast' },
       { label: 'CSCW', selector: '#btnCoastcw' },
     ];
+    // Alphabetise the grid so the operator's eye can scan the matrix
+    // by label rather than by the original "utility / broadcast /
+    // military" grouping baked into the array literal above. Case-
+    // insensitive so all-caps labels mix naturally with any future
+    // long-form entries.
+    ENTRIES.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
     const root = document.createElement('div');
     root.className = 'band-modal';
     root.dataset.pickerId = PICKER_ID;
@@ -11122,6 +11147,7 @@ export class Shell {
       this.sfrcCounts = new Array(60).fill(0);
       this.sfrcLastImpulseTs = 0;
       this.sfrcRecentMag = 0;
+      this.sfrcWarmupRemaining = Shell.SFRC_WARMUP_PAIRS;
     } else if (name === 'dopp') {
       this.doppPhase = 0;
       this.doppFreqHz = 0;
@@ -11229,11 +11255,13 @@ export class Shell {
     let mean = this.sfrcRecentMag;
     let strikesThisFrame = 0;
     const now = Date.now();
+    let warmup = this.sfrcWarmupRemaining;
     for (let i = 0; i < nPairs; i++) {
       const I = dv.getInt16(i * 4, false);
       const Q = dv.getInt16(i * 4 + 2, false);
       const m = Math.sqrt(I * I + Q * Q);
       mean = mean * 0.998 + m * 0.002;
+      if (warmup > 0) { warmup--; continue; }
       // Impulse: ≥ 6× background AND at least 200 ms since last (debounce).
       if (mean > 1 && m > mean * 6 && now - this.sfrcLastImpulseTs > 200) {
         strikesThisFrame++;
@@ -11241,6 +11269,7 @@ export class Shell {
       }
     }
     this.sfrcRecentMag = mean;
+    this.sfrcWarmupRemaining = warmup;
     if (strikesThisFrame > 0) {
       // Slot into the current second of the rolling 60-bin counter.
       const sec = (Math.floor(now / 1000)) % 60;
@@ -11831,15 +11860,41 @@ export class Shell {
         klass = `pulsed · sparse (${srfHz.toFixed(1)} pps)`;
       }
     }
-    // Status line + on-canvas legend.
+    // Status line + on-canvas legend. The legend wraps onto multiple
+    // lines so the right side never clips off (the OTHR panel is
+    // typically phone-width, while the status text grows past a single
+    // line at any non-trivial slope / SRF value).
     const status = `${klass} · slope ${(slopeHzPerS/1000).toFixed(1)} kHz/s · SRF ${srfHz.toFixed(1)} Hz · ridge ${(fillRatio*100).toFixed(0)}%`;
     this.$('othrStatus').textContent = `OTHR — ${status}`;
     ctx.font = `${11 * dpr}px ui-monospace, monospace`;
+    const padX = 6 * dpr;
+    const lineH = 14 * dpr;
+    // Greedy word-wrap on " · " separators (the natural break points
+    // in the status string). Falls back to single-space splits if the
+    // status doesn't use the dot separator.
+    const segments = status.includes(' · ') ? status.split(' · ') : status.split(' ');
+    const sep = status.includes(' · ') ? ' · ' : ' ';
+    const maxTextW = W - 2 * padX;
+    const lines: string[] = [];
+    let cur = '';
+    for (const seg of segments) {
+      const probe = cur ? `${cur}${sep}${seg}` : seg;
+      if (ctx.measureText(probe).width <= maxTextW || !cur) {
+        cur = probe;
+      } else {
+        lines.push(cur);
+        cur = seg;
+      }
+    }
+    if (cur) lines.push(cur);
+    const bandH = 4 * dpr + lines.length * lineH;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, W, 18 * dpr);
+    ctx.fillRect(0, 0, W, bandH);
     ctx.fillStyle = '#cfffa3';
     ctx.textBaseline = 'top';
-    ctx.fillText(status, 6 * dpr, 4 * dpr);
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], padX, 4 * dpr + i * lineH);
+    }
   }
 
   /** RFI sniffer — scan a 4k-sample IQ window every ~1 s, find narrow
