@@ -1,6 +1,6 @@
 # radiom
 
-A multi-source web SDR client with a large built-in decoder library
+A multi-source mobile web SDR client with a large built-in decoder library
 (88 protocols covering CW / RTTY / FT8/FT4 / WSPR / JT9/JT65 / FST4 /
 JS8 / NAVTEX / WEFAX / HFDL / ALE 2G / Olivia / MFSK / MT63 / Throb /
 ACARS / VDL-2 / ADS-B / AIS / DSC / DMR / NXDN / YSF / M17 / P25 /
@@ -11,8 +11,8 @@ The browser app connects to one of three SDR-server flavors and routes
 the demodulated audio (or raw IQ, where appropriate) through a fleet
 of decoder bridges running on a small Node backend:
 
-- **[KiwiSDR](https://kiwisdr.com)** — primary source for HF
-  (0–30 MHz) audio. Most decoders are fed from a Kiwi.
+- **[KiwiSDR](https://kiwisdr.com)** — source for HF
+  (0–30 MHz) audio and IQ stream. 
 - **[OpenWebRX](https://www.openwebrx.de)** — second source supporting
   HF and VHF/UHF when the host has appropriate front-ends. Used for
   bands above 30 MHz when the operator has access to an OWRX-fronted
@@ -26,9 +26,9 @@ The active source is selected from the top bar; each decoder
 indicates in its tooltip whether it requires an IQ-capable source
 (rtl_tcp / OWRX) or works with the audio chain from any source.
 
-> **Status: actively being tested.** radiom is an advanced mobile-first HF
+> **Status: actively being tested.** radiom is an advanced mobile-first
 > receiver with a large surface area — many features still need real-world
-> validation across kiwis, bands, and propagation conditions, and more
+> validation across receivers, bands, and propagation conditions, and more
 > decoders / visualizers are on the way. Bug reports and on-air results are
 > very welcome (see [Getting in touch](#getting-in-touch)).
 >
