@@ -36,6 +36,8 @@ indicates in its tooltip whether it requires an IQ-capable source
 
 ## Screenshots
 
+NOTE: The user interface has been significantly modified since the last screenshots.
+
 See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset of the features.
 
 ### Decoder library (88 protocols)
@@ -250,7 +252,7 @@ share-link like `https://your-app.fly.dev/#token=…` and the token gets stored
 ## Contributing
 
 radiom is a personal project, open-sourced so others can read the code,
-learn from it, and fork it for their own use. **Pull requests are not
+and fork it for their own use. **Pull requests are not
 accepted** — the codebase stays solo-authored. Bug reports, on-air
 results, and ideas are very welcome through
 [Issues](https://github.com/thepacket/radiom/issues) and
