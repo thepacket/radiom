@@ -552,6 +552,9 @@ body.wefax-ext .wefax-canvas {
 #iqClockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
 /* ACON — audio-derived constellation panel. */
 #aconPanel .acon-actions { top: auto; bottom: 6px; right: 8px; display: flex; gap: 4px; align-items: center; }
+/* Scope panel — keep the trigger / mode / run controls anchored to the
+ * bottom-right of the panel so the live trace gets the top space. */
+#scopePanel .ft8-actions { top: auto; bottom: 6px; right: 8px; }
 #aconLockBtn.active { color: #cfffa3; border-color: #5a8a2c; }
 .acon-preset {
   background: #111; color: var(--fg);

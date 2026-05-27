@@ -610,7 +610,7 @@ export class Shell {
           </div>
           <div id="pitchBar" class="pitch-bar" style="display:none">
             <button class="pitch-btn" id="btnPitchMinus" type="button" aria-label="cursor -1 Hz">−</button>
-            <button class="pitch-btn" id="btnPitchSet" type="button" aria-label="set audio_freq_cursor">set</button>
+            <button class="pitch-btn" id="btnPitchSet" type="button" aria-label="set audio_freq_cursor">Hz</button>
             <button class="pitch-btn" id="btnPitchPlus" type="button" aria-label="cursor +1 Hz">+</button>
           </div>
 
@@ -850,6 +850,8 @@ export class Shell {
 
           <div id="scopePanel" class="ft8-panel" style="display:none">
             <div class="ft8-actions">
+              <button class="transcript-btn" id="scopeMode" type="button" title="Toggle between auto (free-running) and shot (single capture armed by the run button)">auto</button>
+              <button class="transcript-btn" id="scopeRun"  type="button" title="Arm a single capture — only meaningful in 'shot' mode; in 'auto' the scope free-runs">run</button>
               <button class="transcript-btn" id="scopePolarity" type="button" title="Trigger polarity">↑</button>
               <input  class="scope-level" id="scopeLevel" type="range" min="-100" max="100" value="0" step="1" title="Trigger level" />
               <span   class="scope-level-readout" id="scopeLevelVal">0.00</span>
@@ -2417,6 +2419,28 @@ export class Shell {
       (this.$('scopePolarity') as HTMLElement).textContent = this.scopeTriggerRising ? '↑' : '↓';
       this.updateScopeStatus();
     });
+    this.$('scopeMode').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.scopeMode = this.scopeMode === 'auto' ? 'shot' : 'auto';
+      // Switching to auto: clear any frozen capture so the live trace
+      // takes over immediately. Switching to shot: also clear, so the
+      // first thing the operator sees is a blank panel + "press run".
+      this.scopeFrozenFrame = null;
+      this.scopeArmed = false;
+      (this.$('scopeMode') as HTMLElement).textContent = this.scopeMode;
+      this.updateScopeStatus();
+    });
+    this.$('scopeRun').addEventListener('click', (e) => {
+      e.stopPropagation();
+      // In auto mode the run button is a no-op (the scope is already
+      // free-running). In shot mode, arm + clear any previous capture
+      // so the next triggered frame is the one displayed.
+      if (this.scopeMode === 'shot') {
+        this.scopeArmed = true;
+        this.scopeFrozenFrame = null;
+        this.updateScopeStatus();
+      }
+    });
     this.$('scopeLevel').addEventListener('input', (e) => {
       e.stopPropagation();
       const v = +(e.target as HTMLInputElement).value;
@@ -3393,8 +3417,8 @@ export class Shell {
     this.$('wefaxExt').addEventListener('click',   (e) => { e.stopPropagation(); this.toggleWefaxExt(); });
     this.$('wefaxCanvas').addEventListener('click', (e) => this.onWefaxCanvasClick(e as MouseEvent));
     this.$('faxScanBars').addEventListener('click', () => this.toggleFaxScanPause());
-    this.bindRepeatPress(this.$('btnPitchMinus'), () => this.movePitchCursor(-1));
-    this.bindRepeatPress(this.$('btnPitchPlus'),  () => this.movePitchCursor(+1));
+    this.bindRepeatPress(this.$('btnPitchMinus'), () => this.movePitchCursor(-1), 500);
+    this.bindRepeatPress(this.$('btnPitchPlus'),  () => this.movePitchCursor(+1), 500);
     this.$('btnPitchSet').addEventListener('click',   () => this.setPitchFromCursor());
     // The AUTO trigger button has been removed from the waterfall.
     // toggleAuto / autoPanel are kept in place in case the trigger is
@@ -3772,6 +3796,11 @@ export class Shell {
    *  logic is reused unchanged. */
   private openDecPicker(_half: 'A' | 'B'): void {
     this.closeAllBandModals();
+    // Drop whatever DECO / FREQ / VIEW / INFO panel is currently on
+    // top of the waterfall — they hide the spectrum pane and would
+    // collapse this picker to height 0 (anchorPickerOverWaterfall
+    // sizes it to the visible waterfall).
+    this.closeAllCategoryPanels();
     const PICKER_ID = 'dec';
     // DEC is the merged former DECA + DECB — one scrollable list. The
     // signature still takes the half argument so existing call sites
@@ -3982,6 +4011,17 @@ export class Shell {
         // the decoder's panel or its sub-mode/sub-band picker — both
         // need the waterfall area clear of the DEC list to render.
         root.remove();
+        // Mutual exclusion between DECO / FREQ / VIEW / INFO outputs —
+        // selecting from any one of these four pickers closes whatever
+        // panel / overlay / visualizer / decoder another category had
+        // running, so only one of {decoder panel, freq-picker overlay,
+        // visualizer overlay, INFO sig-overlay / gray-line} is visible
+        // at a time. DSP (knobs) and MODE (demod) pickers don't trip
+        // this because they don't open a category panel.
+        const pid = root.dataset.pickerId;
+        if (pid === 'dec' || pid === 'disp' || pid === 'info' || pid === 'freq') {
+          this.closeAllCategoryPanels(src);
+        }
         src?.click();
       });
     });
@@ -3997,6 +4037,7 @@ export class Shell {
    *  retains its existing open/close/toggle logic. */
   private openDispPicker(): void {
     this.closeAllBandModals();
+    this.closeAllCategoryPanels();   // see openDecPicker note
     const PICKER_ID = 'disp';
     const ENTRIES: Array<{ label: string; selector: string }> = [
       { label: 'Anti-Carrier', selector: '#btnAntc' },
@@ -4067,6 +4108,7 @@ export class Shell {
    *  underlying open-modal / fetch logic stays in one place. */
   private openInfoPicker(): void {
     this.closeAllBandModals();
+    this.closeAllCategoryPanels();   // see openDecPicker note
     const PICKER_ID = 'info';
     // INFO is now reserved for live / derived / search tools only.
     // Every "pure frequency picker" (a static curated list of dial
@@ -4131,6 +4173,7 @@ export class Shell {
    *  the freq-picker overlay it spawns lives in one place. */
   private openFreqPicker(): void {
     this.closeAllBandModals();
+    this.closeAllCategoryPanels();   // see openDecPicker note
     const PICKER_ID = 'freq';
     const ENTRIES: Array<{ label: string; selector: string }> = [
       // Amateur / utility freq pickers
@@ -4428,6 +4471,31 @@ export class Shell {
    *  priority order: open picker matrix → active visualizer overlay →
    *  active decoder panel. Each "active" decoder/visualizer button is
    *  click()-ed to toggle it off through its existing handler. */
+  /** Tear down every panel that belongs to the DECO / FREQ / VIEW /
+   *  INFO mutual-exclusion group so a freshly selected one can take
+   *  the foreground alone. Skips the button identified by `except`
+   *  so the call site can pre-emptively clear without immediately
+   *  re-closing the very thing it's about to activate. Covers:
+   *    • INFO     → .sig-overlay (EIBI / PSKR / NETS / WSPR / DXW / SID)
+   *    • INFO viz → Gray-line propagation map (separate on/off flag)
+   *    • VIEW     → every visualizer toggle
+   *    • DECO     → every decoder toggle
+   *  FREQ has no persistent panel — its picker dismisses itself, and
+   *  the sub-pickers it spawns are band-modal overlays that the next
+   *  closeAllBandModals() call already handles. */
+  private closeAllCategoryPanels(except?: HTMLElement | null): void {
+    if (document.querySelector('.sig-overlay')) clearSigOverlay();
+    for (const id of Shell.VIZ_BUTTON_IDS) {
+      const el = document.getElementById(id);
+      if (el && el !== except && el.classList.contains('active')) el.click();
+    }
+    for (const id of Shell.DECODER_BUTTON_IDS) {
+      const el = document.getElementById(id);
+      if (el && el !== except && el.classList.contains('active')) el.click();
+    }
+    if (this.grayOn && except?.id !== 'btnGray') this.toggleGray();
+  }
+
   private closeForegroundOverlay(): void {
     const modal = document.querySelector('.band-modal');
     if (modal) { modal.remove(); return; }
@@ -7289,6 +7357,19 @@ export class Shell {
   private scopeTriggerLevel = 0;               // -1..1 (normalized)
   private scopeTriggerRising = true;           // true = rising edge, false = falling
   private scopeWindowSamples = 1024;           // ~85 ms @ 12 kHz
+  // Run mode: 'auto' (free-running, current behaviour) vs 'shot'
+  // (single-shot — waits for the run button to arm, then captures the
+  // next triggered frame and freezes the trace until armed again).
+  private scopeMode: 'auto' | 'shot' = 'auto';
+  // In 'shot' mode: true after the run button is tapped and before a
+  // triggered frame has been captured. The rAF loop watches this; once
+  // it sees a triggered draw, it flips the flag back to false and
+  // stops calling drawScope() so the canvas freezes.
+  private scopeArmed = false;
+  // Snapshot of the trigger-aligned window from the latest accepted
+  // draw — re-blitted every frame in 'shot' mode after capture so the
+  // canvas keeps its content if it has to repaint (resize, dpr change).
+  private scopeFrozenFrame: Float32Array | null = null;
   // QRSS slow-CW grabber state. The buffer is a *fixed* power-of-two
   // window we FFT in one shot — sized for ~0.7 Hz/bin at 12 kHz, the
   // resolution QRP beacons need. drawTimer fires once per column.
@@ -13028,6 +13109,13 @@ export class Shell {
     if (this.scopeOn) {
       this.scopeBuf.fill(0);
       this.scopeBufWrite = 0;
+      // Default each session to free-running 'auto'. The shot button
+      // text + status line are re-synced via updateScopeStatus().
+      this.scopeMode = 'auto';
+      this.scopeArmed = false;
+      this.scopeFrozenFrame = null;
+      (this.$('scopeMode') as HTMLElement).textContent = 'auto';
+      this.updateScopeStatus();
       this.player.onScope = (s) => this.feedScope(s);
       const tick = () => {
         if (!this.scopeOn) { this.scopeRaf = null; return; }
@@ -13064,8 +13152,14 @@ export class Shell {
       canvas.height = cssH * dpr;
     }
     const W = canvas.width, H = canvas.height;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H);
+    // Shot-mode: if we have a captured frame and aren't currently
+    // re-arming, just repaint that captured frame and bail. (The rAF
+    // loop keeps ticking so canvas resize / dpr changes still trigger
+    // a fresh blit; we never re-scan the ring buffer here.)
+    if (this.scopeMode === 'shot' && !this.scopeArmed && this.scopeFrozenFrame) {
+      this.blitScopeFrame(ctx, W, H, dpr, this.scopeFrozenFrame, true);
+      return;
+    }
 
     // Linearize the ring buffer into a flat Float32Array we can scan.
     const buf = this.scopeBuf;
@@ -13089,7 +13183,36 @@ export class Shell {
     const start = trig >= 0 ? trig : 0;
     const triggered = trig >= 0;
 
-    // Centerline + level guide.
+    // Shot mode, armed, waiting for trigger: skip painting until we
+    // actually capture one. (Black canvas signals "waiting".)
+    if (this.scopeMode === 'shot' && this.scopeArmed && !triggered) {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      // Centerline + level guide so the operator sees they're armed.
+      this.drawScopeGuides(ctx, W, H, dpr, level);
+      return;
+    }
+
+    // Build the trigger-aligned window we'll either draw live (auto)
+    // or freeze (shot capture).
+    const frame = new Float32Array(win);
+    for (let i = 0; i < win; i++) frame[i] = flat[start + i];
+
+    this.blitScopeFrame(ctx, W, H, dpr, frame, triggered);
+
+    // Shot mode capture path: store this frame and disarm so future
+    // ticks short-circuit to the re-blit branch above.
+    if (this.scopeMode === 'shot' && this.scopeArmed && triggered) {
+      this.scopeFrozenFrame = frame;
+      this.scopeArmed = false;
+      this.updateScopeStatus();
+    }
+  }
+
+  /** Paint centerline + dashed trigger-level guide. Shared between the
+   *  live-draw path and the armed-but-waiting path so the operator
+   *  always sees the trigger level. */
+  private drawScopeGuides(ctx: CanvasRenderingContext2D, W: number, H: number, dpr: number, level: number): void {
     ctx.strokeStyle = '#222';
     ctx.lineWidth = 1 * dpr;
     ctx.beginPath();
@@ -13102,14 +13225,22 @@ export class Shell {
     ctx.moveTo(0, levelY); ctx.lineTo(W, levelY);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
 
-    // Waveform.
+  /** Blit a captured / live trigger-aligned frame onto the scope
+   *  canvas. `triggered` controls trace colour (bright green = locked,
+   *  dim green = free-running unsynced). */
+  private blitScopeFrame(ctx: CanvasRenderingContext2D, W: number, H: number, dpr: number, frame: Float32Array, triggered: boolean): void {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    this.drawScopeGuides(ctx, W, H, dpr, this.scopeTriggerLevel);
     ctx.strokeStyle = triggered ? '#cfffa3' : '#7a8a4a';
     ctx.lineWidth = 1.2 * dpr;
     ctx.beginPath();
-    for (let i = 0; i < win; i++) {
-      const x = (i / (win - 1)) * W;
-      const v = flat[start + i];
+    const n = frame.length;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * W;
+      const v = frame[i];
       const y = H / 2 - v * (H / 2 - 4 * dpr);
       if (i === 0) ctx.moveTo(x, y);
       else         ctx.lineTo(x, y);
@@ -14443,7 +14574,12 @@ export class Shell {
 
   private updateScopeStatus() {
     const arrow = this.scopeTriggerRising ? '↑' : '↓';
-    this.$('scopeStatus').textContent = `SCOPE — trigger ${arrow} @ ${this.scopeTriggerLevel.toFixed(2)}`;
+    let modeTxt: string;
+    if (this.scopeMode === 'auto') modeTxt = 'auto';
+    else if (this.scopeArmed)      modeTxt = 'shot · armed (waiting for trigger)';
+    else if (this.scopeFrozenFrame) modeTxt = 'shot · captured (press run for next)';
+    else                           modeTxt = 'shot · press run';
+    this.$('scopeStatus').textContent = `SCOPE — ${modeTxt} · trigger ${arrow} @ ${this.scopeTriggerLevel.toFixed(2)}`;
     this.$('scopeLevelVal').textContent = this.scopeTriggerLevel.toFixed(2);
   }
 
@@ -17435,7 +17571,7 @@ export class Shell {
   }
 
   /** Fire `step` once on press, then repeat every 1 s while the button is held. */
-  private bindRepeatPress(el: HTMLElement, step: () => void) {
+  private bindRepeatPress(el: HTMLElement, step: () => void, intervalMs = 1000) {
     let timer: number | null = null;
     const stop = () => { if (timer != null) { clearInterval(timer); timer = null; } };
     el.addEventListener('pointerdown', (e) => {
@@ -17443,7 +17579,7 @@ export class Shell {
       e.stopPropagation();
       step();
       stop();
-      timer = setInterval(step, 1000) as unknown as number;
+      timer = setInterval(step, intervalMs) as unknown as number;
     });
     el.addEventListener('pointerup',     stop);
     el.addEventListener('pointerleave',  stop);
