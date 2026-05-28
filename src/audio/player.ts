@@ -104,6 +104,14 @@ export class AudioPlayer {
   private vadEnabled = false;
   private vadThresholdDb = 6;
   private vadHangMs = 300;
+  /** EXP — Downward expander / soft gate. Smoother than VAD: attenuates
+   *  rather than fully gates. Placed between pshiftNode and vadNode so
+   *  VAD's hard binary decision sees expanded audio. */
+  private expNode: AudioWorkletNode | null = null;
+  private expLoading: Promise<void> | null = null;
+  private expEnabled = false;
+  private expThresholdDb = 12;
+  private expRatio = 2;
   private vTrackEnabled = false;
   private vTrackTimer: number | null = null;
   private vTrackCenter = 1500;
@@ -817,8 +825,9 @@ export class AudioPlayer {
   }
 
   /** Rebuild the chain segment vAnt23 → (dckNode →)? (rfwNode →)?
-   *  (nb2Node →)? (pshiftNode →)? (vadNode →)? dhisOut. VAD sits at the
-   *  end so the gate decision sees the fully-processed audio. */
+   *  (nb2Node →)? (pshiftNode →)? (expNode →)? (vadNode →)? dhisOut.
+   *  EXP sits between PS and VAD so VAD's hard gate decision sees
+   *  expanded audio; VAD remains the very last stage. */
   private rewireDhisChain(): void {
     if (!this.vAnt23 || !this.dhisOut) return;
     try { this.vAnt23.disconnect(); } catch {}
@@ -826,12 +835,14 @@ export class AudioPlayer {
     try { this.rfwNode?.disconnect(); } catch {}
     try { this.nb2Node?.disconnect(); } catch {}
     try { this.pshiftNode?.disconnect(); } catch {}
+    try { this.expNode?.disconnect(); } catch {}
     try { this.vadNode?.disconnect(); } catch {}
     let prev: AudioNode = this.vAnt23;
     if (this.dckNode)    { prev.connect(this.dckNode);    prev = this.dckNode; }
     if (this.rfwNode)    { prev.connect(this.rfwNode);    prev = this.rfwNode; }
     if (this.nb2Node)    { prev.connect(this.nb2Node);    prev = this.nb2Node; }
     if (this.pshiftNode) { prev.connect(this.pshiftNode); prev = this.pshiftNode; }
+    if (this.expNode)    { prev.connect(this.expNode);    prev = this.expNode; }
     if (this.vadNode)    { prev.connect(this.vadNode);    prev = this.vadNode; }
     prev.connect(this.dhisOut);
   }
@@ -1017,6 +1028,72 @@ export class AudioPlayer {
     this.vadNode?.port.postMessage({ hangMs: this.vadHangMs });
   }
   getVadHangMs(): number { return this.vadHangMs; }
+
+  /** Lazy-load the Expander worklet. Spliced between pshiftNode and
+   *  vadNode so VAD's hard binary decision sees expanded audio. */
+  ensureExpanderWorklet(log: LogFn = () => {}): Promise<void> {
+    if (this.expNode) return Promise.resolve();
+    if (this.expLoading) return this.expLoading;
+    const ctx = this.ensureGraph();
+    if (!ctx || !ctx.audioWorklet || !this.vAnt23 || !this.dhisOut) {
+      return Promise.resolve();
+    }
+    this.expLoading = (async () => {
+      try {
+        await ctx.audioWorklet.addModule('/expander-worklet.js');
+        const node = new AudioWorkletNode(ctx, 'expander', {
+          numberOfInputs: 1, numberOfOutputs: 1,
+          channelCount: 1, channelCountMode: 'explicit',
+          channelInterpretation: 'speakers',
+          processorOptions: {
+            enabled: this.expEnabled,
+            thresholdDb: this.expThresholdDb,
+            ratio: this.expRatio,
+          },
+        });
+        this.expNode = node;
+        this.rewireDhisChain();
+        node.port.postMessage({
+          enabled: this.expEnabled,
+          thresholdDb: this.expThresholdDb,
+          ratio: this.expRatio,
+        });
+        log('audio: expander worklet loaded');
+      } catch (e) {
+        log('audio: expander worklet load failed — ' + (e as Error).message);
+      }
+    })();
+    return this.expLoading;
+  }
+
+  setExpanderEnabled(on: boolean): void {
+    this.expEnabled = !!on;
+    if (this.expNode) {
+      this.expNode.port.postMessage({ enabled: this.expEnabled });
+    } else {
+      this.ensureExpanderWorklet();
+    }
+  }
+  isExpanderEnabled(): boolean { return this.expEnabled; }
+
+  /** Threshold in dB above the adaptive noise floor at which the
+   *  expander stops attenuating (i.e. passes through unchanged).
+   *  Below threshold, attenuation scales with `ratio`. Range 0..30. */
+  setExpanderThresholdDb(db: number): void {
+    if (!Number.isFinite(db)) return;
+    this.expThresholdDb = Math.max(0, Math.min(30, db));
+    this.expNode?.port.postMessage({ thresholdDb: this.expThresholdDb });
+  }
+  getExpanderThresholdDb(): number { return this.expThresholdDb; }
+
+  /** Downward expansion ratio. 1 = bypass. 2 = soft expansion (each
+   *  1 dB below threshold becomes 2 dB), 4 = aggressive. Range 1..10. */
+  setExpanderRatio(r: number): void {
+    if (!Number.isFinite(r)) return;
+    this.expRatio = Math.max(1, Math.min(10, r));
+    this.expNode?.port.postMessage({ ratio: this.expRatio });
+  }
+  getExpanderRatio(): number { return this.expRatio; }
 
   /** Begin async-loading the RFWhisper (RNNoise) worklet. Idempotent.
    *  Fetches /rnnoise.wasm on the main thread (AudioWorklet context can't

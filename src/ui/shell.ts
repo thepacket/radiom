@@ -1830,6 +1830,7 @@ export class Shell {
           <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
           <button class="fnbtn" id="btnPshift" style="display:none" title="PS — Pitch shifter (DSP picker). Cycles off → −6 semitones → −12 semitones → +6 → +12 → off on each tap. Negative = lower pitch (good for fast CW), positive = higher pitch.">PS</button>
           <button class="fnbtn" id="btnVad" style="display:none" title="VAD — Voice Activity Detection. Gates audio open when voice-like energy is detected, closed otherwise. Smarter than RSSI squelch: requires both energy (above adaptive noise floor) AND voice-characteristic zero-crossing rate. Cycles off → 6 dB (aggressive) → 12 dB (balanced) → 18 dB (strict) → off.">VAD</button>
+          <button class="fnbtn" id="btnExp" style="display:none" title="EXP — Downward audio expander / soft gate. Smoothly attenuates audio below an adaptive threshold instead of fully gating like VAD. Quiet bits get quieter; loud bits stay loud. Voice-agnostic — works equally well on music / broadcast / CW. Cycles off → gentle (6 dB / 1.5:1) → medium (12 dB / 2:1) → strong (18 dB / 3:1) → off.">EXP</button>
           <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
           <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
           <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
@@ -2800,6 +2801,60 @@ export class Shell {
       if (Number.isFinite(db)) this.player.setVadThresholdDb(db);
       if (wasOn) this.player.setVadEnabled(true);
       updateVadBtn();
+    } catch { /* ignored */ }
+    // EXP — downward audio expander / soft gate. Cycles three presets:
+    // gentle (6 dB, 1.5:1) → medium (12 dB, 2:1) → strong (18 dB, 3:1).
+    // Reached via the DSP picker.
+    const expPresets: Array<{ db: number; ratio: number; label: string }> = [
+      { db: 6,  ratio: 1.5, label: 'gentle'   },
+      { db: 12, ratio: 2.0, label: 'medium'   },
+      { db: 18, ratio: 3.0, label: 'strong'   },
+    ];
+    const btnExp = this.$('btnExp') as HTMLButtonElement;
+    const updateExpBtn = () => {
+      const on = this.player.isExpanderEnabled();
+      const db = this.player.getExpanderThresholdDb();
+      const r  = this.player.getExpanderRatio();
+      btnExp.classList.toggle('active', on);
+      btnExp.textContent = on ? `EXP ${db}dB ${r}:1` : 'EXP';
+    };
+    btnExp.addEventListener('click', () => {
+      const on = this.player.isExpanderEnabled();
+      const curDb = this.player.getExpanderThresholdDb();
+      if (!on) {
+        this.player.setExpanderThresholdDb(expPresets[0].db);
+        this.player.setExpanderRatio(expPresets[0].ratio);
+        this.player.setExpanderEnabled(true);
+        this.banner(`EXP ${expPresets[0].label} (${expPresets[0].db} dB, ${expPresets[0].ratio}:1)`, 1200);
+        try { localStorage.setItem('radiom.expOn', 'true');
+              localStorage.setItem('radiom.expIdx', '0'); } catch {}
+      } else {
+        const idx = expPresets.findIndex(p => Math.abs(p.db - curDb) < 0.5);
+        const next = idx >= 0 && idx < expPresets.length - 1 ? idx + 1 : -1;
+        if (next < 0) {
+          this.player.setExpanderEnabled(false);
+          this.banner('EXP OFF', 1000);
+          try { localStorage.setItem('radiom.expOn', 'false'); } catch {}
+        } else {
+          this.player.setExpanderThresholdDb(expPresets[next].db);
+          this.player.setExpanderRatio(expPresets[next].ratio);
+          this.banner(`EXP ${expPresets[next].label} (${expPresets[next].db} dB, ${expPresets[next].ratio}:1)`, 1200);
+          try { localStorage.setItem('radiom.expIdx', String(next)); } catch {}
+        }
+      }
+      updateExpBtn();
+    });
+    updateExpBtn();
+    // Restore last EXP state.
+    try {
+      const wasOn = localStorage.getItem('radiom.expOn') === 'true';
+      const idx = parseInt(localStorage.getItem('radiom.expIdx') || '', 10);
+      if (Number.isFinite(idx) && idx >= 0 && idx < expPresets.length) {
+        this.player.setExpanderThresholdDb(expPresets[idx].db);
+        this.player.setExpanderRatio(expPresets[idx].ratio);
+      }
+      if (wasOn) this.player.setExpanderEnabled(true);
+      updateExpBtn();
     } catch { /* ignored */ }
     // WF row-duplication cycle button (1 → 2 → 3 → 4 → 1).
     const btnWfDup = this.$('btnWfDup') as HTMLButtonElement;
@@ -5086,6 +5141,7 @@ export class Shell {
       { label: 'AFF', selector: '#btnAfrm' },
       { label: 'EQ',  selector: '#btnEq' },
       { label: 'PS',  selector: '#btnPshift' },
+      { label: 'EXP', selector: '#btnExp' },
       { label: 'VAD', selector: '#btnVad' },
       { label: 'GEN', selector: '#btnModes' },
     ];
