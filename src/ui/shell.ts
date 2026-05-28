@@ -203,7 +203,7 @@ export class Shell {
     (() => { const n = parseFloat(localStorage.getItem('radiom.vtg') ?? '9'); return Number.isFinite(n) ? n : 9; })();
   /** Currently-active page-5 IQ visualizer panel, or null. Only one open
    *  at a time; opening any of the 7 closes whichever was active. */
-  private iq5Active: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk' | null = null;
+  private iq5Active: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk' | 'cden' | 'evm' | 'hoc' | 'pnoise' | 'mtdev' | 'gpsdo' | 'rdop' | 'coh' | 'wvd' | 'stxf' | 'scf' | 'bisp' | 'ambig' | 'iqimb' | 'mirr' | null = null;
   private iq5Raf: number | null = null;
   /** SFRC sferic monitor — rolling per-second strike counts. */
   private sfrcCounts: number[] = [];
@@ -1010,6 +1010,212 @@ export class Shell {
             <canvas id="mhumCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
 
+          <div id="welchPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="welchReset" type="button" title="Reset the min-hold (noise floor) trace">reset</button>
+            </div>
+            <div class="ft8-status" id="welchStatus">Welch PSD —</div>
+            <canvas id="welchCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="crestPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="crestStatus">Crest Factor —</div>
+            <canvas id="crestCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="maskPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="maskKind" type="button" title="Cycle mask preset (SSB 2.7 kHz / AM 6 kHz / NBFM 12.5 kHz / Flat)">SSB</button>
+            </div>
+            <div class="ft8-status" id="maskStatus">Spectral Mask —</div>
+            <canvas id="maskCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="rspecPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="rspecClear" type="button" title="Clear the reassigned spectrogram">clear</button>
+            </div>
+            <div class="ft8-status" id="rspecStatus">Reassigned Spectrogram —</div>
+            <canvas id="rspecCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="lpcPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="lpcStatus">LPC Spectral Envelope —</div>
+            <canvas id="lpcCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="gdelayPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="gdelayStatus">Group Delay —</div>
+            <canvas id="gdelayCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="abspecPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="abspecMark" type="button" title="Mark current spectrum as reference (A)">A</button>
+            </div>
+            <div class="ft8-status" id="abspecStatus">A/B Spectrum Compare —</div>
+            <canvas id="abspecCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="waveletPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="waveletClear" type="button" title="Clear the scalogram history">clear</button>
+            </div>
+            <div class="ft8-status" id="waveletStatus">Wavelet Scalogram —</div>
+            <canvas id="waveletCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="cdenPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="cdenClear" type="button" title="Clear density heatmap">clear</button>
+            </div>
+            <div class="ft8-status" id="cdenStatus">Constellation Density —</div>
+            <canvas id="cdenCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="evmPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="evmStatus">EVM / MER —</div>
+            <canvas id="evmCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="hocPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="hocStatus">Higher-Order Cumulants —</div>
+            <canvas id="hocCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="pnoisePanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="pnoiseStatus">Phase Noise L(f) —</div>
+            <canvas id="pnoiseCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="mtdevPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="mtdevStatus">Modified Allan / TDEV —</div>
+            <canvas id="mtdevCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="gpsdoPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="gpsdoStatus">GPSDO Lock —</div>
+            <canvas id="gpsdoCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="rdopPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="rdopStatus">Range-Doppler —</div>
+            <canvas id="rdopCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="cohPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="cohStatus">Spectral Coherence —</div>
+            <canvas id="cohCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
+          <div id="hhtPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="hhtStatus">Hilbert-Huang —</div>
+            <canvas id="hhtCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="melPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="melClear" type="button" title="Clear the Mel spectrogram">clear</button>
+            </div>
+            <div class="ft8-status" id="melStatus">Mel Spectrogram —</div>
+            <canvas id="melCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="chroPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="chroClear" type="button" title="Clear the chromagram">clear</button>
+            </div>
+            <div class="ft8-status" id="chroStatus">Chromagram —</div>
+            <canvas id="chroCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="mspecPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="mspecStatus">Modulation Spectrum —</div>
+            <canvas id="mspecCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="acfPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="acfStatus">Autocorrelation —</div>
+            <canvas id="acfCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="sentPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="sentStatus">Spectral Entropy —</div>
+            <canvas id="sentCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="sflatPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="sflatStatus">Spectral Flatness —</div>
+            <canvas id="sflatCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="qqPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="qqKind" type="button" title="Cycle reference distribution (Rayleigh / Gaussian / Rician)">Rayleigh</button>
+            </div>
+            <div class="ft8-status" id="qqStatus">Q-Q Plot —</div>
+            <canvas id="qqCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="ciperPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="ciperStatus">CI Periodogram —</div>
+            <canvas id="ciperCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="phasePPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <input class="scope-level" id="phasePTau" type="range" min="1" max="2000" value="36" step="1" title="Embedding delay τ (samples)" />
+            </div>
+            <div class="ft8-status" id="phasePStatus">Phase Portrait —</div>
+            <canvas id="phasePCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="wvdPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="wvdClear" type="button" title="Clear the WVD">clear</button>
+            </div>
+            <div class="ft8-status" id="wvdStatus">Wigner-Ville (SP-WVD) —</div>
+            <canvas id="wvdCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="stxfPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="stxfClear" type="button" title="Clear the S-transform">clear</button>
+            </div>
+            <div class="ft8-status" id="stxfStatus">S-Transform —</div>
+            <canvas id="stxfCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="scfPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="scfStatus">Cyclic Spectrum SCF —</div>
+            <canvas id="scfCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="bispPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="bispStatus">Bispectrum / Bicoherence —</div>
+            <canvas id="bispCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="ambigPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="ambigStatus">Ambiguity Function —</div>
+            <canvas id="ambigCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="iqimbPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="iqimbStatus">I/Q Imbalance Monitor —</div>
+            <canvas id="iqimbCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+          <div id="mirrPanel" class="ft8-panel" style="display:none">
+            <div class="ft8-actions"></div>
+            <div class="ft8-status" id="mirrStatus">Mirror-Image Rejection —</div>
+            <canvas id="mirrCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
+          </div>
+
           <div id="qrssPanel" class="ft8-panel" style="display:none">
             <div class="ft8-actions">
               <button class="transcript-btn" id="qrssMode3"  type="button" title="QRSS3 — 3 s per Morse dot (fast scroll, ~0.25 s/col)">Q3</button>
@@ -1448,6 +1654,39 @@ export class Shell {
           <button class="kpbtn" id="btnEnvp" style="display:none" title="Envelope PDF — probability density of the analytic-signal envelope |x + jH{x}| of the demodulated audio. Pure noise → Rayleigh-shaped curve. Carrier + noise → Rician (shifted Rayleigh). Speech → long-tailed asymmetric. FSK / two-tone → bimodal. One glance tells you the signal class.">ENVP</button>
           <button class="kpbtn" id="btnCeps" style="display:none" title="Cepstrum / Pitch Contour — real cepstrum (FFT of log-magnitude spectrum) of the demodulated audio. Peaks at the quefrency that equals the dominant period: vocal-tract pitch, MFSK tone spacing, echo delays. Top half plots the current cepstrum; bottom half scrolls the dominant-peak pitch estimate over time.">CEPS</button>
           <button class="kpbtn" id="btnMhum" style="display:none" title="Mains-Hum Tracker — narrow audio FFT + scrolling waterfall over 0–250 Hz, the band where 50 / 60 Hz mains hum and its harmonics live. Reference lines highlight 50 / 60 / 100 / 120 / 150 / 180 / 200 / 240 Hz. Useful for ground-loop diagnosis and finding intentional low-freq carriers near power-line frequency.">MHUM</button>
+          <button class="kpbtn" id="btnWelch" style="display:none" title="Welch PSD — averaged periodogram, 0–6 kHz audio. Splits audio into overlapping windowed segments, FFTs each, and averages the squared magnitudes. The result is a statistically smooth power-spectral-density trace with a stable noise-floor estimate — much steadier than the single-frame Audio FFT. A persistent min-hold trace marks the lowest observed level per bin since the panel opened.">WLCH</button>
+          <button class="kpbtn" id="btnCrest" style="display:none" title="Crest Factor / PAPR vs Time — running plot of peak-to-RMS ratio of the audio (in dB). Quick signal-class indicator: sinusoid ≈ 3 dB, square wave ≈ 0 dB, white noise ≈ 10–12 dB, impulsive interference ≥ 15 dB. Spikes indicate transient interference.">CRST</button>
+          <button class="kpbtn" id="btnMask" style="display:none" title="Spectral Mask Overlay — Welch PSD with a regulatory transmit mask overlay. Cycle SSB-2.7 / AM-6 / NBFM-12.5 / Flat presets. Anything above the mask is an out-of-band emission. Useful for compliance checks and rejecting splatter from adjacent channels.">MASK</button>
+          <button class="kpbtn" id="btnRspec" style="display:none" title="Reassigned Spectrogram — sharper STFT. Each FFT bin is repositioned in time-frequency to its centre-of-energy. Steady carriers contract to thin lines; chirps lock to tight diagonals; transients to sharp ticks. Removes the smearing that blurs the regular Audio Spectrogram.">RSPC</button>
+          <button class="kpbtn" id="btnLpc" style="display:none" title="LPC Spectral Envelope — Linear Predictive Coding order-12 estimate of the audio short-term spectrum envelope. The smooth curve traces the resonances (formants in voice, modulation envelope in modems). Complements the Cepstrum view.">LPC</button>
+          <button class="kpbtn" id="btnGdelay" style="display:none" title="Group Delay vs Frequency — τ_g(f) = −dφ/dω of the receive-chain frequency response. Measured against the running-average spectrum phase. Reveals filter ringing, all-pass equalisation, and IIR delay structure.">GDLY</button>
+          <button class="kpbtn" id="btnAbspec" style="display:none" title="A/B Spectrum Compare — Tap A to lock the current spectrum as the reference. The display then shows the current PSD (green), the reference (orange), and the difference in dB. Diagnoses noise-blanker / NR / NB / NT block effects: turn DSP off, mark A, turn it on, observe the gain.">A/B</button>
+          <button class="kpbtn" id="btnWavelet" style="display:none" title="Wavelet Scalogram — Continuous Morlet wavelet transform of the audio. Scrolling time-scale heatmap. Localises transients better than FFT-based spectrogram (constant-Q resolution: more time precision at high frequencies, more frequency precision at low frequencies).">WVLT</button>
+          <button class="kpbtn" id="btnCden" style="display:none" title="Constellation Density Heatmap — 2D histogram of the IQ stream as a colour-mapped density. High-SNR signals show bright clusters at each constellation point; noise spreads diffusely. Reads better than raw scatter for long integrations / weak signals.">CDEN</button>
+          <button class="kpbtn" id="btnEvm" style="display:none" title="EVM / MER vs Time — for a locked PSK / QAM constellation, plots Error Vector Magnitude (RMS distance from nearest ideal symbol) and Modulation Error Ratio in dB. Direct readout of digital-link quality.">EVM</button>
+          <button class="kpbtn" id="btnHoc" style="display:none" title="Higher-Order Cumulants Timeline — live time-series of |C₂₀|, |C₂₁|, |C₄₀|, |C₄₂|, μ₄₂ computed on the IQ stream. Distinguishes modulation classes (AM/FM/PSK/QAM/noise) by their characteristic cumulant signatures.">HOC</button>
+          <button class="kpbtn" id="btnPnoise" style="display:none" title="Phase Noise Spectrum L(f) — single-sideband phase-noise PSD in dBc/Hz vs offset frequency from a PLL-locked carrier. Standard oscillator stability metric. Frequency-domain companion to Allan Deviation.">PHN</button>
+          <button class="kpbtn" id="btnMtdev" style="display:none" title="Modified Allan / Hadamard / TDEV — full Allan variance family. MDEV distinguishes white PM from flicker PM; HDEV rejects linear drift; TDEV is time-deviation. Standard timekeeping metrics, plotted log-log alongside ADEV.">MDEV</button>
+          <button class="kpbtn" id="btnGpsdo" style="display:none" title="GPSDO Lock / Holdover Plot — long-term phase-vs-time of a stable carrier. Slope = frequency offset (ppm). Sudden jumps = GPS unlock / holdover events. Use a known reference (WWV, broadcast carrier) as the GPSDO under test.">GPS</button>
+          <button class="kpbtn" id="btnRdop" style="display:none" title="Range-Doppler Map — radar-style 2D detection plot. Y axis = Doppler (velocity), X axis = range (delay). Designed for FMCW / pulse-Doppler signals (aviation radars, OTH). Companion to the OTHR view.">RDOP</button>
+          <button class="kpbtn" id="btnCoh" style="display:none" title="Spectral Coherence — magnitude-squared coherence γ²(f) between two consecutive audio time windows. Stationary signals (steady carriers, persistent QRM) show γ²≈1; noise shows γ²≈0. Highlights what's truly persistent versus transient.">COH</button>
+          <button class="kpbtn" id="btnHht" style="display:none" title="Hilbert-Huang Transform — Empirical Mode Decomposition extracts the first three Intrinsic Mode Functions (IMFs) of the audio; each IMF gets its own instantaneous-frequency trace via Hilbert transform. Adaptive multi-component time-frequency analysis.">HHT</button>
+          <button class="kpbtn" id="btnMel" style="display:none" title="Mel Spectrogram — scrolling log-frequency time-frequency heatmap with 64 Mel-spaced filter banks. Auditory-perceptual scale, standard in speech / music / bioacoustics.">MEL</button>
+          <button class="kpbtn" id="btnChro" style="display:none" title="Chromagram — 12-bin pitch-class profile folded across all octaves. Visualises tonal centre / chord. Useful for harmonic-tone analysis and music tracking.">CHRO</button>
+          <button class="kpbtn" id="btnMspec" style="display:none" title="Modulation Spectrum — second-stage FFT along time of each spectrogram bin's envelope. Reveals slow modulation rates: AM rate, FM tone rate, speech syllable rate (3–8 Hz).">MSPC</button>
+          <button class="kpbtn" id="btnAcf" style="display:none" title="Autocorrelation Function — real-time R(τ) of the audio over 0–50 ms lag. Peaks at integer multiples of the dominant period; classic periodicity detector.">ACF</button>
+          <button class="kpbtn" id="btnSent" style="display:none" title="Spectral Entropy vs Time — Shannon entropy of the normalised audio PSD. Low entropy → pure tone, high entropy → white noise. Classifier strip-chart over 30 s.">SENT</button>
+          <button class="kpbtn" id="btnSflat" style="display:none" title="Spectral Flatness Measure (Wiener Entropy) — geometric/arithmetic mean ratio of the PSD. 0 = pure tone, 1 = white noise. Standard tonal-vs-noise discriminator.">SFLT</button>
+          <button class="kpbtn" id="btnQq" style="display:none" title="Q-Q Plot — quantile-quantile plot of the audio envelope against a theoretical distribution (Rayleigh / Gaussian / Rician). Straight line = good fit. Cycles distribution presets.">Q-Q</button>
+          <button class="kpbtn" id="btnCiper" style="display:none" title="CI Periodogram — Welch PSD with 95% χ² confidence-interval bands. Tells you which spectral peaks are statistically significant vs noise fluctuations.">CIP</button>
+          <button class="kpbtn" id="btnPhaseP" style="display:none" title="Phase Portrait / Recurrence Plot — trajectory in (x(t), x(t+τ)) embedding space. Slider sets τ. Reveals limit cycles, periodicities, chaos. Nonlinear-dynamics classic.">PHP</button>
+          <button class="kpbtn" id="btnWvd" style="display:none" title="Wigner-Ville Distribution (SP-WVD) — Smoothed-Pseudo Wigner-Ville. Quadratic time-frequency distribution; sharper resolution than STFT. Cross-terms are reduced by the time-frequency smoothing.">WVD</button>
+          <button class="kpbtn" id="btnStxf" style="display:none" title="Stockwell S-Transform — multi-resolution time-frequency map with absolute phase preserved. Wavelet-like resolution scaling but with STFT-style frequency reference.">STX</button>
+          <button class="kpbtn" id="btnScf" style="display:none" title="Cyclic Spectrum / Spectral Correlation Function — |S(f, α)| in the spectral frequency × cycle frequency plane. Reveals which carriers / bands carry which baud rates. Complements the CAF view.">SCF</button>
+          <button class="kpbtn" id="btnBisp" style="display:none" title="Bispectrum / Bicoherence — third-order spectrum. Detects quadratic phase coupling. Useful for nonlinear-system / mechanical-fault / plasma analysis.">BSP</button>
+          <button class="kpbtn" id="btnAmbig" style="display:none" title="Ambiguity Function — full 2D |χ(τ, ν)| of the captured reference waveform against itself. Range-Doppler ambiguity of the signal seen as a waveform.">AMB</button>
+          <button class="kpbtn" id="btnIqimb" style="display:none" title="I/Q Imbalance Monitor — amplitude imbalance (|I|/|Q|), phase imbalance (deviation from 90°), and DC offsets on I and Q channels. Standard SDR front-end diagnostic.">IMB</button>
+          <button class="kpbtn" id="btnMirr" style="display:none" title="Mirror-Image Rejection — strip chart of in-band vs image-band power ratio (dB) measured at symmetric ±f offsets from DC. Quantifies image suppression of the receiver.">MIR</button>
           <!-- DSD (dsd-fme) digital-voice decoders. Hidden stash; the
                DEC list picker is the only access path. Each button
                drives the same DsdDecoder with a different mode flag. -->
@@ -2614,6 +2853,151 @@ export class Shell {
       this.mhumWaterfallFilled = 0;
       if (this.mhumWaterfall) this.mhumWaterfall.fill(0);
     });
+    this.$('btnWelch').addEventListener('click', () => {
+      if (this.welchOn) { this.toggleWelch(); return; }
+      this.exclusiveActivate('welch');
+      this.toggleWelch();
+    });
+    this.$('welchReset').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.welchMinHold) this.welchMinHold.fill(Infinity);
+      this.welchAvgFrames = 0;
+      if (this.welchAvgSum) this.welchAvgSum.fill(0);
+    });
+    // Audio-side viewer buttons.
+    this.$('btnCrest').addEventListener('click', () => {
+      if (this.crestOn) { this.toggleCrest(); return; }
+      this.exclusiveActivate('crest'); this.toggleCrest();
+    });
+    this.$('btnMask').addEventListener('click', () => {
+      if (this.maskOn) { this.toggleMask(); return; }
+      this.exclusiveActivate('mask'); this.toggleMask();
+    });
+    this.$('maskKind').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next: Shell['maskKind'][] = ['ssb', 'am', 'nbfm', 'flat'];
+      const i = next.indexOf(this.maskKind);
+      this.maskKind = next[(i + 1) % next.length];
+      const labels: Record<string, string> = { ssb: 'SSB', am: 'AM', nbfm: 'NBFM', flat: 'Flat' };
+      (this.$('maskKind') as HTMLButtonElement).textContent = labels[this.maskKind];
+    });
+    this.$('btnRspec').addEventListener('click', () => {
+      if (this.rspecOn) { this.toggleRspec(); return; }
+      this.exclusiveActivate('rspec'); this.toggleRspec();
+    });
+    this.$('rspecClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.rspecImage) this.rspecImage.fill(0);
+      this.rspecCol = 0;
+    });
+    this.$('btnLpc').addEventListener('click', () => {
+      if (this.lpcOn) { this.toggleLpc(); return; }
+      this.exclusiveActivate('lpc'); this.toggleLpc();
+    });
+    this.$('btnGdelay').addEventListener('click', () => {
+      if (this.gdelayOn) { this.toggleGdelay(); return; }
+      this.exclusiveActivate('gdelay'); this.toggleGdelay();
+    });
+    this.$('btnAbspec').addEventListener('click', () => {
+      if (this.abspecOn) { this.toggleAbspec(); return; }
+      this.exclusiveActivate('abspec'); this.toggleAbspec();
+    });
+    this.$('abspecMark').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.abspecCurDb) {
+        this.abspecRefDb = new Float32Array(this.abspecCurDb);
+        this.abspecHaveRef = true;
+      }
+    });
+    this.$('btnWavelet').addEventListener('click', () => {
+      if (this.waveletOn) { this.toggleWavelet(); return; }
+      this.exclusiveActivate('wavelet'); this.toggleWavelet();
+    });
+    this.$('waveletClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.waveletImage) this.waveletImage.fill(0);
+      this.waveletCol = 0;
+    });
+    // IQ-side viewer buttons (handled through the toggleIq5 button-binding
+    // loop earlier — only custom sub-buttons need wiring here).
+    this.$('cdenClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.cdenHeat) this.cdenHeat.fill(0);
+      this.cdenMax = 0; this.cdenSamples = 0;
+    });
+    // 2026 batch-3 audio-side viewer buttons.
+    this.$('btnHht').addEventListener('click', () => {
+      if (this.hhtOn) { this.toggleHht(); return; }
+      this.exclusiveActivate('hht'); this.toggleHht();
+    });
+    this.$('btnMel').addEventListener('click', () => {
+      if (this.melOn) { this.toggleMel(); return; }
+      this.exclusiveActivate('mel'); this.toggleMel();
+    });
+    this.$('melClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.melImage) this.melImage.fill(0);
+      this.melCol = 0;
+    });
+    this.$('btnChro').addEventListener('click', () => {
+      if (this.chroOn) { this.toggleChro(); return; }
+      this.exclusiveActivate('chro'); this.toggleChro();
+    });
+    this.$('chroClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.chroImage) this.chroImage.fill(0);
+      this.chroCol = 0;
+    });
+    this.$('btnMspec').addEventListener('click', () => {
+      if (this.mspecOn) { this.toggleMspec(); return; }
+      this.exclusiveActivate('mspec'); this.toggleMspec();
+    });
+    this.$('btnAcf').addEventListener('click', () => {
+      if (this.acfOn) { this.toggleAcf(); return; }
+      this.exclusiveActivate('acf'); this.toggleAcf();
+    });
+    this.$('btnSent').addEventListener('click', () => {
+      if (this.sentOn) { this.toggleSent(); return; }
+      this.exclusiveActivate('sent'); this.toggleSent();
+    });
+    this.$('btnSflat').addEventListener('click', () => {
+      if (this.sflatOn) { this.toggleSflat(); return; }
+      this.exclusiveActivate('sflat'); this.toggleSflat();
+    });
+    this.$('btnQq').addEventListener('click', () => {
+      if (this.qqOn) { this.toggleQq(); return; }
+      this.exclusiveActivate('qq'); this.toggleQq();
+    });
+    this.$('qqKind').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next: Shell['qqKind'][] = ['rayleigh', 'gaussian', 'rician'];
+      const i = next.indexOf(this.qqKind);
+      this.qqKind = next[(i + 1) % next.length];
+      const labels: Record<string, string> = { rayleigh: 'Rayleigh', gaussian: 'Gaussian', rician: 'Rician' };
+      (this.$('qqKind') as HTMLButtonElement).textContent = labels[this.qqKind];
+    });
+    this.$('btnCiper').addEventListener('click', () => {
+      if (this.ciperOn) { this.toggleCiper(); return; }
+      this.exclusiveActivate('ciper'); this.toggleCiper();
+    });
+    this.$('btnPhaseP').addEventListener('click', () => {
+      if (this.phasePOn) { this.togglePhaseP(); return; }
+      this.exclusiveActivate('phaseP'); this.togglePhaseP();
+    });
+    this.$('phasePTau').addEventListener('input', (e) => {
+      this.phasePTau = parseInt((e.target as HTMLInputElement).value, 10);
+    });
+    // IQ-side custom buttons (clear).
+    this.$('wvdClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.wvdImage) this.wvdImage.fill(0);
+      this.wvdCol = 0;
+    });
+    this.$('stxfClear').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.stxfImage) this.stxfImage.fill(0);
+      this.stxfCol = 0;
+    });
     this.$('ifrqClear').addEventListener('click', (e) => {
       e.stopPropagation();
       this.ifrqHist.fill(0);
@@ -3600,7 +3984,7 @@ export class Shell {
     });
     this.$('btnSDial').addEventListener('click', () => this.toggleSDial());
 // Page-5 IQ visualizers — single state machine, one panel open at a time.
-    for (const k of ['sfrc','dopp','zoom','antc','ppmc','rfi','wusb','wlsb','dlds','kurt','ifrq','aldv','caf','echo','sclk'] as const) {
+    for (const k of ['sfrc','dopp','zoom','antc','ppmc','rfi','wusb','wlsb','dlds','kurt','ifrq','aldv','caf','echo','sclk','cden','evm','hoc','pnoise','mtdev','gpsdo','rdop','coh','wvd','stxf','scf','bisp','ambig','iqimb','mirr'] as const) {
       const btn = this.root.querySelector('#btn' + k.charAt(0).toUpperCase() + k.slice(1));
       btn?.addEventListener('click', () => this.toggleIq5(k));
     }
@@ -4364,6 +4748,39 @@ export class Shell {
       { label: 'Envelope PDF', selector: '#btnEnvp' },
       { label: 'Cepstrum / Pitch Contour', selector: '#btnCeps' },
       { label: 'Mains-Hum Tracker', selector: '#btnMhum' },
+      { label: 'Welch PSD', selector: '#btnWelch' },
+      { label: 'Crest Factor / PAPR', selector: '#btnCrest' },
+      { label: 'Spectral Mask Overlay', selector: '#btnMask' },
+      { label: 'Reassigned Spectrogram', selector: '#btnRspec' },
+      { label: 'LPC Spectral Envelope', selector: '#btnLpc' },
+      { label: 'Group Delay vs Frequency', selector: '#btnGdelay' },
+      { label: 'A/B Spectrum Compare', selector: '#btnAbspec' },
+      { label: 'Wavelet Scalogram', selector: '#btnWavelet' },
+      { label: 'Constellation Density Heatmap', selector: '#btnCden' },
+      { label: 'EVM / MER vs Time', selector: '#btnEvm' },
+      { label: 'Higher-Order Cumulants', selector: '#btnHoc' },
+      { label: 'Phase Noise Spectrum L(f)', selector: '#btnPnoise' },
+      { label: 'Modified Allan / TDEV', selector: '#btnMtdev' },
+      { label: 'GPSDO Lock / Holdover', selector: '#btnGpsdo' },
+      { label: 'Range-Doppler Map', selector: '#btnRdop' },
+      { label: 'Spectral Coherence', selector: '#btnCoh' },
+      { label: 'Hilbert-Huang Transform', selector: '#btnHht' },
+      { label: 'Mel Spectrogram', selector: '#btnMel' },
+      { label: 'Chromagram', selector: '#btnChro' },
+      { label: 'Modulation Spectrum', selector: '#btnMspec' },
+      { label: 'Autocorrelation Function', selector: '#btnAcf' },
+      { label: 'Spectral Entropy', selector: '#btnSent' },
+      { label: 'Spectral Flatness', selector: '#btnSflat' },
+      { label: 'Q-Q Plot', selector: '#btnQq' },
+      { label: 'CI Periodogram', selector: '#btnCiper' },
+      { label: 'Phase Portrait', selector: '#btnPhaseP' },
+      { label: 'Wigner-Ville (SP-WVD)', selector: '#btnWvd' },
+      { label: 'Stockwell S-Transform', selector: '#btnStxf' },
+      { label: 'Cyclic Spectrum SCF', selector: '#btnScf' },
+      { label: 'Bispectrum / Bicoherence', selector: '#btnBisp' },
+      { label: 'Ambiguity Function', selector: '#btnAmbig' },
+      { label: 'I/Q Imbalance Monitor', selector: '#btnIqimb' },
+      { label: 'Mirror-Image Rejection', selector: '#btnMirr' },
       { label: 'Carrier Zoom', selector: '#btnZoom' },
       { label: 'Signal over Time Plot', selector: '#btnSPlot' },
     ];
@@ -4740,7 +5157,7 @@ export class Shell {
   private static readonly VIZ_BUTTON_IDS = [
     'btnAntc','btnAldv','btnCaf','btnDlds','btnDopp','btnEcho','btnEye','btnFmnt','btnIfrq','btnIqView','btnKurt',
     'btnSDial','btnOthr','btnPpmc','btnRfi','btnScope','btnSclk','btnSfrc','btnVect',
-    'btnAcon','btnAudioFft','btnThd','btnPersist','btnEnvp','btnCeps','btnMhum','btnZoom','btnSPlot',
+    'btnAcon','btnAudioFft','btnThd','btnPersist','btnEnvp','btnCeps','btnMhum','btnWelch','btnCrest','btnMask','btnRspec','btnLpc','btnGdelay','btnAbspec','btnWavelet','btnCden','btnEvm','btnHoc','btnPnoise','btnMtdev','btnGpsdo','btnRdop','btnCoh','btnHht','btnMel','btnChro','btnMspec','btnAcf','btnSent','btnSflat','btnQq','btnCiper','btnPhaseP','btnWvd','btnStxf','btnScf','btnBisp','btnAmbig','btnIqimb','btnMirr','btnZoom','btnSPlot',
   ];
 
   /** Every decoder button reachable from DECA / DECB. Used by the BACK
@@ -5524,6 +5941,35 @@ window.
 - Long-term climate monitoring (count over hours / days)
 - Correlating "noise on HF" complaints with actual sferic activity`,
 
+      btnPersist:
+`# Persistence Spectrum
+
+2D histogram (frequency × amplitude → density) of the audio FFT.
+Each FFT frame increments a bin at \`(freq, dB level)\`; old frames
+decay exponentially.
+
+## Reading the display
+
+- Bright horizontal lines = always-on carriers (high density at one
+  amplitude across many frames)
+- Diffuse vertical streaks = transient noise spreading thinly across
+  many amplitudes
+- Two stacked bright lines on one frequency = AM-modulated carrier
+  (amplitude oscillating between two levels)
+
+## Use cases
+
+- Reveal weak persistent signals buried in noise that the standard
+  Audio FFT trace averages away
+- Distinguish modulation type by the shape of the amplitude
+  distribution at each frequency
+
+## Status
+
+Currently hidden in the picker. Re-enable by uncommenting the
+\`{ label: 'Persistence Spectrum', selector: '#btnPersist' }\` row
+in \`openDispPicker\`'s ENTRIES.`,
+
       btnEnvp:
 `# Envelope PDF
 
@@ -5602,6 +6048,953 @@ High-resolution narrow-band audio FFT + scrolling waterfall over
 - Diagnose ground loops — strong 50/60 Hz + many harmonics
 - Find narrow-band carriers near power-line freq (railway signalling, induction stoves, etc.)
 - Distinguish 50 Hz vs 60 Hz region of a remote receiver`,
+
+      btnWelch:
+`# Welch PSD
+
+Averaged-periodogram estimate of the audio power spectral density over
+**0–6 kHz**. Splits the demodulated audio into overlapping Hann-windowed
+segments, FFTs each, and averages the squared magnitudes. Variance is
+reduced by roughly 1/M where M is the number of averaged segments — so
+the noise-floor trace stops jittering and becomes a real measurement.
+
+## Display
+
+- **X axis** — audio frequency 0 to 6 kHz, linear
+- **Y axis** — relative power in dB
+- **Bright green trace** — current Welch-averaged PSD
+- **Dim cyan trace** — min-hold (lowest level observed in each bin
+  since the panel was opened or **reset** was pressed)
+- **Yellow crosshair** — dominant peak with parabolic sub-bin
+  interpolation
+
+## Controls
+
+- **reset** — wipe the min-hold trace and restart averaging from zero
+- **copy / clear / ext** — generic panel actions
+
+## Status line
+
+\`Welch · N=2048 (5.9 Hz/bin) · avg M frames · peak XX.X Hz @ −YY.Y dB · floor −ZZ.Z dB\`
+
+## Use cases
+
+- Measure the true noise floor of the receiver / band — the min-hold
+  trace converges quickly to a flat line once carriers vanish
+- See faint persistent carriers buried below the Audio FFT noise
+- Distinguish flat (white) noise from coloured noise / rolloff in the
+  receiver chain
+- Quantify how much a noise blanker / NR setting actually drops the
+  floor (before / after comparison via reset)
+
+## Difference from Audio FFT
+
+Audio FFT shows the **instantaneous** spectrum (one snapshot per draw)
+with optional running average smoothing. Welch is the rigorous
+statistical estimator — better noise-floor accuracy at the cost of
+slightly coarser frequency resolution.`,
+
+      btnCrest:
+`# Crest Factor / PAPR vs Time
+
+Running plot of **peak-to-RMS ratio** of the demodulated audio,
+expressed in dB. Updated every block of audio samples; the trace
+scrolls left over a ~30 s window.
+
+## Reference values
+
+| Crest factor | Signal class |
+|---|---|
+| 0 dB | Square wave |
+| ~3 dB | Pure sinusoid |
+| ~5 dB | Speech / SSB voice |
+| ~10–12 dB | White / Gaussian noise |
+| ~12–14 dB | Music with heavy dynamics |
+| ≥ 15 dB | Impulsive interference, switching transients, lightning sferics |
+
+## Use cases
+
+- Quickly classify what's in the receiver passband by texture
+- Detect impulsive QRM the moment it appears (sharp upward spikes)
+- Verify NB / NR is working — crest factor drops noticeably
+- Compare voice modulation styles (compressed vs uncompressed)`,
+
+      btnMask:
+`# Spectral Mask Overlay
+
+Welch-averaged audio PSD with a regulatory or operational **emission
+mask** painted on top. Anything above the mask line is an
+out-of-band emission.
+
+## Mask presets (cycle with the SSB button)
+
+| Preset | Bandwidth | Use case |
+|---|---|---|
+| **SSB** | 2.7 kHz, sharp skirts | Voice SSB compliance |
+| **AM** | 6 kHz, gentler skirts | Broadcast / AM voice |
+| **NBFM** | 12.5 kHz channel | Narrow-band FM (railway / land mobile) |
+| **Flat** | 0 dB across band | Reference — no mask |
+
+## Reading the display
+
+- **Green trace** — current Welch PSD
+- **Red dashed line** — active mask (normalised to the in-band peak)
+- Spectrum portions **above the red line are highlighted** as
+  potential violations
+- Status line reports the in-band peak frequency and the worst
+  out-of-mask offence in dB
+
+## Use cases
+
+- Check that an SSB transmission is not splattering outside 2.7 kHz
+- Verify adjacent-channel rejection of receiver filtering
+- Document compliance with bandwidth limits for narrow-band modes`,
+
+      btnRspec:
+`# Reassigned Spectrogram
+
+Sharper version of the regular Audio Spectrogram. Each STFT bin is
+**reassigned** in time-frequency to its centre-of-energy using the
+phase derivatives of the analysis window. Energy lumps that
+ordinary STFT smears across multiple bins / multiple frames
+collapse to thin lines.
+
+## What it sharpens
+
+- **Steady carriers** → very thin horizontal lines
+- **Chirps / FMCW sweeps** → tight diagonal traces
+- **Impulses / sferics** → sharp vertical ticks
+- **MFSK tone constellations** → distinct lines per tone
+
+## Layout
+
+- Y axis — frequency, 0 to 6 kHz
+- X axis — time, scrolls right to left
+- Same colour scale as the Audio Spectrogram
+- **clear** wipes the waterfall
+
+## Use cases
+
+- Reading dense MFSK / OFDM tone patterns the smeared spectrogram
+  blurs together
+- Estimating instantaneous frequency of chirped signals
+- Locating the precise onset time of transient interference`,
+
+      btnLpc:
+`# LPC Spectral Envelope
+
+Order-12 **Linear Predictive Coding** estimate of the short-term
+audio spectral envelope. LPC models the audio as the output of an
+all-pole filter driven by an excitation signal — the filter poles
+trace the resonant peaks of the spectrum.
+
+## Display
+
+- **Dim green** — instantaneous Welch PSD (the source spectrum)
+- **Bright orange** — LPC envelope, smooth curve following the peaks
+- **Markers** — formant frequencies F1, F2, F3 (LPC pole frequencies
+  ordered by amplitude)
+
+## Use cases
+
+- Track speech formants — F1 + F2 identify vowels
+- Find modulation envelope of digital signals (tones become poles)
+- Compare two voice signals' spectral shape (channel response,
+  voiced vs unvoiced)
+- Detect resonances in mechanical / acoustic interference
+
+## Difference from Cepstrum
+
+Cepstrum extracts **pitch** (fundamental frequency). LPC extracts
+the **vocal-tract envelope** (which is independent of pitch). They
+are complementary tools.`,
+
+      btnGdelay:
+`# Group Delay vs Frequency
+
+\`τ_g(f) = −dφ(f)/dω\` — the negative derivative of the receive-chain
+phase response with respect to angular frequency. Plotted against
+audio frequency 0 to 6 kHz.
+
+## Interpretation
+
+- **Flat τ_g** — perfectly linear phase, no waveform distortion
+- **Rising / falling τ_g near band edges** — passband filter ringing
+- **Peak in the middle** — IIR filter group-delay bulge
+- **Long delay at one frequency** — narrow notch / all-pass equaliser
+- **Negative τ_g** — anti-causal filter, usually means measurement
+  error or short integration
+
+## Status line
+
+Reports the mean group delay across the band and the in-band
+variation (max − min, in ms).
+
+## Use cases
+
+- Characterise receive-chain DSP filters (IF / audio)
+- Compare different filter shapes (sharp vs gentle)
+- Detect ringing that would smear digital waveforms
+- Identify all-pass / equaliser stages`,
+
+      btnAbspec:
+`# A/B Spectrum Compare
+
+Side-by-side comparison of the **current** Welch PSD against a
+**reference** spectrum captured at a chosen moment.
+
+## Workflow
+
+1. Open the panel — only the live (green) trace shows
+2. Bring the receiver / DSP to the "before" state you want to
+   measure against
+3. Tap **A** to lock in the reference spectrum (orange)
+4. Change something — turn on NB, enable a notch, change frequency,
+   anything
+5. The display now shows current (green), reference (orange), and
+   the **difference** (white trace at the bottom in dB)
+
+## Reading the difference
+
+- **Negative difference** = the change attenuated that bin
+  (e.g. notch filter, NR action)
+- **Positive difference** = the change added power
+- A flat-zero difference line = no change at that frequency
+
+## Use cases
+
+- Quantify exactly how many dB of attenuation a NB / NR setting
+  delivers
+- Measure adjacent-channel rejection before and after retuning
+- Diagnose unintended side-effects of DSP changes (frequency-
+  selective gain bumps)`,
+
+      btnWavelet:
+`# Wavelet Scalogram
+
+**Continuous wavelet transform** (CWT) using a **Morlet** mother
+wavelet. Scrolling time-scale heatmap.
+
+## Time-frequency resolution
+
+Unlike FFT (uniform resolution across the band), wavelets have
+**constant-Q resolution**:
+
+- **At high frequencies** — fine time resolution, coarse frequency
+- **At low frequencies** — fine frequency resolution, coarse time
+
+This is closer to how the ear perceives sound and how transients
+distribute energy.
+
+## Display
+
+- Y axis — wavelet scale (low scale = high frequency at top, log
+  spacing)
+- X axis — time, scrolls right to left
+- Colour — magnitude of CWT coefficient
+
+## Use cases
+
+- Localise transients in time more sharply than a regular
+  spectrogram
+- Analyse music / speech with frequency-dependent time precision
+- Find chirps and impulses simultaneously without picking a single
+  window length
+- Detect frequency-modulated bursts that don't sit still long enough
+  for a long FFT window`,
+
+      btnCden:
+`# Constellation Density Heatmap
+
+2D histogram of the **IQ stream** rendered as a colour heatmap
+instead of a scatter plot. High SNR signals show bright clusters
+at each constellation point; noise / random IQ spreads diffusely.
+
+## Reading the map
+
+| Pattern | Interpretation |
+|---|---|
+| Single bright dot at origin | Pure noise, no signal |
+| Single bright spot off-centre | Pure carrier (CW) |
+| Two bright spots on a line | BPSK constellation |
+| Four spots in a square | QPSK |
+| Eight spots in a circle | 8PSK |
+| 16 dots in a grid | 16-QAM |
+| Bright annulus / ring | FM (constant amplitude, varying phase) |
+| Two concentric rings | AM (carrier + sidebands) |
+| Diffuse cloud | Wideband / pre-symbol-rate signal |
+
+## Use cases
+
+- Identify modulation type from constellation shape over long
+  integration where IQ Constellation (scatter) gets too dense
+- Confirm symbol locking — the dots should be tight, not smeared
+- Detect intermittent fading or QSB (dots brightening / dimming
+  unevenly)`,
+
+      btnEvm:
+`# EVM / MER vs Time
+
+For a locked **PSK / QPSK / 8PSK / QAM** constellation, plots:
+
+- **Error Vector Magnitude (EVM)** — RMS distance from the received
+  symbol to the nearest ideal constellation point, as % of the
+  outer-symbol radius
+- **Modulation Error Ratio (MER)** — 20·log₁₀(1 / EVM), in dB. The
+  signal-to-distortion ratio of the link
+
+Strip-chart, ~30 s long.
+
+## Reference values
+
+| MER | Link quality |
+|---|---|
+| > 30 dB | Excellent, clean link |
+| 20–30 dB | Good, decode reliably |
+| 15–20 dB | Marginal, frame errors creep in |
+| < 15 dB | Poor, decode fails |
+
+## How it locks
+
+A simple Costas loop locks the carrier; the panel automatically
+guesses BPSK / QPSK / 8PSK from the IQ distribution.
+
+## Use cases
+
+- Quantify how a band change / antenna swap affects link quality
+- Detect creeping QRM that's not yet failing decode but eroding
+  margin
+- Compare two PSK / QAM signals on adjacent frequencies`,
+
+      btnHoc:
+`# Higher-Order Cumulants Timeline
+
+Time-series of the **higher-order cumulants** of the IQ stream:
+
+- |C₂₀| — second-order moment, related to total power
+- |C₂₁| — conjugate second-order, related to in-band power
+- |C₄₀| — fourth-order, sensitive to constellation symmetry
+- |C₄₂| — fourth-order conjugate, related to symbol shape
+- μ₄₂ = C₄₂ / C₂₁² — dimensionless modulation classifier
+
+Plotted as five overlaid traces over ~30 s.
+
+## Classifier reference values
+
+| Modulation | μ₄₂ ≈ |
+|---|---|
+| Gaussian noise | 2.0 |
+| BPSK | 1.0 |
+| QPSK | 1.0 |
+| 16-QAM | 1.32 |
+| FM | 1.5 |
+| AM | varies |
+
+## Use cases
+
+- Automatic modulation classification (AMC)
+- Track signal-class changes over time (mode switches)
+- Confirm a constellation lock is to the right modulation
+- Distinguish noise from very weak modulated signal`,
+
+      btnPnoise:
+`# Phase Noise Spectrum L(f)
+
+Single-sideband **phase-noise spectral density** in **dBc/Hz** vs
+offset frequency from a PLL-locked carrier. The standard oscillator
+stability metric. Frequency-domain companion to the time-domain
+Allan Deviation plot.
+
+## Method
+
+1. PLL locks to the strongest carrier in the IQ stream
+2. The residual phase error φ(t) is extracted
+3. A long FFT computes |Φ(f)|², normalised to dBc/Hz
+
+## Reading the plot
+
+- X axis — offset frequency from carrier, log scale (1 Hz to
+  ~6 kHz)
+- Y axis — L(f) in dBc/Hz, negative numbers (lower = cleaner)
+- Slopes:
+  - **−20 dB/dec** close to carrier → flicker FM
+  - **−10 dB/dec** mid-range → flicker PM
+  - **0 dB/dec (flat)** far from carrier → thermal noise floor
+
+## Reference values
+
+| L(1 kHz) | Quality |
+|---|---|
+| −80 dBc/Hz | Cheap crystal |
+| −120 dBc/Hz | Good TCXO |
+| −150 dBc/Hz | OCXO / GPSDO |
+| −170 dBc/Hz | Lab reference oven |
+
+## Use cases
+
+- Compare oscillator quality between receivers / SDR hardware
+- Detect spurs from internal switching power supplies
+- Characterise GPSDO loop bandwidth (knee in the curve)`,
+
+      btnMtdev:
+`# Modified Allan / Hadamard / TDEV
+
+Three complementary frequency-stability metrics on **log-log axes**:
+
+- **MDEV** σ_mod(τ) — Modified Allan deviation. Distinguishes
+  white phase modulation from flicker phase modulation (slopes
+  differ by 1 vs ordinary ADEV)
+- **HDEV** σ_H(τ) — Hadamard deviation. Rejects linear frequency
+  drift, useful when the oscillator is drifting
+- **TDEV** σ_x(τ) — time deviation = (τ / √3) · σ_mod(τ),
+  expressed in seconds rather than fractional frequency
+
+## τ range
+
+0.1 s to 100 s, plotted on log axes alongside the ordinary ADEV
+(faintly drawn for reference).
+
+## Slope diagnostics
+
+| Slope | Noise type | Best discriminator |
+|---|---|---|
+| −1.5 (MDEV) | White PM | MDEV |
+| −1 (MDEV) | Flicker PM | MDEV |
+| −0.5 | White FM | any |
+| 0 | Flicker FM | any |
+| +0.5 | Random walk FM | HDEV |
+| +1 | Linear drift | HDEV rejects it |
+
+## Use cases
+
+- Distinguish white-PM from flicker-PM noise (ADEV cannot)
+- Characterise GPSDO behaviour with drifting holdover
+- Match oscillator data sheets that quote MDEV / TDEV`,
+
+      btnGpsdo:
+`# GPSDO Lock / Holdover Plot
+
+Long-term **phase-vs-time** of the PLL'd carrier, plotted over the
+session duration (up to ~30 min).
+
+## What you see
+
+- Y axis — cumulative phase in radians (or wraps of 2π, automatically
+  rescaled)
+- X axis — wall-clock time since the panel was opened
+- **Slope** of the trace = frequency offset in ppm of the carrier vs
+  the receiver dial
+- **Discontinuities** = GPS unlock events / phase jumps in the
+  source
+
+## Use cases
+
+- Detect GPSDO unlocks during a long monitoring session
+- Measure carrier drift of a known reference (WWV, broadcast)
+  against the receiver
+- Verify GPSDO holdover spec (how much does the carrier drift if
+  GPS is lost?)
+- Characterise long-term temperature drift of a crystal source
+
+## Status line
+
+\`offset XX.XXX ppm · drift Y.Y ppb/min · jumps N · window M min\``,
+
+      btnRdop:
+`# Range-Doppler Map
+
+Radar-style 2D detection plot for **FMCW** or **pulse-Doppler**
+signals.
+
+## Axes
+
+- **X axis** — range (delay), 0 to ~1 ms
+- **Y axis** — Doppler (velocity proxy), ±some kHz
+- **Colour** — return power in dB
+
+## How it works
+
+1. A reference template is captured from the first second of IQ
+2. Subsequent IQ frames are cross-correlated against the reference
+   over a 2D delay × Doppler grid
+3. Bright dots = targets at that range / velocity
+
+## Use cases
+
+- Companion to OTHR view — locate moving reflectors
+- Map FMCW radar targets (aviation, weather, vehicle)
+- Detect Doppler-shifted reflections from satellites or aircraft
+- Educational: visualise pulse-Doppler ambiguity function
+
+## Limitations
+
+This is a software approximation. Real radar uses precise pulse
+templates; here we rely on whatever signal-like structure is in the
+captured reference.`,
+
+      btnCoh:
+`# Spectral Coherence γ²(f)
+
+Magnitude-squared **coherence** between two consecutive IQ time
+windows over the audio band 0 to 6 kHz. Definition:
+
+\`γ²(f) = |S_xy(f)|² / (S_xx(f) · S_yy(f))\`
+
+Where x is the previous window and y is the current window.
+
+## Reading the trace
+
+- **γ² → 1** at a frequency = signal is **stationary** there
+  (steady carrier, persistent QRM)
+- **γ² → 0** = signal is **non-stationary** (noise, transient)
+
+## Display
+
+- X axis — frequency 0 to 6 kHz
+- Y axis — γ² from 0 to 1 (linear)
+- Threshold line at γ² = 0.5 marks the "definitely persistent"
+  boundary
+
+## Use cases
+
+- Highlight what's truly always-on versus what's just noise
+- Distinguish weak persistent beacons from random noise spikes
+- Confirm a carrier is real and not a one-shot artifact
+- Find the persistent vs transient components of a complex band`,
+
+      btnHht:
+`# Hilbert-Huang Transform
+
+**Empirical Mode Decomposition (EMD)** extracts the first three
+**Intrinsic Mode Functions (IMFs)** of the audio. Each IMF is a
+zero-mean oscillatory component, ordered from highest to lowest
+frequency content. For each IMF the Hilbert transform gives an
+**instantaneous frequency** trace.
+
+## Why it's different from FFT
+
+EMD is **adaptive** — no fixed basis. Components are chosen by the
+signal itself, so non-stationary / nonlinear behaviour shows up
+naturally instead of being smeared across many FFT bins.
+
+## Display
+
+- Three stacked strip charts (IMF1 / IMF2 / IMF3 instantaneous
+  frequency vs time)
+- Status line reports the median IF of each IMF
+
+## Use cases
+
+- Decompose multi-component signals (carrier + modulation + noise)
+- Track frequency-modulated content without a fixed window
+- Educational: visualise EMD on real audio`,
+
+      btnMel:
+`# Mel Spectrogram
+
+Scrolling time-frequency heatmap with **64 Mel-spaced filter banks**
+covering 100 Hz to 6 kHz. The Mel scale is logarithmic-like below
+1 kHz and increasingly compressive above, mimicking the human
+auditory system.
+
+## Display
+
+- Y axis — Mel frequency (low at bottom, high at top)
+- X axis — time, scrolls right to left
+- Colour — energy per Mel bin in dB
+
+## Use cases
+
+- Speech analysis: formants cluster correctly on the perceptual axis
+- Music / bioacoustic content shows natural pitch spacing
+- Standard front-end for ML audio pipelines
+
+## Difference from regular Audio Spectrogram
+
+Audio Spectrogram is linear in frequency. Mel is perceptually scaled,
+so harmonics and pitch relationships are visually consistent across
+octaves.`,
+
+      btnChro:
+`# Chromagram
+
+12-bin **pitch-class profile** — energy folded across all octaves
+into the 12 semitones (C, C#, D, …, B). Time on the X axis,
+semitone on Y.
+
+## Display
+
+- 12 horizontal rows, one per pitch class
+- Bright row = strong tonal energy at that pitch class
+- Multiple bright rows simultaneously = chord
+
+## Use cases
+
+- Track key / chord progression in music
+- Identify harmonic tone clusters from amateur radio interference
+  (e.g. switching power supplies often emit pitched harmonics)
+- Spot off-key content (frequency drift moving a tone between
+  semitones)`,
+
+      btnMspec:
+`# Modulation Spectrum
+
+**FFT-of-FFT** — the second-stage Fourier transform of each STFT
+bin's amplitude envelope over time. Reveals **slow modulation
+rates** in the audio content.
+
+## Display
+
+- X axis — modulation frequency, 0 to 20 Hz
+- Y axis — acoustic frequency, 0 to 6 kHz
+- Heatmap colour — modulation strength
+
+## What it reveals
+
+| Bright region | Cause |
+|---|---|
+| 1–2 Hz across all freqs | QSB / slow fading |
+| 3–8 Hz, voice bands | Speech syllable rate |
+| 8–15 Hz | Music tempo / vibrato |
+| > 15 Hz | Fast AM modulation, tremolo |
+
+## Use cases
+
+- Identify modulation rates that aren't visible on the spectrogram
+- Detect periodic interference (60 Hz hum picked up at audio rates,
+  CW keyer at 10–20 WPM, etc.)`,
+
+      btnAcf:
+`# Autocorrelation Function (1D)
+
+Real-time **R(τ)** of the demodulated audio over lag 0 to 50 ms.
+
+\`R(τ) = (1/N) · Σ x(n) · x(n + τ)\`
+
+## Display
+
+- X axis — lag τ in ms
+- Y axis — autocorrelation value (normalised to R(0) = 1)
+- Bright peaks at integer multiples of the dominant period
+
+## Reading peaks
+
+| Peak at τ | Implies |
+|---|---|
+| Pure sinusoid | Peaks every 1/f₀ seconds |
+| Voice | Peak at pitch period |
+| Repeating waveform | Peaks at the full repeat |
+| Decaying R(τ) | Decorrelation = noise content |
+
+## Use cases
+
+- Direct period detection (the textbook way)
+- Distinguish single-tone from harmonic mix
+- Find concealed periodicities in noisy signals`,
+
+      btnSent:
+`# Spectral Entropy vs Time
+
+**Shannon entropy** of the normalised audio PSD, plotted as a
+strip-chart over 30 s.
+
+\`H = − Σ p_k · log₂(p_k)\`, where p_k = PSD(k) / Σ PSD
+
+Normalised by log₂(N_bins) so H ranges from 0 (pure tone) to 1
+(uniform / white noise).
+
+## Reference values
+
+| H | Class |
+|---|---|
+| < 0.3 | Pure tone / CW carrier |
+| 0.3–0.6 | Mixed tonal (speech, MFSK) |
+| 0.6–0.85 | Noisy speech / music |
+| > 0.85 | White or near-white noise |
+
+## Use cases
+
+- Detect onset / disappearance of carriers (H drops sharply)
+- Distinguish noise from buried signal
+- Track band activity over long sessions`,
+
+      btnSflat:
+`# Spectral Flatness Measure (Wiener Entropy)
+
+\`SFM = geo_mean(PSD) / arith_mean(PSD)\`
+
+A classic **tonal vs noise** discriminator. 0 = pure tone, 1 = white
+noise. Plotted as a strip-chart over 30 s and as a histogram.
+
+## Reading the value
+
+| SFM | Class |
+|---|---|
+| < 0.05 | Strong tonal content |
+| 0.1–0.4 | Mixed tonal + noise |
+| > 0.7 | White / near-white |
+
+## Use cases
+
+- Same family as Spectral Entropy — complements it (different
+  formula, similar interpretation)
+- Quick numeric classifier of signal class
+- Trigger threshold for noise-blanker / NR activation logic`,
+
+      btnQq:
+`# Q-Q Plot
+
+**Quantile-quantile** plot of the audio analytic envelope
+\`|x(t) + jH{x(t)}|\` against a theoretical distribution. Tap the
+button to cycle reference: **Rayleigh** (default — for noise), then
+**Gaussian** (for raw audio samples), then **Rician** (carrier + noise).
+
+## How to read it
+
+- **Straight diagonal line** — empirical distribution matches the
+  theoretical
+- **Banana / S-curve** — heavy tails / light tails
+- **Bend at the top right** — outliers (impulsive interference)
+- **Step structure** — discrete-level signal
+
+## Use cases
+
+- Confirm whether a band is truly Rayleigh-noise (suitable for
+  energy detection)
+- Detect non-Gaussianity that indicates buried signal
+- Goodness-of-fit for matched-filter assumptions`,
+
+      btnCiper:
+`# CI Periodogram
+
+**Welch PSD** with **95% χ² confidence-interval bands** drawn
+around the trace. Shows which spectral peaks are statistically
+real vs noise fluctuations.
+
+## Display
+
+- Centre trace — Welch PSD estimate
+- Shaded band — 95% confidence interval (±band)
+- Peaks **above** the upper edge of nearby noise floor's CI band
+  are statistically significant
+
+## Use cases
+
+- Decide whether a faint spectral peak is a real carrier or just
+  noise variance
+- Set detection thresholds rigorously
+- Educational: see what "statistical significance" looks like in
+  a PSD`,
+
+      btnPhaseP:
+`# Phase Portrait / Recurrence Plot
+
+Trajectory of the audio in the **embedding space**:
+\`(x(t), x(t + τ))\`. Slider sets the embedding delay τ in samples.
+
+## Reading the plot
+
+| Shape | Meaning |
+|---|---|
+| Sharp ellipse | Pure sinusoid (closed orbit) |
+| Diffuse cloud | Noise |
+| Banded structure | Periodic with harmonics |
+| Strange-attractor-like | Chaotic / nonlinear dynamics |
+| Limit cycle | Stable oscillator output |
+
+## τ slider
+
+- **Small τ** (< 10 samples) — points cluster on the diagonal
+  (too short an embedding)
+- **Optimal τ** — first minimum of the autocorrelation function
+  (~quarter period for a sinusoid)
+- **Large τ** — points decorrelate, plot becomes a cloud
+
+## Use cases
+
+- Nonlinear-dynamics teaching tool
+- Detect chaotic vs periodic behaviour
+- Visually identify periodicities the FFT smears`,
+
+      btnWvd:
+`# Wigner-Ville Distribution (SP-WVD)
+
+**Smoothed-Pseudo Wigner-Ville Distribution** — the quadratic
+time-frequency distribution with sharper resolution than STFT.
+
+\`W_x(t, f) = ∫ x(t + τ/2) · x*(t − τ/2) · e^{−j2πfτ} dτ\`
+
+The "Smoothed-Pseudo" form applies separable time and frequency
+smoothing kernels that suppress cross-terms (the well-known WVD
+caveat) at the cost of slightly reduced resolution.
+
+## Display
+
+- Scrolling time-frequency heatmap
+- Higher resolution than the Audio Spectrogram for chirps and
+  short transients
+
+## Use cases
+
+- Resolve fast-changing instantaneous frequency
+- See chirps / FMCW sweeps sharper than STFT
+- Textbook classic for time-frequency analysis`,
+
+      btnStxf:
+`# Stockwell S-Transform
+
+Hybrid wavelet/STFT with **absolute phase preserved** and
+**multi-resolution** like CWT. Window width scales inversely with
+frequency:
+
+\`S(τ, f) = ∫ x(t) · |f| · e^{−2π²f²(τ−t)²} · e^{−j2πft} dt\`
+
+## Resolution
+
+- Low frequencies → wide window → fine frequency, coarse time
+- High frequencies → narrow window → fine time, coarse frequency
+
+## Difference from CWT (Wavelet Scalogram)
+
+Same multi-resolution scaling, but the S-transform uses an absolute
+frequency reference instead of relative scale. Easier to read.
+
+## Use cases
+
+- Geophysics-style transient analysis
+- Localise short events without picking a window length
+- Sharper than STFT, better referenced than CWT`,
+
+      btnScf:
+`# Cyclic Spectrum / Spectral Correlation Function
+
+\`|S(f, α)|\` plotted in the **spectral frequency f × cycle
+frequency α** plane. Reveals which carriers / bands carry which
+baud rates.
+
+## Difference from CAF
+
+CAF (Cyclic Autocorrelation) is delay×cycle. SCF is freq×cycle —
+the Wiener-Khinchin pair. Both expose the same cyclostationary
+structure from different angles.
+
+## What's bright
+
+- Diagonal at α = 0 — the ordinary PSD
+- Horizontal lines at α = baud rate — that signal's cyclic
+  fingerprint
+- Diagonals at α = ±2f_c — the carrier × symbol-rate beats
+
+## Use cases
+
+- Identify symbol rate of unknown digital signals
+- Locate multiple cyclostationary signals in a busy band
+- Reference tool for blind modulation classification`,
+
+      btnBisp:
+`# Bispectrum / Bicoherence
+
+**Third-order spectrum** \`B(f₁, f₂) = E[ X(f₁) · X(f₂) · X*(f₁+f₂) ]\`.
+Detects **quadratic phase coupling** — when three frequencies are
+related by f₃ = f₁ + f₂ and have correlated phases.
+
+## Display
+
+- 2D heatmap over (f₁, f₂)
+- Bicoherence b²(f₁, f₂) — normalised version, 0 to 1
+
+## What it reveals
+
+- **Bright peak at (f₁, f₂)** = nonlinear coupling between f₁, f₂,
+  and f₁+f₂
+- **Empty plot** = signal is Gaussian / linear / independent
+  components
+- **Sharp ridges** = harmonically locked tones
+
+## Use cases
+
+- Detect nonlinear distortion (clipping, AM-AM, AM-PM)
+- Mechanical / rotating-machinery fault detection
+- Plasma physics / EEG / climate-data analysis`,
+
+      btnAmbig:
+`# Ambiguity Function
+
+Full 2D **|χ(τ, ν)|** of the captured reference waveform against
+itself. The fundamental radar/sonar resolution metric:
+
+\`χ(τ, ν) = ∫ x(t) · x*(t + τ) · e^{j2πνt} dt\`
+
+## How it works
+
+1. Captures the first 1024 IQ samples as a reference waveform
+2. Computes χ across a 2D grid of delays × frequency shifts
+3. Plots magnitude as a heatmap centred on (0, 0)
+
+## Reading it
+
+- **Sharp peak at origin** — good range + Doppler resolution
+- **Long ridge along τ axis** — poor Doppler resolution
+- **Long ridge along ν axis** — poor range resolution
+- **Diagonal ridge** — range-Doppler coupling (chirped waveform)
+
+## Use cases
+
+- Characterise a captured waveform as a radar pulse
+- Educational classic: see why CW has perfect Doppler / no range,
+  vs why FM-chirped pulses get both`,
+
+      btnIqimb:
+`# I/Q Imbalance Monitor
+
+Three time-series traces of receiver-chain I/Q quality metrics:
+
+- **Amplitude imbalance** — 20·log₁₀(|I|_rms / |Q|_rms). 0 dB ideal
+- **Phase imbalance** — deviation of arg(I·Q*) from 0 (or 90° for
+  a quadrature mixer)
+- **DC offset** — DC component on each channel, normalised
+
+## Reference values
+
+| Metric | Good | Acceptable | Bad |
+|---|---|---|---|
+| Amplitude imbalance | < 0.1 dB | < 0.5 dB | > 1 dB |
+| Phase imbalance | < 1° | < 3° | > 5° |
+| DC offset | < −60 dB | < −40 dB | > −30 dB |
+
+## Use cases
+
+- Diagnose SDR front-end quality
+- Verify image-rejection performance
+- Detect drift / temperature effects over a session`,
+
+      btnMirr:
+`# Mirror-Image Rejection
+
+Strip chart of **in-band vs image-band power ratio** in dB,
+measured at symmetric ±f offsets from DC over a moving window.
+
+## How it works
+
+1. FFT the IQ stream
+2. At each frequency offset f, compute |X(f)|² vs |X(−f)|²
+3. Plot the average ratio in dB across the band
+4. Strip-chart that value over time
+
+## Reading the trace
+
+- **High ratio (> 50 dB)** — strong image rejection, clean I/Q
+- **Low ratio (< 20 dB)** — significant image (poor mixer balance,
+  big DC offset, or actual energy on both sides)
+- **Trace fluctuating with band activity** — image rejection is
+  signal-dependent (front-end nonlinearity)
+
+## Use cases
+
+- Quantify receiver image-rejection
+- Diagnose I/Q calibration errors that the standard imbalance
+  metrics miss
+- Identify if a peak is real or an image`,
 
       btnIfrq:
 `# Instantaneous Frequency Trace
@@ -7390,6 +8783,24 @@ Lock state computed from the % of recent (last 50 samples) errors with
     if (this.envpOn)       this.toggleEnvp();
     if (this.cepsOn)       this.toggleCeps();
     if (this.mhumOn)       this.toggleMhum();
+    if (this.welchOn)      this.toggleWelch();
+    if (this.crestOn)      this.toggleCrest();
+    if (this.maskOn)       this.toggleMask();
+    if (this.rspecOn)      this.toggleRspec();
+    if (this.lpcOn)        this.toggleLpc();
+    if (this.gdelayOn)     this.toggleGdelay();
+    if (this.abspecOn)     this.toggleAbspec();
+    if (this.waveletOn)    this.toggleWavelet();
+    if (this.hhtOn)        this.toggleHht();
+    if (this.melOn)        this.toggleMel();
+    if (this.chroOn)       this.toggleChro();
+    if (this.mspecOn)      this.toggleMspec();
+    if (this.acfOn)        this.toggleAcf();
+    if (this.sentOn)       this.toggleSent();
+    if (this.sflatOn)      this.toggleSflat();
+    if (this.qqOn)         this.toggleQq();
+    if (this.ciperOn)      this.toggleCiper();
+    if (this.phasePOn)     this.togglePhaseP();
     if (this.grayOn)       this.toggleGray();
     if (this.vectOn)       this.toggleVect();
     if (this.iqEyeOn)      this.toggleIqEye();
@@ -8736,6 +10147,429 @@ Lock state computed from the % of recent (last 50 samples) errors with
   private mhumCurDb: Float32Array | null = null;
   private mhumWfImage: ImageData | null = null;
   private mhumOffCanvas: HTMLCanvasElement | null = null;
+  /** Welch PSD — averaged-periodogram estimate over 0–6 kHz. Each draw
+   *  computes one new Hann-windowed FFT of the latest N samples and
+   *  pushes its power spectrum into a running sum of the last M frames.
+   *  The mean = sum / M is plotted as the Welch PSD; a separate
+   *  min-hold buffer tracks the lowest level ever seen per bin. */
+  private welchOn = false;
+  private static readonly WELCH_FFT = 2048;                  // 5.86 Hz/bin at 12 kHz
+  private static readonly WELCH_AVG_LEN = 16;                // ~1.5 s of segments at 10 Hz refresh
+  private static readonly WELCH_RENDER_EVERY_N = 6;          // ≈10 Hz at 60 fps
+  private welchBuf = new Float32Array(Shell.WELCH_FFT);
+  private welchBufWrite = 0;
+  private welchRaf: number | null = null;
+  private welchRafTick = 0;
+  private welchFftRe: Float32Array | null = null;
+  private welchFftIm: Float32Array | null = null;
+  /** Running-sum ring of the last WELCH_AVG_LEN power spectra (linear
+   *  power, not dB — averaging in linear domain is the textbook Welch). */
+  private welchPowerHist: Float32Array[] = [];
+  private welchAvgSum: Float32Array | null = null;
+  private welchAvgFrames = 0;
+  /** Min-hold trace (linear power) — bin-wise min over all observed
+   *  frames since panel open / reset. */
+  private welchMinHold: Float32Array | null = null;
+  private welchCurDb: Float32Array | null = null;
+  private welchMinDb: Float32Array | null = null;
+  /** Hover cursor X (CSS px from canvas left). Null when pointer is
+   *  outside the canvas — no cursor drawn, status line shows defaults. */
+  private welchCursorX: number | null = null;
+  private welchCursorBound = false;
+  // ── 2026 audio-side viewer batch ──────────────────────────────────
+  /** Crest Factor / PAPR — strip chart of 20·log10(peak/rms) of the
+   *  demodulated audio. One sample per ~50 ms block. */
+  private crestOn = false;
+  private static readonly CREST_HIST = 600;            // ~30 s at 20 Hz
+  private static readonly CREST_BLOCK = 600;           // ≈50 ms at 12 kHz
+  private crestHist = new Float32Array(Shell.CREST_HIST);
+  private crestHistWrite = 0;
+  private crestHistFilled = 0;
+  private crestBlockAccPow = 0;
+  private crestBlockAccPeak = 0;
+  private crestBlockCount = 0;
+  private crestRaf: number | null = null;
+  /** Spectral Mask Overlay — Welch PSD with regulatory mask overlay. */
+  private maskOn = false;
+  private maskKind: 'ssb' | 'am' | 'nbfm' | 'flat' = 'ssb';
+  private static readonly MASK_FFT = 2048;
+  private static readonly MASK_AVG = 12;
+  private static readonly MASK_RENDER_EVERY_N = 6;
+  private maskBuf = new Float32Array(Shell.MASK_FFT);
+  private maskBufWrite = 0;
+  private maskAvgSum: Float32Array | null = null;
+  private maskAvgFrames = 0;
+  private maskHist: Float32Array[] = [];
+  private maskFftRe: Float32Array | null = null;
+  private maskFftIm: Float32Array | null = null;
+  private maskRaf: number | null = null;
+  private maskRafTick = 0;
+  /** Reassigned Spectrogram — STFT with bin-by-bin time-frequency
+   *  reassignment using phase-derivative window operators. */
+  private rspecOn = false;
+  private static readonly RSPEC_FFT = 1024;
+  private static readonly RSPEC_HOP = 256;
+  private static readonly RSPEC_COLS = 256;
+  private static readonly RSPEC_BINS = 256;
+  private static readonly RSPEC_RENDER_EVERY_N = 4;
+  private rspecBuf = new Float32Array(Shell.RSPEC_FFT);
+  private rspecBufWrite = 0;
+  private rspecSamplesSinceHop = 0;
+  private rspecImage: Float32Array | null = null;
+  private rspecCol = 0;
+  private rspecFftRe: Float32Array | null = null;
+  private rspecFftIm: Float32Array | null = null;
+  private rspecFftReT: Float32Array | null = null;
+  private rspecFftImT: Float32Array | null = null;
+  private rspecFftReD: Float32Array | null = null;
+  private rspecFftImD: Float32Array | null = null;
+  private rspecOffCanvas: HTMLCanvasElement | null = null;
+  private rspecRaf: number | null = null;
+  private rspecRafTick = 0;
+  /** LPC Spectral Envelope — Levinson-Durbin order-12 LPC on a Hann
+   *  window, plotted as the AR all-pole envelope vs the source PSD. */
+  private lpcOn = false;
+  private static readonly LPC_FFT = 1024;
+  private static readonly LPC_ORDER = 12;
+  private static readonly LPC_RENDER_EVERY_N = 6;
+  private lpcBuf = new Float32Array(Shell.LPC_FFT);
+  private lpcBufWrite = 0;
+  private lpcRaf: number | null = null;
+  private lpcRafTick = 0;
+  private lpcFftRe: Float32Array | null = null;
+  private lpcFftIm: Float32Array | null = null;
+  /** Group Delay vs Frequency — τ_g via phase-derivative on a long
+   *  Hann FFT, averaged over multiple frames. */
+  private gdelayOn = false;
+  private static readonly GDELAY_FFT = 2048;
+  private static readonly GDELAY_AVG = 16;
+  private static readonly GDELAY_RENDER_EVERY_N = 8;
+  private gdelayBuf = new Float32Array(Shell.GDELAY_FFT);
+  private gdelayBufWrite = 0;
+  private gdelayAvg: Float32Array | null = null;
+  private gdelayAvgN = 0;
+  private gdelayFftRe: Float32Array | null = null;
+  private gdelayFftIm: Float32Array | null = null;
+  private gdelayRaf: number | null = null;
+  private gdelayRafTick = 0;
+  /** A/B Spectrum Compare — current Welch trace vs locked reference. */
+  private abspecOn = false;
+  private static readonly ABSPEC_FFT = 2048;
+  private static readonly ABSPEC_AVG = 16;
+  private static readonly ABSPEC_RENDER_EVERY_N = 6;
+  private abspecBuf = new Float32Array(Shell.ABSPEC_FFT);
+  private abspecBufWrite = 0;
+  private abspecAvgSum: Float32Array | null = null;
+  private abspecHist: Float32Array[] = [];
+  private abspecCurDb: Float32Array | null = null;
+  private abspecRefDb: Float32Array | null = null;
+  private abspecHaveRef = false;
+  private abspecFftRe: Float32Array | null = null;
+  private abspecFftIm: Float32Array | null = null;
+  private abspecRaf: number | null = null;
+  private abspecRafTick = 0;
+  /** Wavelet Scalogram — Morlet CWT at ~64 log-spaced scales. */
+  private waveletOn = false;
+  private static readonly WAVELET_SCALES = 64;
+  private static readonly WAVELET_COLS = 256;
+  private static readonly WAVELET_BLOCK = 1024;             // ≈ 85 ms at 12 kHz
+  private static readonly WAVELET_RENDER_EVERY_N = 4;
+  private waveletBuf = new Float32Array(Shell.WAVELET_BLOCK * 4);
+  private waveletBufWrite = 0;
+  private waveletBufFill = 0;
+  private waveletImage: Float32Array | null = null;
+  private waveletCol = 0;
+  private waveletRaf: number | null = null;
+  private waveletRafTick = 0;
+  private waveletOffCanvas: HTMLCanvasElement | null = null;
+  // ── 2026 IQ-side viewer batch ─────────────────────────────────────
+  /** Constellation Density Heatmap — 2D histogram of IQ samples. */
+  private static readonly CDEN_GRID = 192;
+  private cdenHeat: Float32Array | null = null;
+  private cdenMax = 0;
+  private cdenSamples = 0;
+  /** EVM / MER vs Time — Costas-locked PSK constellation; per-symbol
+   *  vector-error magnitude, classed against an automatically guessed
+   *  modulation (BPSK / QPSK / 8PSK). */
+  private static readonly EVM_HIST = 600;
+  private evmHist = new Float32Array(Shell.EVM_HIST);
+  private evmHistWrite = 0;
+  private evmHistFilled = 0;
+  private evmPhase = 0;
+  private evmFreq = 0;
+  private evmIdx = 0;
+  private evmKind: 'bpsk' | 'qpsk' | '8psk' = 'qpsk';
+  /** Higher-Order Cumulants Timeline — per-block C20, C21, C40, C42,
+   *  μ42 traces over ~30 s of IQ. */
+  private static readonly HOC_HIST = 300;
+  private hocHist = new Float32Array(Shell.HOC_HIST * 5);   // 5 traces interleaved
+  private hocHistWrite = 0;
+  private hocHistFilled = 0;
+  private hocAccumN = 0;
+  private hocM20 = 0; private hocM21 = 0;
+  private hocM40 = 0; private hocM42 = 0;
+  private static readonly HOC_BLOCK = 2048;
+  /** Phase Noise Spectrum L(f) — PLL phase error long-FFT, averaged. */
+  private static readonly PNOISE_FFT = 4096;
+  private static readonly PNOISE_AVG = 16;
+  private static readonly PNOISE_RENDER_EVERY_N = 8;
+  private pnoiseBuf = new Float32Array(Shell.PNOISE_FFT);
+  private pnoiseBufWrite = 0;
+  private pnoisePhase = 0;
+  private pnoiseFreq = 0;
+  private pnoiseAvg: Float32Array | null = null;
+  private pnoiseAvgFrames = 0;
+  private pnoiseHist: Float32Array[] = [];
+  private pnoiseFftRe: Float32Array | null = null;
+  private pnoiseFftIm: Float32Array | null = null;
+  private pnoiseRafTick = 0;
+  /** Modified Allan / TDEV — same PLL frequency series as ADEV but
+   *  with MDEV / HDEV / TDEV variance estimators. */
+  private static readonly MTDEV_HIST = 2048;
+  private static readonly MTDEV_TAU0_MS = 100;
+  private mtdevHist = new Float32Array(Shell.MTDEV_HIST);
+  private mtdevHistWrite = 0;
+  private mtdevHistFilled = 0;
+  private mtdevPhase = 0;
+  private mtdevFreq = 0;
+  private mtdevSamplesSinceEmit = 0;
+  /** GPSDO Lock / Holdover — cumulative phase plot over the panel's
+   *  lifetime. */
+  private static readonly GPSDO_HIST = 1800;             // 30 min at 1 Hz
+  private gpsdoHist = new Float32Array(Shell.GPSDO_HIST);
+  private gpsdoHistWrite = 0;
+  private gpsdoHistFilled = 0;
+  private gpsdoPhase = 0;
+  private gpsdoFreq = 0;
+  private gpsdoStartTs = 0;
+  private gpsdoSamplesSinceEmit = 0;
+  private gpsdoCumPhase = 0;
+  /** Range-Doppler Map — 2D delay × Doppler bin grid. */
+  private static readonly RDOP_RANGES = 96;
+  private static readonly RDOP_DOPS = 64;
+  private static readonly RDOP_REFLEN = 1024;
+  private static readonly RDOP_RENDER_EVERY_N = 8;
+  private rdopMap: Float32Array | null = null;
+  private rdopRefI = new Float32Array(Shell.RDOP_REFLEN);
+  private rdopRefQ = new Float32Array(Shell.RDOP_REFLEN);
+  private rdopRefW = 0;
+  private rdopHaveRef = false;
+  private rdopRafTick = 0;
+  /** Spectral Coherence γ²(f) between two consecutive IQ time windows. */
+  private static readonly COH_FFT = 1024;
+  private static readonly COH_RENDER_EVERY_N = 8;
+  private cohBufA = new Float32Array(Shell.COH_FFT * 2);   // [I,Q] interleaved
+  private cohBufB = new Float32Array(Shell.COH_FFT * 2);
+  private cohBufWrite = 0;
+  private cohFill = 0;
+  private cohHaveA = false;
+  private cohRafTick = 0;
+  // ── 2026 audio-side viewer batch-3 ────────────────────────────────
+  private hhtOn = false;
+  private static readonly HHT_BLOCK = 2048;
+  private static readonly HHT_HIST  = 600;
+  private static readonly HHT_RENDER_EVERY_N = 6;
+  private hhtBuf = new Float32Array(Shell.HHT_BLOCK);
+  private hhtBufWrite = 0;
+  private hhtBufFill = 0;
+  private hhtImf1Hist = new Float32Array(Shell.HHT_HIST);
+  private hhtImf2Hist = new Float32Array(Shell.HHT_HIST);
+  private hhtImf3Hist = new Float32Array(Shell.HHT_HIST);
+  private hhtHistWrite = 0;
+  private hhtHistFilled = 0;
+  private hhtRaf: number | null = null;
+  private hhtRafTick = 0;
+
+  private melOn = false;
+  private static readonly MEL_FFT = 2048;
+  private static readonly MEL_BANDS = 64;
+  private static readonly MEL_COLS  = 256;
+  private static readonly MEL_RENDER_EVERY_N = 6;
+  private melBuf = new Float32Array(Shell.MEL_FFT);
+  private melBufWrite = 0;
+  private melImage: Float32Array | null = null;
+  private melCol = 0;
+  private melFilterBank: Float32Array[] | null = null;
+  private melFftRe: Float32Array | null = null;
+  private melFftIm: Float32Array | null = null;
+  private melOffCanvas: HTMLCanvasElement | null = null;
+  private melRaf: number | null = null;
+  private melRafTick = 0;
+
+  private chroOn = false;
+  private static readonly CHRO_FFT = 2048;
+  private static readonly CHRO_COLS = 256;
+  private static readonly CHRO_RENDER_EVERY_N = 6;
+  private chroBuf = new Float32Array(Shell.CHRO_FFT);
+  private chroBufWrite = 0;
+  private chroImage: Float32Array | null = null;
+  private chroCol = 0;
+  private chroFftRe: Float32Array | null = null;
+  private chroFftIm: Float32Array | null = null;
+  private chroOffCanvas: HTMLCanvasElement | null = null;
+  private chroRaf: number | null = null;
+  private chroRafTick = 0;
+
+  private mspecOn = false;
+  private static readonly MSPEC_INNER_FFT = 1024;       // inner STFT
+  private static readonly MSPEC_INNER_HOP = 256;
+  private static readonly MSPEC_HISTORY   = 256;        // frames for outer FFT
+  private static readonly MSPEC_OUTER_BINS = 128;
+  private static readonly MSPEC_RENDER_EVERY_N = 8;
+  private mspecBuf = new Float32Array(Shell.MSPEC_INNER_FFT);
+  private mspecBufWrite = 0;
+  private mspecSampleSinceHop = 0;
+  private mspecBinHist: Float32Array | null = null;    // [innerBins × HISTORY]
+  private mspecBinHistW = 0;
+  private mspecBinHistFilled = 0;
+  private mspecRaf: number | null = null;
+  private mspecRafTick = 0;
+
+  private acfOn = false;
+  private static readonly ACF_BLOCK = 2048;
+  private static readonly ACF_LAGS  = 600;             // ~50 ms at 12 kHz
+  private static readonly ACF_RENDER_EVERY_N = 6;
+  private acfBuf = new Float32Array(Shell.ACF_BLOCK);
+  private acfBufWrite = 0;
+  private acfRaf: number | null = null;
+  private acfRafTick = 0;
+
+  private sentOn = false;
+  private static readonly SENT_FFT = 1024;
+  private static readonly SENT_HIST = 600;             // 30 s at 20 Hz
+  private static readonly SENT_BLOCK = 600;            // emit every ~50 ms
+  private sentBuf = new Float32Array(Shell.SENT_FFT);
+  private sentBufWrite = 0;
+  private sentBlockCount = 0;
+  private sentHist = new Float32Array(Shell.SENT_HIST);
+  private sentHistWrite = 0;
+  private sentHistFilled = 0;
+  private sentRaf: number | null = null;
+
+  private sflatOn = false;
+  private static readonly SFLAT_FFT = 1024;
+  private static readonly SFLAT_HIST = 600;
+  private static readonly SFLAT_BLOCK = 600;
+  private sflatBuf = new Float32Array(Shell.SFLAT_FFT);
+  private sflatBufWrite = 0;
+  private sflatBlockCount = 0;
+  private sflatHist = new Float32Array(Shell.SFLAT_HIST);
+  private sflatHistWrite = 0;
+  private sflatHistFilled = 0;
+  private sflatRaf: number | null = null;
+
+  private qqOn = false;
+  private qqKind: 'rayleigh' | 'gaussian' | 'rician' = 'rayleigh';
+  private static readonly QQ_SAMPLES = 1024;
+  private static readonly QQ_RENDER_EVERY_N = 8;
+  private qqEnv = new Float32Array(Shell.QQ_SAMPLES);
+  private qqEnvW = 0;
+  private qqEnvFilled = 0;
+  private qqRaf: number | null = null;
+  private qqRafTick = 0;
+
+  private ciperOn = false;
+  private static readonly CIPER_FFT = 2048;
+  private static readonly CIPER_AVG = 16;
+  private static readonly CIPER_RENDER_EVERY_N = 6;
+  private ciperBuf = new Float32Array(Shell.CIPER_FFT);
+  private ciperBufWrite = 0;
+  private ciperAvgSum: Float32Array | null = null;
+  private ciperHist: Float32Array[] = [];
+  private ciperFftRe: Float32Array | null = null;
+  private ciperFftIm: Float32Array | null = null;
+  private ciperRaf: number | null = null;
+  private ciperRafTick = 0;
+
+  private phasePOn = false;
+  private static readonly PHASEP_BUF = 4096;
+  private static readonly PHASEP_RENDER_EVERY_N = 4;
+  private phasePBuf = new Float32Array(Shell.PHASEP_BUF);
+  private phasePBufWrite = 0;
+  private phasePTau = 36;
+  private phasePRaf: number | null = null;
+  private phasePRafTick = 0;
+
+  // ── 2026 IQ-side viewer batch-3 ───────────────────────────────────
+  private static readonly WVD_BUF = 2048;
+  private static readonly WVD_FREQS = 256;
+  private static readonly WVD_COLS = 192;
+  private wvdBufI = new Float32Array(Shell.WVD_BUF);
+  private wvdBufQ = new Float32Array(Shell.WVD_BUF);
+  private wvdBufWrite = 0;
+  private wvdBufFill = 0;
+  private wvdImage: Float32Array | null = null;
+  private wvdCol = 0;
+  private wvdOffCanvas: HTMLCanvasElement | null = null;
+  private wvdRafTick = 0;
+  private static readonly WVD_RENDER_EVERY_N = 12;
+
+  private static readonly STXF_BUF = 2048;
+  private static readonly STXF_FREQS = 128;
+  private static readonly STXF_COLS = 192;
+  private stxfBufI = new Float32Array(Shell.STXF_BUF);
+  private stxfBufQ = new Float32Array(Shell.STXF_BUF);
+  private stxfBufWrite = 0;
+  private stxfBufFill = 0;
+  private stxfImage: Float32Array | null = null;
+  private stxfCol = 0;
+  private stxfOffCanvas: HTMLCanvasElement | null = null;
+  private stxfRafTick = 0;
+  private static readonly STXF_RENDER_EVERY_N = 12;
+
+  private static readonly SCF_BUF = 2048;
+  private static readonly SCF_FBINS = 96;
+  private static readonly SCF_ABINS = 64;
+  private scfBufI = new Float32Array(Shell.SCF_BUF);
+  private scfBufQ = new Float32Array(Shell.SCF_BUF);
+  private scfBufWrite = 0;
+  private scfBufFill = 0;
+  private scfMap: Float32Array | null = null;
+  private scfRafTick = 0;
+  private static readonly SCF_RENDER_EVERY_N = 16;
+
+  private static readonly BISP_FFT = 256;
+  private static readonly BISP_BUF = 2048;
+  private bispBufI = new Float32Array(Shell.BISP_BUF);
+  private bispBufQ = new Float32Array(Shell.BISP_BUF);
+  private bispBufWrite = 0;
+  private bispBufFill = 0;
+  private bispMap: Float32Array | null = null;
+  private bispFrames = 0;
+  private bispRafTick = 0;
+  private static readonly BISP_RENDER_EVERY_N = 16;
+
+  private static readonly AMBIG_REF = 512;
+  private static readonly AMBIG_TAU = 96;
+  private static readonly AMBIG_NU = 64;
+  private ambigRefI = new Float32Array(Shell.AMBIG_REF);
+  private ambigRefQ = new Float32Array(Shell.AMBIG_REF);
+  private ambigRefW = 0;
+  private ambigHaveRef = false;
+  private ambigMap: Float32Array | null = null;
+  private ambigRafTick = 0;
+  private static readonly AMBIG_RENDER_EVERY_N = 16;
+
+  private static readonly IQIMB_HIST = 300;
+  private static readonly IQIMB_BLOCK = 6000;          // ~0.5 s at 12 kHz
+  private iqimbHist = new Float32Array(Shell.IQIMB_HIST * 4);   // 4 metrics interleaved
+  private iqimbHistWrite = 0;
+  private iqimbHistFilled = 0;
+  private iqimbBlock = 0;
+  private iqimbSumI2 = 0; private iqimbSumQ2 = 0;
+  private iqimbSumIQ = 0;
+  private iqimbSumI = 0; private iqimbSumQ = 0;
+
+  private static readonly MIRR_HIST = 300;
+  private static readonly MIRR_FFT = 1024;
+  private mirrHist = new Float32Array(Shell.MIRR_HIST);
+  private mirrHistWrite = 0;
+  private mirrHistFilled = 0;
+  private mirrBufI = new Float32Array(Shell.MIRR_FFT);
+  private mirrBufQ = new Float32Array(Shell.MIRR_FFT);
+  private mirrBufWrite = 0;
+  private mirrBufFill = 0;
+
   /** Hover cursor X (CSS px from canvas left). Null when pointer is
    *  outside the canvas — no cursor drawn, status line shows defaults. */
   private thdCursorX: number | null = null;
@@ -12494,7 +14328,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
   /** Page-5 dispatcher. Opens `name`'s panel and starts its dedicated
    *  feed + render loop; closes whichever was previously active.
    *  Re-tapping the same button closes it. */
-  private toggleIq5(name: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk') {
+  private toggleIq5(name: 'sfrc' | 'dopp' | 'zoom' | 'antc' | 'ppmc' | 'othr' | 'rfi' | 'wusb' | 'wlsb' | 'dlds' | 'kurt' | 'ifrq' | 'aldv' | 'caf' | 'echo' | 'sclk' | 'cden' | 'evm' | 'hoc' | 'pnoise' | 'mtdev' | 'gpsdo' | 'rdop' | 'coh' | 'wvd' | 'stxf' | 'scf' | 'bisp' | 'ambig' | 'iqimb' | 'mirr') {
     // Same-button tap → close.
     if (this.iq5Active === name) {
       this.closeIq5();
@@ -12591,6 +14425,89 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.sclkNcoPhase = 0;
       this.sclkSampleCount = 0;
       this.sclkPeakConfidence = 0;
+    } else if (name === 'cden') {
+      if (this.cdenHeat) this.cdenHeat.fill(0);
+      this.cdenMax = 0;
+      this.cdenSamples = 0;
+    } else if (name === 'evm') {
+      this.evmHist.fill(0);
+      this.evmHistWrite = 0;
+      this.evmHistFilled = 0;
+      this.evmPhase = 0;
+      this.evmFreq = 0;
+      this.evmIdx = 0;
+    } else if (name === 'hoc') {
+      this.hocHist.fill(0);
+      this.hocHistWrite = 0;
+      this.hocHistFilled = 0;
+      this.hocAccumN = 0;
+      this.hocM20 = 0; this.hocM21 = 0;
+      this.hocM40 = 0; this.hocM42 = 0;
+    } else if (name === 'pnoise') {
+      this.pnoiseBuf.fill(0);
+      this.pnoiseBufWrite = 0;
+      this.pnoisePhase = 0;
+      this.pnoiseFreq = 0;
+      if (this.pnoiseAvg) this.pnoiseAvg.fill(0);
+      this.pnoiseAvgFrames = 0;
+    } else if (name === 'mtdev') {
+      this.mtdevHist.fill(0);
+      this.mtdevHistWrite = 0;
+      this.mtdevHistFilled = 0;
+      this.mtdevPhase = 0;
+      this.mtdevFreq = 0;
+      this.mtdevSamplesSinceEmit = 0;
+    } else if (name === 'gpsdo') {
+      this.gpsdoHist.fill(0);
+      this.gpsdoHistWrite = 0;
+      this.gpsdoHistFilled = 0;
+      this.gpsdoPhase = 0;
+      this.gpsdoFreq = 0;
+      this.gpsdoStartTs = Date.now();
+      this.gpsdoSamplesSinceEmit = 0;
+      this.gpsdoCumPhase = 0;
+    } else if (name === 'rdop') {
+      if (this.rdopMap) this.rdopMap.fill(0);
+      this.rdopRefI.fill(0); this.rdopRefQ.fill(0);
+      this.rdopRefW = 0;
+      this.rdopHaveRef = false;
+    } else if (name === 'coh') {
+      this.cohBufA.fill(0); this.cohBufB.fill(0);
+      this.cohBufWrite = 0;
+      this.cohFill = 0;
+      this.cohHaveA = false;
+    } else if (name === 'wvd') {
+      this.wvdBufI.fill(0); this.wvdBufQ.fill(0);
+      this.wvdBufWrite = 0; this.wvdBufFill = 0;
+      if (this.wvdImage) this.wvdImage.fill(0);
+      this.wvdCol = 0;
+    } else if (name === 'stxf') {
+      this.stxfBufI.fill(0); this.stxfBufQ.fill(0);
+      this.stxfBufWrite = 0; this.stxfBufFill = 0;
+      if (this.stxfImage) this.stxfImage.fill(0);
+      this.stxfCol = 0;
+    } else if (name === 'scf') {
+      this.scfBufI.fill(0); this.scfBufQ.fill(0);
+      this.scfBufWrite = 0; this.scfBufFill = 0;
+      if (this.scfMap) this.scfMap.fill(0);
+    } else if (name === 'bisp') {
+      this.bispBufI.fill(0); this.bispBufQ.fill(0);
+      this.bispBufWrite = 0; this.bispBufFill = 0;
+      if (this.bispMap) this.bispMap.fill(0);
+      this.bispFrames = 0;
+    } else if (name === 'ambig') {
+      this.ambigRefI.fill(0); this.ambigRefQ.fill(0);
+      this.ambigRefW = 0; this.ambigHaveRef = false;
+      if (this.ambigMap) this.ambigMap.fill(0);
+    } else if (name === 'iqimb') {
+      this.iqimbHist.fill(0); this.iqimbHistWrite = 0; this.iqimbHistFilled = 0;
+      this.iqimbBlock = 0;
+      this.iqimbSumI2 = 0; this.iqimbSumQ2 = 0;
+      this.iqimbSumIQ = 0; this.iqimbSumI = 0; this.iqimbSumQ = 0;
+    } else if (name === 'mirr') {
+      this.mirrHist.fill(0); this.mirrHistWrite = 0; this.mirrHistFilled = 0;
+      this.mirrBufI.fill(0); this.mirrBufQ.fill(0);
+      this.mirrBufWrite = 0; this.mirrBufFill = 0;
     } else if (name === 'wusb' || name === 'wlsb') {
       this.weakInFill = 0;
       this.weakOverlap.fill(0);
@@ -12670,6 +14587,21 @@ Lock state computed from the % of recent (last 50 samples) errors with
       case 'caf':  this.feedCaf(iqBytes); break;
       case 'echo': this.feedEcho(iqBytes); break;
       case 'sclk': this.feedSclk(iqBytes); break;
+      case 'cden': this.feedCden(iqBytes); break;
+      case 'evm':  this.feedEvm(iqBytes); break;
+      case 'hoc':  this.feedHoc(iqBytes); break;
+      case 'pnoise': this.feedPnoise(iqBytes); break;
+      case 'mtdev': this.feedMtdev(iqBytes); break;
+      case 'gpsdo': this.feedGpsdo(iqBytes); break;
+      case 'rdop': this.feedRdop(iqBytes); break;
+      case 'coh':  this.feedCoh(iqBytes); break;
+      case 'wvd':  this.feedWvd(iqBytes); break;
+      case 'stxf': this.feedStxf(iqBytes); break;
+      case 'scf':  this.feedScf(iqBytes); break;
+      case 'bisp': this.feedBisp(iqBytes); break;
+      case 'ambig': this.feedAmbig(iqBytes); break;
+      case 'iqimb': this.feedIqimb(iqBytes); break;
+      case 'mirr': this.feedMirr(iqBytes); break;
       default: break;
     }
   }
@@ -12693,6 +14625,21 @@ Lock state computed from the % of recent (last 50 samples) errors with
       case 'caf':  this.renderCaf(); break;
       case 'echo': this.renderEcho(); break;
       case 'sclk': this.renderSclk(); break;
+      case 'cden': this.renderCden(); break;
+      case 'evm':  this.renderEvm(); break;
+      case 'hoc':  this.renderHoc(); break;
+      case 'pnoise': this.renderPnoise(); break;
+      case 'mtdev': this.renderMtdev(); break;
+      case 'gpsdo': this.renderGpsdo(); break;
+      case 'rdop': this.renderRdop(); break;
+      case 'coh':  this.renderCoh(); break;
+      case 'wvd':  this.renderWvd(); break;
+      case 'stxf': this.renderStxf(); break;
+      case 'scf':  this.renderScf(); break;
+      case 'bisp': this.renderBisp(); break;
+      case 'ambig': this.renderAmbig(); break;
+      case 'iqimb': this.renderIqimb(); break;
+      case 'mirr': this.renderMirr(); break;
     }
   }
 
@@ -17022,6 +18969,3721 @@ Lock state computed from the % of recent (last 50 samples) errors with
     }
   }
 
+  /** Toggle the Welch PSD panel. Audio-side viewer: receives the int16
+   *  PCM stream via player.onWelch, accumulates into a ring buffer, and
+   *  computes one Hann-windowed periodogram per draw frame (~10 Hz).
+   *  The last WELCH_AVG_LEN periodograms are summed and averaged for
+   *  the live Welch trace; a parallel min-hold buffer tracks the
+   *  lowest value ever observed per bin since reset. */
+  private toggleWelch() {
+    this.welchOn = !this.welchOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnWelch');
+    const panel = this.$('welchPanel');
+    btn.classList.toggle('active', this.welchOn);
+    panel.style.display = this.welchOn ? '' : 'none';
+    if (this.welchOn) {
+      this.welchBuf.fill(0);
+      this.welchBufWrite = 0;
+      this.welchPowerHist.length = 0;
+      this.welchAvgFrames = 0;
+      if (this.welchAvgSum) this.welchAvgSum.fill(0);
+      if (this.welchMinHold) this.welchMinHold.fill(Infinity);
+      this.player.onWelch = (s) => this.feedWelch(s);
+      this.welchRafTick = 0;
+      // Pointer cursor — same approach as the Audio FFT (thd) panel.
+      if (!this.welchCursorBound) {
+        const canvas = this.$('welchCanvas') as HTMLCanvasElement;
+        canvas.style.cursor = 'crosshair';
+        canvas.addEventListener('pointermove', (e) => {
+          const r = canvas.getBoundingClientRect();
+          this.welchCursorX = e.clientX - r.left;
+        });
+        canvas.addEventListener('pointerleave', () => { this.welchCursorX = null; });
+        this.welchCursorBound = true;
+      }
+      const tick = () => {
+        if (!this.welchOn) { this.welchRaf = null; return; }
+        if ((this.welchRafTick++ % Shell.WELCH_RENDER_EVERY_N) === 0) {
+          this.drawWelch();
+        }
+        this.welchRaf = requestAnimationFrame(tick);
+      };
+      this.welchRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onWelch = null;
+      if (this.welchRaf != null) { cancelAnimationFrame(this.welchRaf); this.welchRaf = null; }
+    }
+  }
+
+  private feedWelch(samples: Int16Array) {
+    const buf = this.welchBuf;
+    const N = buf.length;
+    let w = this.welchBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.welchBufWrite = w;
+  }
+
+  private drawWelch() {
+    const canvas = this.$('welchCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width  = cssW * dpr;
+      canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.WELCH_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    if (!this.welchFftRe || this.welchFftRe.length !== N) {
+      this.welchFftRe = new Float32Array(N);
+      this.welchFftIm = new Float32Array(N);
+    }
+    if (!this.welchAvgSum || this.welchAvgSum.length !== bins) {
+      this.welchAvgSum = new Float32Array(bins);
+      this.welchPowerHist.length = 0;
+      this.welchAvgFrames = 0;
+    }
+    if (!this.welchMinHold || this.welchMinHold.length !== bins) {
+      this.welchMinHold = new Float32Array(bins);
+      this.welchMinHold.fill(Infinity);
+    }
+    if (!this.welchCurDb || this.welchCurDb.length !== bins) {
+      this.welchCurDb = new Float32Array(bins);
+      this.welchMinDb = new Float32Array(bins);
+    }
+    const re = this.welchFftRe;
+    const im = this.welchFftIm!;
+    const curDb = this.welchCurDb;
+    const minDb = this.welchMinDb!;
+    const sum = this.welchAvgSum;
+    const minH = this.welchMinHold;
+
+    // Hann-window the latest N samples; compute one periodogram.
+    const buf = this.welchBuf;
+    const wIdx = this.welchBufWrite;
+    const twoPiOverN = 2 * Math.PI / (N - 1);
+    // Hann amplitude correction factor (sum of w² / N) for power
+    // calibration — not strictly necessary for relative-dB display
+    // but keeps levels independent of N.
+    let windowPowerSum = 0;
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPiOverN * i));
+      windowPowerSum += w * w;
+      re[i] = buf[(wIdx + i) % N] * w;
+    }
+    im.fill(0);
+    this.fftInPlace(re, im);
+    const cal = 1 / Math.max(1e-30, windowPowerSum);
+
+    // New power spectrum for the displayed range (linear power).
+    const newPow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) {
+      newPow[k] = (re[k] * re[k] + im[k] * im[k]) * cal;
+    }
+
+    // Push into the running-sum ring (length capped at WELCH_AVG_LEN).
+    if (this.welchPowerHist.length >= Shell.WELCH_AVG_LEN) {
+      const old = this.welchPowerHist.shift()!;
+      for (let k = 0; k < bins; k++) sum[k] -= old[k];
+    }
+    for (let k = 0; k < bins; k++) sum[k] += newPow[k];
+    this.welchPowerHist.push(newPow);
+    this.welchAvgFrames = this.welchPowerHist.length;
+
+    // Compute current averaged dB + update min-hold (in linear power so
+    // the comparison is meaningful regardless of any later scaling).
+    const M = this.welchAvgFrames;
+    for (let k = 0; k < bins; k++) {
+      const meanPow = sum[k] / M;
+      curDb[k] = meanPow > 1e-30 ? 10 * Math.log10(meanPow) : -200;
+      if (meanPow < minH[k]) minH[k] = meanPow;
+      minDb[k] = minH[k] > 1e-30 ? 10 * Math.log10(minH[k]) : -200;
+    }
+
+    // Find dominant peak (skip the DC bin to avoid getting locked on it).
+    let peakK = -1, peakDb = -Infinity;
+    for (let k = 2; k < bins; k++) {
+      if (curDb[k] > peakDb) { peakDb = curDb[k]; peakK = k; }
+    }
+    let peakHz = peakK > 0 ? peakK * binHz : 0;
+    if (peakK > 1 && peakK < bins - 1) {
+      const a = curDb[peakK - 1], b = curDb[peakK], c = curDb[peakK + 1];
+      const denom = (a - 2 * b + c);
+      const delta = denom !== 0 ? 0.5 * (a - c) / denom : 0;
+      if (Math.abs(delta) <= 1) peakHz = (peakK + delta) * binHz;
+    }
+    // Noise floor = median of the min-hold trace (robust to a few
+    // bright bins from steady carriers).
+    const sortedMin = Array.from(minDb).sort((a, b) => a - b);
+    const floorDb = sortedMin[Math.floor(sortedMin.length / 2)];
+
+    // ── Render ──
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    // Y range — adaptive around the current trace median.
+    const sortedCur = Array.from(curDb).sort((a, b) => a - b);
+    const median = sortedCur[Math.floor(sortedCur.length / 2)];
+    const ymax = median + 60;
+    const ymin = median - 20;
+    const range = Math.max(20, ymax - ymin);
+
+    // Frequency grid (every 1 kHz) + dB grid (10 dB).
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557';
+    ctx.strokeStyle = '#1a2030';
+    ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath();
+      ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    // dB grid lines on multiples of 10 within range.
+    const dbStart = Math.ceil(ymin / 10) * 10;
+    for (let db = dbStart; db <= ymax; db += 10) {
+      const yN = 1 - (db - ymin) / range;
+      const y = padT + yN * plotH;
+      ctx.beginPath();
+      ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${db | 0}`, 2 * dpr, y + 4 * dpr);
+    }
+
+    // Min-hold trace (dim cyan).
+    ctx.strokeStyle = '#3aa0c4';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = padL + ((k * binHz) / MAX_HZ) * plotW;
+      const yN = 1 - Math.max(0, Math.min(1, (minDb[k] - ymin) / range));
+      const y = padT + yN * plotH;
+      if (k === 0) ctx.moveTo(x, y);
+      else          ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Welch averaged PSD trace (bright green).
+    ctx.strokeStyle = '#cfffa3';
+    ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = padL + ((k * binHz) / MAX_HZ) * plotW;
+      const yN = 1 - Math.max(0, Math.min(1, (curDb[k] - ymin) / range));
+      const y = padT + yN * plotH;
+      if (k === 0) ctx.moveTo(x, y);
+      else          ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Peak crosshair (yellow).
+    if (peakK > 0) {
+      const x = padL + (peakHz / MAX_HZ) * plotW;
+      ctx.strokeStyle = '#fd5';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    }
+
+    // Hover cursor (vertical line + readout).
+    let cursorBlurb = '';
+    if (this.welchCursorX != null) {
+      const cssX = this.welchCursorX;
+      const xpx = cssX * dpr;
+      if (xpx >= padL && xpx <= padL + plotW) {
+        const hz = ((xpx - padL) / plotW) * MAX_HZ;
+        const k = Math.max(0, Math.min(bins - 1, Math.round(hz / binHz)));
+        cursorBlurb = ` · cur ${hz.toFixed(0)} Hz @ ${curDb[k].toFixed(1)} dB`;
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(xpx, padT); ctx.lineTo(xpx, padT + plotH); ctx.stroke();
+      }
+    }
+
+    // Status line.
+    const statusEl = this.$('welchStatus');
+    statusEl.textContent =
+      `Welch · N=${N} (${binHz.toFixed(1)} Hz/bin) · avg ${M}/${Shell.WELCH_AVG_LEN} frames` +
+      (peakK > 0 ? ` · peak ${peakHz.toFixed(1)} Hz @ ${peakDb.toFixed(1)} dB` : '') +
+      ` · floor ${floorDb.toFixed(1)} dB` + cursorBlurb;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Crest Factor / PAPR vs Time
+  // ────────────────────────────────────────────────────────────────
+  private toggleCrest() {
+    this.crestOn = !this.crestOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnCrest');
+    const panel = this.$('crestPanel');
+    btn.classList.toggle('active', this.crestOn);
+    panel.style.display = this.crestOn ? '' : 'none';
+    if (this.crestOn) {
+      this.crestHist.fill(0);
+      this.crestHistWrite = 0;
+      this.crestHistFilled = 0;
+      this.crestBlockAccPow = 0;
+      this.crestBlockAccPeak = 0;
+      this.crestBlockCount = 0;
+      this.player.onCrest = (s) => this.feedCrest(s);
+      const tick = () => {
+        if (!this.crestOn) { this.crestRaf = null; return; }
+        this.drawCrest();
+        this.crestRaf = requestAnimationFrame(tick);
+      };
+      this.crestRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onCrest = null;
+      if (this.crestRaf != null) { cancelAnimationFrame(this.crestRaf); this.crestRaf = null; }
+    }
+  }
+  private feedCrest(samples: Int16Array) {
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i] / 32768;
+      this.crestBlockAccPow += v * v;
+      const av = Math.abs(v);
+      if (av > this.crestBlockAccPeak) this.crestBlockAccPeak = av;
+      this.crestBlockCount++;
+      if (this.crestBlockCount >= Shell.CREST_BLOCK) {
+        const rms = Math.sqrt(this.crestBlockAccPow / this.crestBlockCount);
+        const crestDb = rms > 1e-9 ? 20 * Math.log10(this.crestBlockAccPeak / rms) : 0;
+        this.crestHist[this.crestHistWrite] = crestDb;
+        this.crestHistWrite = (this.crestHistWrite + 1) % Shell.CREST_HIST;
+        if (this.crestHistFilled < Shell.CREST_HIST) this.crestHistFilled++;
+        this.crestBlockAccPow = 0;
+        this.crestBlockAccPeak = 0;
+        this.crestBlockCount = 0;
+      }
+    }
+  }
+  private drawCrest() {
+    const canvas = this.$('crestCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const ymin = 0, ymax = 20;
+    const range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let db = 0; db <= 20; db += 5) {
+      const y = padT + (1 - (db - ymin) / range) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${db}`, 2 * dpr, y + 4 * dpr);
+    }
+    // Reference lines: 3 dB sinusoid, 10 dB noise, 15 dB impulsive.
+    const refs = [{ db: 3, label: 'sine', col: '#3a5' }, { db: 10, label: 'noise', col: '#36a' }, { db: 15, label: 'impulse', col: '#a55' }];
+    for (const r of refs) {
+      const y = padT + (1 - (r.db - ymin) / range) * plotH;
+      ctx.strokeStyle = r.col; ctx.lineWidth = 1 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = r.col;
+      ctx.fillText(r.label, padL + plotW - 40 * dpr, y - 2 * dpr);
+    }
+    // Strip chart.
+    const N = this.crestHistFilled;
+    if (N > 1) {
+      ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      let last = -1, lastDb = 0;
+      for (let i = 0; i < N; i++) {
+        const k = (this.crestHistWrite - N + i + Shell.CREST_HIST) % Shell.CREST_HIST;
+        const v = this.crestHist[k];
+        const x = padL + (i / Math.max(1, Shell.CREST_HIST - 1)) * plotW;
+        const yN = 1 - Math.max(0, Math.min(1, (v - ymin) / range));
+        const y = padT + yN * plotH;
+        if (last < 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        last = i; lastDb = v;
+      }
+      ctx.stroke();
+      const cur = lastDb.toFixed(1);
+      this.$('crestStatus').textContent =
+        `Crest Factor · current ${cur} dB · refs: sine=3, noise=10, impulse=15 · window 30 s`;
+    } else {
+      this.$('crestStatus').textContent = 'Crest Factor · gathering audio…';
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Spectral Mask Overlay
+  // ────────────────────────────────────────────────────────────────
+  private toggleMask() {
+    this.maskOn = !this.maskOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnMask');
+    const panel = this.$('maskPanel');
+    btn.classList.toggle('active', this.maskOn);
+    panel.style.display = this.maskOn ? '' : 'none';
+    if (this.maskOn) {
+      this.maskBuf.fill(0);
+      this.maskBufWrite = 0;
+      this.maskHist.length = 0;
+      this.maskAvgFrames = 0;
+      if (this.maskAvgSum) this.maskAvgSum.fill(0);
+      this.player.onMask = (s) => this.feedMask(s);
+      this.maskRafTick = 0;
+      const tick = () => {
+        if (!this.maskOn) { this.maskRaf = null; return; }
+        if ((this.maskRafTick++ % Shell.MASK_RENDER_EVERY_N) === 0) this.drawMask();
+        this.maskRaf = requestAnimationFrame(tick);
+      };
+      this.maskRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onMask = null;
+      if (this.maskRaf != null) { cancelAnimationFrame(this.maskRaf); this.maskRaf = null; }
+    }
+  }
+  private feedMask(samples: Int16Array) {
+    const buf = this.maskBuf; const N = buf.length;
+    let w = this.maskBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.maskBufWrite = w;
+  }
+  /** Mask shape — returns dB attenuation vs in-band peak, evaluated
+   *  at frequency `f` (Hz). The shape's 0-dB "passband" sits in the
+   *  positive frequencies starting at 300 Hz (SSB convention). */
+  private maskAt(f: number): number {
+    const fc = (this.maskKind === 'ssb') ? 1500 : 0; // SSB centred at 1.5 kHz, others centred at DC equiv
+    const bw = (this.maskKind === 'ssb') ? 2700
+            : (this.maskKind === 'am')  ? 6000
+            : (this.maskKind === 'nbfm') ? 12500
+            : 60000;
+    if (this.maskKind === 'flat') return 0;
+    const halfBw = bw / 2;
+    const offset = Math.abs(f - fc);
+    if (offset <= halfBw) return 0;                          // in-band
+    // Out-of-band: −60 dB/oct relative to the band edge.
+    const skirtOct = Math.log2(offset / halfBw);
+    return -60 * skirtOct;
+  }
+  private drawMask() {
+    const canvas = this.$('maskCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.MASK_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    if (!this.maskFftRe || this.maskFftRe.length !== N) {
+      this.maskFftRe = new Float32Array(N); this.maskFftIm = new Float32Array(N);
+    }
+    if (!this.maskAvgSum || this.maskAvgSum.length !== bins) {
+      this.maskAvgSum = new Float32Array(bins);
+      this.maskHist.length = 0; this.maskAvgFrames = 0;
+    }
+    const re = this.maskFftRe; const im = this.maskFftIm!;
+    const buf = this.maskBuf; const wIdx = this.maskBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    let wp = 0;
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      wp += w * w;
+      re[i] = buf[(wIdx + i) % N] * w;
+    }
+    im.fill(0);
+    this.fftInPlace(re, im);
+    const cal = 1 / Math.max(1e-30, wp);
+    const newPow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) newPow[k] = (re[k] * re[k] + im[k] * im[k]) * cal;
+    if (this.maskHist.length >= Shell.MASK_AVG) {
+      const old = this.maskHist.shift()!;
+      for (let k = 0; k < bins; k++) this.maskAvgSum[k] -= old[k];
+    }
+    for (let k = 0; k < bins; k++) this.maskAvgSum[k] += newPow[k];
+    this.maskHist.push(newPow);
+    this.maskAvgFrames = this.maskHist.length;
+    const M = this.maskAvgFrames;
+    const curDb = new Float32Array(bins);
+    let peakDb = -Infinity, peakK = -1;
+    for (let k = 0; k < bins; k++) {
+      const p = this.maskAvgSum[k] / M;
+      curDb[k] = p > 1e-30 ? 10 * Math.log10(p) : -200;
+      if (curDb[k] > peakDb) { peakDb = curDb[k]; peakK = k; }
+    }
+    // Mask normalised so 0 dB = peak.
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const ymax = peakDb + 5, ymin = peakDb - 80;
+    const range = ymax - ymin;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030';
+    ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    // Mask line.
+    const xForHz = (hz: number) => padL + (hz / MAX_HZ) * plotW;
+    const yForDb = (db: number) => padT + (1 - (db - ymin) / range) * plotH;
+    ctx.strokeStyle = '#c44'; ctx.lineWidth = 1.5 * dpr;
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.beginPath();
+    let worstOver = -Infinity;
+    for (let k = 0; k < bins; k++) {
+      const f = k * binHz;
+      const dbMask = peakDb + this.maskAt(f);
+      const x = xForHz(f); const y = yForDb(dbMask);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const over = curDb[k] - dbMask;
+      if (over > worstOver) worstOver = over;
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Welch trace.
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const f = k * binHz;
+      const x = xForHz(f); const y = yForDb(curDb[k]);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    const peakHz = peakK > 0 ? peakK * binHz : 0;
+    const labels: Record<string, string> = { ssb: 'SSB 2.7 kHz', am: 'AM 6 kHz', nbfm: 'NBFM 12.5 kHz', flat: 'Flat' };
+    this.$('maskStatus').textContent =
+      `Mask ${labels[this.maskKind]} · peak ${peakHz.toFixed(0)} Hz @ ${peakDb.toFixed(1)} dB · worst over-mask ${worstOver.toFixed(1)} dB`;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Reassigned Spectrogram
+  // ────────────────────────────────────────────────────────────────
+  private toggleRspec() {
+    this.rspecOn = !this.rspecOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnRspec');
+    const panel = this.$('rspecPanel');
+    btn.classList.toggle('active', this.rspecOn);
+    panel.style.display = this.rspecOn ? '' : 'none';
+    if (this.rspecOn) {
+      this.rspecBuf.fill(0); this.rspecBufWrite = 0; this.rspecSamplesSinceHop = 0;
+      this.rspecCol = 0;
+      if (this.rspecImage) this.rspecImage.fill(0);
+      this.player.onRspec = (s) => this.feedRspec(s);
+      this.rspecRafTick = 0;
+      const tick = () => {
+        if (!this.rspecOn) { this.rspecRaf = null; return; }
+        if ((this.rspecRafTick++ % Shell.RSPEC_RENDER_EVERY_N) === 0) this.drawRspec();
+        this.rspecRaf = requestAnimationFrame(tick);
+      };
+      this.rspecRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onRspec = null;
+      if (this.rspecRaf != null) { cancelAnimationFrame(this.rspecRaf); this.rspecRaf = null; }
+    }
+  }
+  private feedRspec(samples: Int16Array) {
+    const buf = this.rspecBuf; const N = buf.length;
+    let w = this.rspecBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+      this.rspecSamplesSinceHop++;
+      if (this.rspecSamplesSinceHop >= Shell.RSPEC_HOP) {
+        this.rspecSamplesSinceHop = 0;
+        this.computeRspecColumn();
+      }
+    }
+    this.rspecBufWrite = w;
+  }
+  /** Compute one reassigned spectrogram column using the standard
+   *  three-FFT method: original Hann, time-weighted Hann (t·h(t)), and
+   *  derivative Hann (h'(t)). Bin reassignment formulas:
+   *    f̂ = k − Im(X_d / X) / (2π)
+   *    t̂ = j + Re(X_t / X)   (within the window) */
+  private computeRspecColumn() {
+    const N = Shell.RSPEC_FFT;
+    if (!this.rspecFftRe || this.rspecFftRe.length !== N) {
+      this.rspecFftRe  = new Float32Array(N); this.rspecFftIm  = new Float32Array(N);
+      this.rspecFftReT = new Float32Array(N); this.rspecFftImT = new Float32Array(N);
+      this.rspecFftReD = new Float32Array(N); this.rspecFftImD = new Float32Array(N);
+    }
+    if (!this.rspecImage) {
+      this.rspecImage = new Float32Array(Shell.RSPEC_COLS * Shell.RSPEC_BINS);
+    }
+    const re = this.rspecFftRe; const im = this.rspecFftIm!;
+    const reT = this.rspecFftReT!; const imT = this.rspecFftImT!;
+    const reD = this.rspecFftReD!; const imD = this.rspecFftImD!;
+    const buf = this.rspecBuf; const wIdx = this.rspecBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const x = buf[(wIdx + i) % N];
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      // h'(t) for Hann: π/(N−1) · sin(2πi/(N−1))
+      const wp = (Math.PI / (N - 1)) * Math.sin(twoPi * i);
+      const wt = (i - N / 2) * w;
+      re[i] = x * w; im[i] = 0;
+      reT[i] = x * wt; imT[i] = 0;
+      reD[i] = x * wp; imD[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    this.fftInPlace(reT, imT);
+    this.fftInPlace(reD, imD);
+    // Reassign and accumulate into the destination column.
+    const col = new Float32Array(Shell.RSPEC_BINS);
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const srcBins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    for (let k = 0; k < srcBins; k++) {
+      const xr = re[k], xi = im[k];
+      const mag2 = xr * xr + xi * xi;
+      if (mag2 < 1e-12) continue;
+      // f̂ = k − Im(X_d · conj(X)) / (2π · |X|²)  — reassigned bin
+      const dRe = reD[k], dIm = imD[k];
+      const numIm = dIm * xr - dRe * xi;        // Im(X_d * conj(X))
+      const fHat = k - numIm / (2 * Math.PI * mag2);
+      // Map reassigned bin into the display row.
+      const yIdx = Math.round((fHat / srcBins) * Shell.RSPEC_BINS);
+      if (yIdx >= 0 && yIdx < Shell.RSPEC_BINS) {
+        col[yIdx] += mag2;
+      }
+    }
+    // dB-scale, blit into image.
+    const img = this.rspecImage;
+    const colIdx = this.rspecCol;
+    for (let y = 0; y < Shell.RSPEC_BINS; y++) {
+      img[y * Shell.RSPEC_COLS + colIdx] = col[y] > 1e-30 ? 10 * Math.log10(col[y]) : -120;
+    }
+    this.rspecCol = (this.rspecCol + 1) % Shell.RSPEC_COLS;
+  }
+  private drawRspec() {
+    const canvas = this.$('rspecCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    if (!this.rspecImage) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      this.$('rspecStatus').textContent = 'Reassigned Spectrogram · gathering audio…';
+      return;
+    }
+    if (!this.rspecOffCanvas || this.rspecOffCanvas.width !== Shell.RSPEC_COLS) {
+      this.rspecOffCanvas = document.createElement('canvas');
+      this.rspecOffCanvas.width = Shell.RSPEC_COLS;
+      this.rspecOffCanvas.height = Shell.RSPEC_BINS;
+    }
+    const off = this.rspecOffCanvas;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.RSPEC_COLS, Shell.RSPEC_BINS);
+    // Auto-contrast: percentile stretch over visible image.
+    const sorted = Array.from(this.rspecImage).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.05)];
+    const hi = sorted[Math.floor(sorted.length * 0.999)];
+    const range = Math.max(5, hi - lo);
+    const img = this.rspecImage;
+    for (let y = 0; y < Shell.RSPEC_BINS; y++) {
+      // Y flipped so high freq at top.
+      const srcY = Shell.RSPEC_BINS - 1 - y;
+      for (let x = 0; x < Shell.RSPEC_COLS; x++) {
+        const sx = (this.rspecCol + x) % Shell.RSPEC_COLS;
+        const v = img[srcY * Shell.RSPEC_COLS + sx];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * Shell.RSPEC_COLS + x) * 4;
+        const r = Math.floor(255 * Math.pow(t, 0.7));
+        const g = Math.floor(255 * Math.pow(t, 1.2));
+        const b = Math.floor(255 * (1 - Math.pow(t, 2)));
+        id.data[i] = r; id.data[i + 1] = g; id.data[i + 2] = b; id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('rspecStatus').textContent =
+      `Reassigned Spectrogram · ${Shell.RSPEC_FFT}-pt FFT, hop ${Shell.RSPEC_HOP} · ${Shell.RSPEC_COLS} cols`;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // LPC Spectral Envelope
+  // ────────────────────────────────────────────────────────────────
+  private toggleLpc() {
+    this.lpcOn = !this.lpcOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnLpc');
+    const panel = this.$('lpcPanel');
+    btn.classList.toggle('active', this.lpcOn);
+    panel.style.display = this.lpcOn ? '' : 'none';
+    if (this.lpcOn) {
+      this.lpcBuf.fill(0); this.lpcBufWrite = 0;
+      this.player.onLpc = (s) => this.feedLpc(s);
+      this.lpcRafTick = 0;
+      const tick = () => {
+        if (!this.lpcOn) { this.lpcRaf = null; return; }
+        if ((this.lpcRafTick++ % Shell.LPC_RENDER_EVERY_N) === 0) this.drawLpc();
+        this.lpcRaf = requestAnimationFrame(tick);
+      };
+      this.lpcRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onLpc = null;
+      if (this.lpcRaf != null) { cancelAnimationFrame(this.lpcRaf); this.lpcRaf = null; }
+    }
+  }
+  private feedLpc(samples: Int16Array) {
+    const buf = this.lpcBuf; const N = buf.length;
+    let w = this.lpcBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.lpcBufWrite = w;
+  }
+  /** Levinson-Durbin solve. Computes order-p AR coefficients from
+   *  autocorrelation sequence R[0..p]. Returns array of length p+1
+   *  with a[0]=1, a[1..p] = LPC coefficients. */
+  private lpcLevinson(R: Float32Array, p: number): { a: Float32Array; gain: number } {
+    const a = new Float32Array(p + 1); a[0] = 1;
+    let E = R[0];
+    for (let i = 1; i <= p; i++) {
+      let acc = 0;
+      for (let j = 1; j < i; j++) acc += a[j] * R[i - j];
+      const k = (R[i] - acc) / Math.max(E, 1e-12);
+      const aNew = new Float32Array(p + 1); aNew[0] = 1;
+      for (let j = 1; j < i; j++) aNew[j] = a[j] - k * a[i - j];
+      aNew[i] = k;
+      for (let j = 0; j <= i; j++) a[j] = aNew[j];
+      E *= (1 - k * k);
+      if (E <= 0) break;
+    }
+    return { a, gain: Math.sqrt(Math.max(E, 1e-12)) };
+  }
+  private drawLpc() {
+    const canvas = this.$('lpcCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.LPC_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    // Hann-window samples for both PSD + autocorrelation.
+    const x = new Float32Array(N);
+    const buf = this.lpcBuf; const wIdx = this.lpcBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      x[i] = buf[(wIdx + i) % N] * w;
+    }
+    // Source PSD.
+    if (!this.lpcFftRe || this.lpcFftRe.length !== N) {
+      this.lpcFftRe = new Float32Array(N); this.lpcFftIm = new Float32Array(N);
+    }
+    const re = this.lpcFftRe; const im = this.lpcFftIm!;
+    for (let i = 0; i < N; i++) { re[i] = x[i]; im[i] = 0; }
+    this.fftInPlace(re, im);
+    const srcDb = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) {
+      const m = re[k] * re[k] + im[k] * im[k];
+      srcDb[k] = m > 1e-30 ? 10 * Math.log10(m) : -120;
+    }
+    // Autocorrelation R[0..p] via biased estimator.
+    const p = Shell.LPC_ORDER;
+    const R = new Float32Array(p + 1);
+    for (let lag = 0; lag <= p; lag++) {
+      let acc = 0;
+      for (let i = 0; i < N - lag; i++) acc += x[i] * x[i + lag];
+      R[lag] = acc / N;
+    }
+    const { a, gain } = this.lpcLevinson(R, p);
+    // Envelope: |H(e^jω)|² = gain² / |A(e^jω)|²
+    const envDb = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) {
+      const omega = 2 * Math.PI * k / N;
+      let aRe = 0, aIm = 0;
+      for (let j = 0; j <= p; j++) {
+        aRe += a[j] * Math.cos(-omega * j);
+        aIm += a[j] * Math.sin(-omega * j);
+      }
+      const denom = Math.max(1e-30, aRe * aRe + aIm * aIm);
+      const H2 = (gain * gain) / denom;
+      envDb[k] = 10 * Math.log10(H2);
+    }
+    // Find LPC poles' frequencies by evaluating local maxima of envelope.
+    const formants: number[] = [];
+    for (let k = 2; k < bins - 2 && formants.length < 4; k++) {
+      if (envDb[k] > envDb[k - 1] && envDb[k] > envDb[k + 1] &&
+          envDb[k] > envDb[k - 2] && envDb[k] > envDb[k + 2]) {
+        formants.push(k * binHz);
+      }
+    }
+    // Render.
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const all = Array.from(srcDb).concat(Array.from(envDb)).sort((a, b) => a - b);
+    const lo = all[Math.floor(all.length * 0.1)] - 5;
+    const hi = all[Math.floor(all.length * 0.95)] + 5;
+    const range = Math.max(20, hi - lo);
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x2 = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x2, padT); ctx.lineTo(x2, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x2 + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    const xForHz = (hz: number) => padL + (hz / MAX_HZ) * plotW;
+    const yForDb = (db: number) => padT + (1 - (db - lo) / range) * plotH;
+    ctx.strokeStyle = '#5a8'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const f = k * binHz;
+      const xv = xForHz(f); const yv = yForDb(srcDb[k]);
+      if (k === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = '#fc7'; ctx.lineWidth = 1.6 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const f = k * binHz;
+      const xv = xForHz(f); const yv = yForDb(envDb[k]);
+      if (k === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#fd5';
+    for (let i = 0; i < formants.length; i++) {
+      const xv = xForHz(formants[i]);
+      ctx.fillRect(xv - 1 * dpr, padT, 2 * dpr, plotH);
+      ctx.fillText(`F${i + 1}`, xv + 2 * dpr, 14 * dpr);
+    }
+    this.$('lpcStatus').textContent =
+      `LPC order ${p} · ${formants.length} formant(s): ` +
+      formants.map((f, i) => `F${i + 1}=${f.toFixed(0)}Hz`).join(' ');
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Group Delay vs Frequency
+  // ────────────────────────────────────────────────────────────────
+  private toggleGdelay() {
+    this.gdelayOn = !this.gdelayOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnGdelay');
+    const panel = this.$('gdelayPanel');
+    btn.classList.toggle('active', this.gdelayOn);
+    panel.style.display = this.gdelayOn ? '' : 'none';
+    if (this.gdelayOn) {
+      this.gdelayBuf.fill(0); this.gdelayBufWrite = 0;
+      this.gdelayAvg = null; this.gdelayAvgN = 0;
+      this.player.onGdelay = (s) => this.feedGdelay(s);
+      this.gdelayRafTick = 0;
+      const tick = () => {
+        if (!this.gdelayOn) { this.gdelayRaf = null; return; }
+        if ((this.gdelayRafTick++ % Shell.GDELAY_RENDER_EVERY_N) === 0) this.drawGdelay();
+        this.gdelayRaf = requestAnimationFrame(tick);
+      };
+      this.gdelayRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onGdelay = null;
+      if (this.gdelayRaf != null) { cancelAnimationFrame(this.gdelayRaf); this.gdelayRaf = null; }
+    }
+  }
+  private feedGdelay(samples: Int16Array) {
+    const buf = this.gdelayBuf; const N = buf.length;
+    let w = this.gdelayBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.gdelayBufWrite = w;
+  }
+  private drawGdelay() {
+    const canvas = this.$('gdelayCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.GDELAY_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    if (!this.gdelayFftRe || this.gdelayFftRe.length !== N) {
+      this.gdelayFftRe = new Float32Array(N); this.gdelayFftIm = new Float32Array(N);
+    }
+    if (!this.gdelayAvg || this.gdelayAvg.length !== bins) {
+      this.gdelayAvg = new Float32Array(bins);
+      this.gdelayAvgN = 0;
+    }
+    const re = this.gdelayFftRe; const im = this.gdelayFftIm!;
+    const buf = this.gdelayBuf; const wIdx = this.gdelayBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = buf[(wIdx + i) % N] * w; im[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    // Compute phase, unwrap, derive group delay τ_g = −dφ/dω.
+    const phase = new Float32Array(bins);
+    let prev = 0;
+    for (let k = 0; k < bins; k++) {
+      let ph = Math.atan2(im[k], re[k]);
+      // Unwrap.
+      while (ph - prev > Math.PI) ph -= 2 * Math.PI;
+      while (prev - ph > Math.PI) ph += 2 * Math.PI;
+      phase[k] = ph;
+      prev = ph;
+    }
+    // τ_g[k] ≈ −(phase[k+1] − phase[k-1]) / (2 · dω), in samples; ÷ sr → seconds.
+    const tau = new Float32Array(bins);
+    const dOmega = 2 * Math.PI * binHz;
+    for (let k = 1; k < bins - 1; k++) {
+      tau[k] = -(phase[k + 1] - phase[k - 1]) / (2 * dOmega);
+    }
+    tau[0] = tau[1]; tau[bins - 1] = tau[bins - 2];
+    // EMA with avg.
+    const alpha = 1 / Math.max(1, Math.min(Shell.GDELAY_AVG, this.gdelayAvgN + 1));
+    for (let k = 0; k < bins; k++) {
+      this.gdelayAvg[k] = (1 - alpha) * this.gdelayAvg[k] + alpha * tau[k];
+    }
+    this.gdelayAvgN++;
+    // Render.
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    let tmin = Infinity, tmax = -Infinity;
+    for (let k = 1; k < bins - 1; k++) {
+      if (this.gdelayAvg[k] < tmin) tmin = this.gdelayAvg[k];
+      if (this.gdelayAvg[k] > tmax) tmax = this.gdelayAvg[k];
+    }
+    const range = Math.max(1e-4, tmax - tmin) * 1.2;
+    const tmid = (tmax + tmin) / 2;
+    const lo = tmid - range / 2;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    // Y-axis labels (ms).
+    for (let i = 0; i <= 4; i++) {
+      const t = lo + (range * i / 4);
+      const y = padT + (1 - i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${(t * 1000).toFixed(2)}ms`, 2 * dpr, y + 4 * dpr);
+    }
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 1; k < bins - 1; k++) {
+      const f = k * binHz;
+      const x = padL + (f / MAX_HZ) * plotW;
+      const yN = 1 - (this.gdelayAvg[k] - lo) / range;
+      const y = padT + Math.max(0, Math.min(1, yN)) * plotH;
+      if (k === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    let mean = 0;
+    for (let k = 1; k < bins - 1; k++) mean += this.gdelayAvg[k];
+    mean /= Math.max(1, bins - 2);
+    this.$('gdelayStatus').textContent =
+      `Group Delay · mean ${(mean * 1000).toFixed(2)} ms · range ${((tmax - tmin) * 1000).toFixed(2)} ms · avg ${Math.min(this.gdelayAvgN, Shell.GDELAY_AVG)} frames`;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // A/B Spectrum Compare
+  // ────────────────────────────────────────────────────────────────
+  private toggleAbspec() {
+    this.abspecOn = !this.abspecOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnAbspec');
+    const panel = this.$('abspecPanel');
+    btn.classList.toggle('active', this.abspecOn);
+    panel.style.display = this.abspecOn ? '' : 'none';
+    if (this.abspecOn) {
+      this.abspecBuf.fill(0); this.abspecBufWrite = 0;
+      this.abspecHist.length = 0;
+      if (this.abspecAvgSum) this.abspecAvgSum.fill(0);
+      this.abspecHaveRef = false;
+      this.player.onAbspec = (s) => this.feedAbspec(s);
+      this.abspecRafTick = 0;
+      const tick = () => {
+        if (!this.abspecOn) { this.abspecRaf = null; return; }
+        if ((this.abspecRafTick++ % Shell.ABSPEC_RENDER_EVERY_N) === 0) this.drawAbspec();
+        this.abspecRaf = requestAnimationFrame(tick);
+      };
+      this.abspecRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onAbspec = null;
+      if (this.abspecRaf != null) { cancelAnimationFrame(this.abspecRaf); this.abspecRaf = null; }
+    }
+  }
+  private feedAbspec(samples: Int16Array) {
+    const buf = this.abspecBuf; const N = buf.length;
+    let w = this.abspecBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+    }
+    this.abspecBufWrite = w;
+  }
+  private drawAbspec() {
+    const canvas = this.$('abspecCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.ABSPEC_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    if (!this.abspecFftRe || this.abspecFftRe.length !== N) {
+      this.abspecFftRe = new Float32Array(N); this.abspecFftIm = new Float32Array(N);
+    }
+    if (!this.abspecAvgSum || this.abspecAvgSum.length !== bins) {
+      this.abspecAvgSum = new Float32Array(bins);
+      this.abspecHist.length = 0;
+    }
+    if (!this.abspecCurDb || this.abspecCurDb.length !== bins) {
+      this.abspecCurDb = new Float32Array(bins);
+    }
+    const re = this.abspecFftRe; const im = this.abspecFftIm!;
+    const buf = this.abspecBuf; const wIdx = this.abspecBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = buf[(wIdx + i) % N] * w; im[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    const newPow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) newPow[k] = re[k] * re[k] + im[k] * im[k];
+    if (this.abspecHist.length >= Shell.ABSPEC_AVG) {
+      const old = this.abspecHist.shift()!;
+      for (let k = 0; k < bins; k++) this.abspecAvgSum[k] -= old[k];
+    }
+    for (let k = 0; k < bins; k++) this.abspecAvgSum[k] += newPow[k];
+    this.abspecHist.push(newPow);
+    const M = this.abspecHist.length;
+    for (let k = 0; k < bins; k++) {
+      const p = this.abspecAvgSum[k] / M;
+      this.abspecCurDb[k] = p > 1e-30 ? 10 * Math.log10(p) : -200;
+    }
+    // Render. Top 70% PSD curves, bottom 30% difference plot.
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const splitY = Math.floor(H * 0.65);
+    const plotW = W - padL - padR;
+    const plotH = splitY - padT - 4 * dpr;
+    const sorted = Array.from(this.abspecCurDb).sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const ymax = median + 60, ymin = median - 20;
+    const range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    }
+    const xForHz = (hz: number) => padL + (hz / MAX_HZ) * plotW;
+    const yForDb = (db: number) => padT + (1 - (db - ymin) / range) * plotH;
+    if (this.abspecHaveRef && this.abspecRefDb) {
+      ctx.strokeStyle = '#fa6'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let k = 0; k < bins; k++) {
+        const x = xForHz(k * binHz); const y = yForDb(this.abspecRefDb[k]);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = xForHz(k * binHz); const y = yForDb(this.abspecCurDb[k]);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Diff plot.
+    const diffH = H - splitY - padB;
+    ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath(); ctx.moveTo(padL, splitY + diffH / 2); ctx.lineTo(padL + plotW, splitY + diffH / 2); ctx.stroke();
+    ctx.fillStyle = '#557';
+    ctx.fillText('Δ dB', 2 * dpr, splitY + diffH / 2 + 4 * dpr);
+    if (this.abspecHaveRef && this.abspecRefDb) {
+      const diffMax = 20;
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let k = 0; k < bins; k++) {
+        const d = this.abspecCurDb[k] - this.abspecRefDb[k];
+        const x = xForHz(k * binHz);
+        const y = splitY + diffH / 2 - Math.max(-1, Math.min(1, d / diffMax)) * (diffH / 2 - 2 * dpr);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    this.$('abspecStatus').textContent =
+      this.abspecHaveRef
+        ? `A/B Compare · reference locked · current (green) vs A (orange) · diff (white, ±20 dB)`
+        : `A/B Compare · tap A to lock current spectrum as reference`;
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Wavelet Scalogram (Morlet CWT)
+  // ────────────────────────────────────────────────────────────────
+  private toggleWavelet() {
+    this.waveletOn = !this.waveletOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnWavelet');
+    const panel = this.$('waveletPanel');
+    btn.classList.toggle('active', this.waveletOn);
+    panel.style.display = this.waveletOn ? '' : 'none';
+    if (this.waveletOn) {
+      this.waveletBuf.fill(0); this.waveletBufWrite = 0; this.waveletBufFill = 0;
+      if (this.waveletImage) this.waveletImage.fill(0);
+      this.waveletCol = 0;
+      this.player.onWavelet = (s) => this.feedWavelet(s);
+      this.waveletRafTick = 0;
+      const tick = () => {
+        if (!this.waveletOn) { this.waveletRaf = null; return; }
+        if ((this.waveletRafTick++ % Shell.WAVELET_RENDER_EVERY_N) === 0) this.drawWavelet();
+        this.waveletRaf = requestAnimationFrame(tick);
+      };
+      this.waveletRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onWavelet = null;
+      if (this.waveletRaf != null) { cancelAnimationFrame(this.waveletRaf); this.waveletRaf = null; }
+    }
+  }
+  private feedWavelet(samples: Int16Array) {
+    const buf = this.waveletBuf; const N = buf.length;
+    let w = this.waveletBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+      if (this.waveletBufFill < N) this.waveletBufFill++;
+    }
+    this.waveletBufWrite = w;
+  }
+  private drawWavelet() {
+    if (!this.waveletImage) this.waveletImage = new Float32Array(Shell.WAVELET_SCALES * Shell.WAVELET_COLS);
+    const img = this.waveletImage;
+    const S = Shell.WAVELET_SCALES;
+    const sr = this.player.getInputRate() || 12000;
+    // Log-spaced scales mapping to frequencies 30 Hz … 4 kHz.
+    const fLo = 30, fHi = 4000;
+    const omega0 = 6;
+    // Take the most recent block of samples for one CWT column.
+    const Lwin = 512;
+    const buf = this.waveletBuf;
+    const wIdx = this.waveletBufWrite;
+    const x = new Float32Array(Lwin);
+    for (let i = 0; i < Lwin; i++) x[i] = buf[(wIdx - Lwin + i + buf.length) % buf.length];
+    // Compute CWT column at S log-spaced centre frequencies.
+    const col = new Float32Array(S);
+    for (let s = 0; s < S; s++) {
+      const fc = fLo * Math.pow(fHi / fLo, s / (S - 1));
+      // Morlet scale = ω0 · sr / (2π · fc)
+      const scale = omega0 * sr / (2 * Math.PI * fc);
+      const sigma = scale;
+      // Convolve x with Morlet at scale (truncated to ±3σ).
+      const half = Math.min(Lwin / 2 - 1, Math.ceil(3 * sigma));
+      let cRe = 0, cIm = 0;
+      const norm = 1 / Math.sqrt(scale * Math.sqrt(Math.PI));
+      const centre = Lwin - 1;     // evaluate at most recent sample
+      for (let n = -half; n <= half; n++) {
+        const idx = centre + n;
+        if (idx < 0 || idx >= Lwin) continue;
+        const arg = n / scale;
+        const env = Math.exp(-0.5 * arg * arg) * norm;
+        const phi = omega0 * arg;
+        cRe += x[idx] * env * Math.cos(phi);
+        cIm += x[idx] * env * Math.sin(phi);
+      }
+      const mag2 = cRe * cRe + cIm * cIm;
+      col[s] = mag2 > 1e-30 ? 10 * Math.log10(mag2) : -120;
+    }
+    // Push column into ring.
+    const colIdx = this.waveletCol;
+    for (let s = 0; s < S; s++) img[s * Shell.WAVELET_COLS + colIdx] = col[s];
+    this.waveletCol = (this.waveletCol + 1) % Shell.WAVELET_COLS;
+    // Render.
+    const canvas = this.$('waveletCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    if (!this.waveletOffCanvas || this.waveletOffCanvas.width !== Shell.WAVELET_COLS) {
+      this.waveletOffCanvas = document.createElement('canvas');
+      this.waveletOffCanvas.width = Shell.WAVELET_COLS;
+      this.waveletOffCanvas.height = S;
+    }
+    const off = this.waveletOffCanvas;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.WAVELET_COLS, S);
+    const sorted = Array.from(img).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.1)];
+    const hi = sorted[Math.floor(sorted.length * 0.99)];
+    const range = Math.max(10, hi - lo);
+    for (let y = 0; y < S; y++) {
+      // High-freq scales are at high s; flip so high freq at top.
+      const srcS = S - 1 - y;
+      for (let xx = 0; xx < Shell.WAVELET_COLS; xx++) {
+        const sx = (this.waveletCol + xx) % Shell.WAVELET_COLS;
+        const v = img[srcS * Shell.WAVELET_COLS + sx];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * Shell.WAVELET_COLS + xx) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.6));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.5));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 0.3));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+    this.$('waveletStatus').textContent =
+      `Wavelet Scalogram · Morlet (ω₀=6) · ${S} scales · ${fLo} Hz – ${fHi/1000} kHz`;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // IQ-side viewers
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Constellation Density Heatmap ───────────────────────────────
+  private feedCden(iqBytes: Uint8Array) {
+    if (!this.cdenHeat) this.cdenHeat = new Float32Array(Shell.CDEN_GRID * Shell.CDEN_GRID);
+    const heat = this.cdenHeat;
+    const G = Shell.CDEN_GRID;
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      // Map [-1, 1] → [0, G).
+      const xi = Math.floor((I + 1) * 0.5 * G);
+      const yi = Math.floor((Q + 1) * 0.5 * G);
+      if (xi >= 0 && xi < G && yi >= 0 && yi < G) {
+        const idx = yi * G + xi;
+        heat[idx] += 1;
+        if (heat[idx] > this.cdenMax) this.cdenMax = heat[idx];
+      }
+    }
+    this.cdenSamples += nPairs;
+    // Slow decay to handle drifting signals.
+    if (this.cdenSamples > 200000) {
+      for (let i = 0; i < heat.length; i++) heat[i] *= 0.95;
+      this.cdenMax *= 0.95;
+      this.cdenSamples = 0;
+    }
+  }
+  private renderCden() {
+    const canvas = this.$('cdenCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    if (!this.cdenHeat || this.cdenMax <= 0) {
+      this.$('cdenStatus').textContent = 'Constellation Density · waiting for IQ…';
+      return;
+    }
+    const G = Shell.CDEN_GRID;
+    const off = document.createElement('canvas');
+    off.width = G; off.height = G;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(G, G);
+    const heat = this.cdenHeat;
+    const norm = 1 / Math.log10(this.cdenMax + 1);
+    for (let yi = 0; yi < G; yi++) {
+      for (let xi = 0; xi < G; xi++) {
+        const v = heat[yi * G + xi];
+        const t = v > 0 ? Math.log10(v + 1) * norm : 0;
+        const i = ((G - 1 - yi) * G + xi) * 4;  // flip Y so +Q is up
+        id.data[i]     = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.5));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 0.3));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    const side = Math.min(W, H);
+    const ox = (W - side) / 2, oy = (H - side) / 2;
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = true;
+    ctx.drawImage(off, ox, oy, side, side);
+    // Crosshairs.
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(ox, oy + side / 2); ctx.lineTo(ox + side, oy + side / 2);
+    ctx.moveTo(ox + side / 2, oy); ctx.lineTo(ox + side / 2, oy + side);
+    ctx.stroke();
+    this.$('cdenStatus').textContent =
+      `Constellation Density · peak count ${this.cdenMax | 0} · log-scaled colour`;
+  }
+
+  // ── EVM / MER vs Time ────────────────────────────────────────────
+  /** Simple Costas-loop locking; classify modulation by counting how
+   *  many tight clusters appear in the IQ scatter. */
+  private feedEvm(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const alphaP = 0.001;             // PLL loop gain (proportional)
+    for (let i = 0; i < nPairs; i++) {
+      const I0 = dv.getInt16(i * 4, false) / 32768;
+      const Q0 = dv.getInt16(i * 4 + 2, false) / 32768;
+      // De-rotate by current phase.
+      const c = Math.cos(this.evmPhase), s = Math.sin(this.evmPhase);
+      const I = I0 * c + Q0 * s;
+      const Q = -I0 * s + Q0 * c;
+      // Phase error: for QPSK use sign(I)*Q − sign(Q)*I (Costas).
+      const err = (I >= 0 ? 1 : -1) * Q - (Q >= 0 ? 1 : -1) * I;
+      this.evmFreq += alphaP * err * 0.1;
+      this.evmPhase += this.evmFreq + alphaP * err;
+      // Decimate to ~ 100 evm samples / sec ≈ every 120 IQ samples at 12 kHz.
+      this.evmIdx++;
+      if (this.evmIdx >= 120) {
+        this.evmIdx = 0;
+        // Nearest ideal symbol for the chosen kind.
+        let dist = 0;
+        const r = Math.sqrt(I * I + Q * Q);
+        if (this.evmKind === 'bpsk') {
+          dist = Math.min(Math.hypot(I - 1, Q), Math.hypot(I + 1, Q));
+        } else if (this.evmKind === '8psk') {
+          let best = Infinity;
+          for (let k = 0; k < 8; k++) {
+            const ai = Math.cos(k * Math.PI / 4), aq = Math.sin(k * Math.PI / 4);
+            const d = Math.hypot(I - ai, Q - aq);
+            if (d < best) best = d;
+          }
+          dist = best;
+        } else {
+          // QPSK
+          const ai = (I >= 0 ? 1 : -1) / Math.SQRT2;
+          const aq = (Q >= 0 ? 1 : -1) / Math.SQRT2;
+          dist = Math.hypot(I - ai, Q - aq);
+        }
+        const evmPct = r > 1e-9 ? (dist / r) * 100 : 100;
+        const merDb = evmPct > 0.001 ? -20 * Math.log10(evmPct / 100) : 60;
+        this.evmHist[this.evmHistWrite] = merDb;
+        this.evmHistWrite = (this.evmHistWrite + 1) % Shell.EVM_HIST;
+        if (this.evmHistFilled < Shell.EVM_HIST) this.evmHistFilled++;
+      }
+    }
+  }
+  private renderEvm() {
+    const canvas = this.$('evmCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const ymin = 0, ymax = 40, range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let db = 0; db <= 40; db += 10) {
+      const y = padT + (1 - (db - ymin) / range) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${db}`, 2 * dpr, y + 4 * dpr);
+    }
+    const refs = [{ db: 30, label: 'excellent', col: '#3a5' }, { db: 20, label: 'good', col: '#36a' }, { db: 15, label: 'marginal', col: '#a55' }];
+    for (const r of refs) {
+      const y = padT + (1 - (r.db - ymin) / range) * plotH;
+      ctx.strokeStyle = r.col; ctx.lineWidth = 1 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = r.col;
+      ctx.fillText(r.label, padL + plotW - 60 * dpr, y - 2 * dpr);
+    }
+    const N = this.evmHistFilled;
+    let lastDb = 0;
+    if (N > 1) {
+      ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (this.evmHistWrite - N + i + Shell.EVM_HIST) % Shell.EVM_HIST;
+        const v = this.evmHist[k];
+        lastDb = v;
+        const x = padL + (i / Math.max(1, Shell.EVM_HIST - 1)) * plotW;
+        const yN = 1 - Math.max(0, Math.min(1, (v - ymin) / range));
+        const y = padT + yN * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    this.$('evmStatus').textContent =
+      `EVM / MER · current MER ${lastDb.toFixed(1)} dB (${this.evmKind.toUpperCase()} mode) · 30 s window`;
+  }
+
+  // ── Higher-Order Cumulants Timeline ─────────────────────────────
+  private feedHoc(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      // z = I + jQ
+      // m20 = E[z²], m21 = E[z·z*] = E[|z|²], m40 = E[z⁴], m42 = E[|z|⁴]
+      const z2Re = I * I - Q * Q, z2Im = 2 * I * Q;
+      const absZ2 = I * I + Q * Q;
+      const z4Re = z2Re * z2Re - z2Im * z2Im;
+      const absZ4 = absZ2 * absZ2;
+      this.hocM20 += Math.hypot(z2Re, z2Im);
+      this.hocM21 += absZ2;
+      this.hocM40 += Math.hypot(z4Re, 2 * z2Re * z2Im);
+      this.hocM42 += absZ4;
+      this.hocAccumN++;
+      if (this.hocAccumN >= Shell.HOC_BLOCK) {
+        const C20 = this.hocM20 / this.hocAccumN;
+        const C21 = this.hocM21 / this.hocAccumN;
+        const C40 = this.hocM40 / this.hocAccumN;
+        const C42 = this.hocM42 / this.hocAccumN;
+        const mu42 = C21 > 1e-9 ? C42 / (C21 * C21) : 0;
+        const w = this.hocHistWrite;
+        this.hocHist[w * 5 + 0] = C20;
+        this.hocHist[w * 5 + 1] = C21;
+        this.hocHist[w * 5 + 2] = C40;
+        this.hocHist[w * 5 + 3] = C42;
+        this.hocHist[w * 5 + 4] = mu42;
+        this.hocHistWrite = (w + 1) % Shell.HOC_HIST;
+        if (this.hocHistFilled < Shell.HOC_HIST) this.hocHistFilled++;
+        this.hocAccumN = 0;
+        this.hocM20 = 0; this.hocM21 = 0; this.hocM40 = 0; this.hocM42 = 0;
+      }
+    }
+  }
+  private renderHoc() {
+    const canvas = this.$('hocCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 50 * dpr, padR = 60 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const N = this.hocHistFilled;
+    if (N < 2) {
+      this.$('hocStatus').textContent = 'HOC · waiting for IQ…';
+      return;
+    }
+    const labels = ['|C20|', '|C21|', '|C40|', '|C42|', 'μ42'];
+    const cols = ['#cfffa3', '#fa6', '#5fa', '#fcc', '#fd5'];
+    // mu42 plotted on a separate (right-side) axis.
+    const lefts = [0, 1, 2, 3];  // indices using left axis (linear, auto-ranged)
+    let yLo = Infinity, yHi = -Infinity;
+    for (let i = 0; i < N; i++) {
+      const k = (this.hocHistWrite - N + i + Shell.HOC_HIST) % Shell.HOC_HIST;
+      for (const j of lefts) {
+        const v = this.hocHist[k * 5 + j];
+        if (v < yLo) yLo = v;
+        if (v > yHi) yHi = v;
+      }
+    }
+    if (!isFinite(yLo) || !isFinite(yHi)) { yLo = 0; yHi = 1; }
+    if (yHi - yLo < 1e-6) yHi = yLo + 1;
+    const range = (yHi - yLo) * 1.1;
+    const ymid = (yHi + yLo) / 2;
+    const yMin = ymid - range / 2, yMax = ymid + range / 2;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      const v = yMax - (i / 4) * (yMax - yMin);
+      ctx.fillText(v.toExponential(1), 2 * dpr, y + 4 * dpr);
+    }
+    // Right axis for μ42 [0, 3].
+    for (let i = 0; i <= 3; i++) {
+      const y = padT + (i / 3) * plotH;
+      const v = 3 - i;
+      ctx.fillStyle = '#fd5';
+      ctx.fillText(v.toFixed(0), padL + plotW + 4 * dpr, y + 4 * dpr);
+    }
+    for (let trace = 0; trace < 5; trace++) {
+      ctx.strokeStyle = cols[trace]; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (this.hocHistWrite - N + i + Shell.HOC_HIST) % Shell.HOC_HIST;
+        const v = this.hocHist[k * 5 + trace];
+        const x = padL + (i / Math.max(1, Shell.HOC_HIST - 1)) * plotW;
+        let y: number;
+        if (trace === 4) {
+          // μ42 axis 0..3.
+          y = padT + (1 - Math.max(0, Math.min(1, v / 3))) * plotH;
+        } else {
+          y = padT + (1 - Math.max(0, Math.min(1, (v - yMin) / Math.max(1e-9, yMax - yMin)))) * plotH;
+        }
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // Legend.
+    for (let trace = 0; trace < 5; trace++) {
+      ctx.fillStyle = cols[trace];
+      ctx.fillText(labels[trace], padL + 4 * dpr + trace * 60 * dpr, 14 * dpr);
+    }
+    const w = (this.hocHistWrite - 1 + Shell.HOC_HIST) % Shell.HOC_HIST;
+    const mu = this.hocHist[w * 5 + 4];
+    let cls = 'unknown';
+    if (mu > 1.8) cls = 'noise';
+    else if (mu < 0.7) cls = 'CW/AM';
+    else if (mu < 1.15) cls = 'BPSK/QPSK';
+    else if (mu < 1.45) cls = '16-QAM';
+    else cls = 'FM';
+    this.$('hocStatus').textContent =
+      `HOC · μ42=${mu.toFixed(2)} → class: ${cls} · block ${Shell.HOC_BLOCK} samples`;
+  }
+
+  // ── Phase Noise Spectrum L(f) ────────────────────────────────────
+  private feedPnoise(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const alpha = 0.0005;
+    for (let i = 0; i < nPairs; i++) {
+      const I0 = dv.getInt16(i * 4, false) / 32768;
+      const Q0 = dv.getInt16(i * 4 + 2, false) / 32768;
+      const c = Math.cos(this.pnoisePhase), s = Math.sin(this.pnoisePhase);
+      const I = I0 * c + Q0 * s;
+      const Q = -I0 * s + Q0 * c;
+      const err = Math.atan2(Q, Math.abs(I) + 1e-9);
+      this.pnoiseFreq += alpha * err * 0.05;
+      this.pnoisePhase += this.pnoiseFreq + alpha * err;
+      // Phase error sample for FFT input.
+      this.pnoiseBuf[this.pnoiseBufWrite] = err;
+      this.pnoiseBufWrite = (this.pnoiseBufWrite + 1) % this.pnoiseBuf.length;
+    }
+  }
+  private renderPnoise() {
+    if ((this.pnoiseRafTick++ % Shell.PNOISE_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('pnoiseCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const N = Shell.PNOISE_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const bins = N >> 1;
+    if (!this.pnoiseFftRe || this.pnoiseFftRe.length !== N) {
+      this.pnoiseFftRe = new Float32Array(N); this.pnoiseFftIm = new Float32Array(N);
+    }
+    if (!this.pnoiseAvg || this.pnoiseAvg.length !== bins) {
+      this.pnoiseAvg = new Float32Array(bins); this.pnoiseAvgFrames = 0;
+      this.pnoiseHist.length = 0;
+    }
+    const re = this.pnoiseFftRe; const im = this.pnoiseFftIm!;
+    const buf = this.pnoiseBuf; const wIdx = this.pnoiseBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    let wp = 0;
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      wp += w * w;
+      re[i] = buf[(wIdx + i) % N] * w;
+    }
+    im.fill(0);
+    this.fftInPlace(re, im);
+    const cal = 1 / Math.max(1e-30, wp * sr);   // power normalised per Hz
+    const newPow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) newPow[k] = (re[k] * re[k] + im[k] * im[k]) * cal;
+    if (this.pnoiseHist.length >= Shell.PNOISE_AVG) {
+      const old = this.pnoiseHist.shift()!;
+      for (let k = 0; k < bins; k++) this.pnoiseAvg[k] -= old[k];
+    }
+    for (let k = 0; k < bins; k++) this.pnoiseAvg[k] += newPow[k];
+    this.pnoiseHist.push(newPow);
+    this.pnoiseAvgFrames = this.pnoiseHist.length;
+    const M = this.pnoiseAvgFrames;
+    const padL = 50 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    // Log X (offset 1 Hz .. nyquist). Y in dBc/Hz, fixed −20 .. −180.
+    const fLo = 1, fHi = sr / 2;
+    const yLo = -180, yHi = 0;
+    const range = yHi - yLo;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    // Decades.
+    for (let dec = 0; dec < 4; dec++) {
+      const f = Math.pow(10, dec);
+      if (f > fHi) break;
+      const x = padL + (Math.log10(f / fLo) / Math.log10(fHi / fLo)) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${f >= 1000 ? (f/1000)+'k' : f}Hz`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    for (let db = 0; db >= -180; db -= 30) {
+      const y = padT + (1 - (db - yLo) / range) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${db}`, 2 * dpr, y + 4 * dpr);
+    }
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    let started = false;
+    for (let k = 1; k < bins; k++) {
+      const f = k * binHz;
+      if (f < fLo) continue;
+      const p = this.pnoiseAvg[k] / M;
+      const Lf = p > 1e-30 ? 10 * Math.log10(p) : -200;
+      const x = padL + (Math.log10(f / fLo) / Math.log10(fHi / fLo)) * plotW;
+      const y = padT + (1 - (Lf - yLo) / range) * plotH;
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    this.$('pnoiseStatus').textContent =
+      `Phase Noise L(f) · avg ${M}/${Shell.PNOISE_AVG} frames · range 1 Hz – ${(fHi/1000).toFixed(1)} kHz`;
+  }
+
+  // ── Modified Allan / TDEV ───────────────────────────────────────
+  private feedMtdev(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const sr = this.player.getInputRate() || 12000;
+    const samplesPerTau = Math.floor(sr * Shell.MTDEV_TAU0_MS / 1000);
+    const alpha = 0.001;
+    let f = this.mtdevFreq, ph = this.mtdevPhase;
+    for (let i = 0; i < nPairs; i++) {
+      const I0 = dv.getInt16(i * 4, false) / 32768;
+      const Q0 = dv.getInt16(i * 4 + 2, false) / 32768;
+      const c = Math.cos(ph), s = Math.sin(ph);
+      const I = I0 * c + Q0 * s;
+      const Q = -I0 * s + Q0 * c;
+      const err = Math.atan2(Q, Math.abs(I) + 1e-9);
+      f += alpha * err * 0.05;
+      ph += f + alpha * err;
+      this.mtdevSamplesSinceEmit++;
+      if (this.mtdevSamplesSinceEmit >= samplesPerTau) {
+        this.mtdevSamplesSinceEmit = 0;
+        this.mtdevHist[this.mtdevHistWrite] = f / (2 * Math.PI);
+        this.mtdevHistWrite = (this.mtdevHistWrite + 1) % Shell.MTDEV_HIST;
+        if (this.mtdevHistFilled < Shell.MTDEV_HIST) this.mtdevHistFilled++;
+      }
+    }
+    this.mtdevFreq = f; this.mtdevPhase = ph;
+  }
+  private renderMtdev() {
+    const canvas = this.$('mtdevCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const N = this.mtdevHistFilled;
+    if (N < 8) {
+      this.$('mtdevStatus').textContent = 'MDEV / HDEV / TDEV · gathering frequency series…';
+      return;
+    }
+    // Build linear array of frequency samples (newest last).
+    const y = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const k = (this.mtdevHistWrite - N + i + Shell.MTDEV_HIST) % Shell.MTDEV_HIST;
+      y[i] = this.mtdevHist[k];
+    }
+    const tau0 = Shell.MTDEV_TAU0_MS / 1000;
+    // Compute MDEV, HDEV, TDEV, ADEV at logspaced m.
+    const ms = [1, 2, 5, 10, 20, 50, 100, 200, 500];
+    const points: Array<{ tau: number; mdev: number; hdev: number; tdev: number; adev: number }> = [];
+    for (const m of ms) {
+      const tau = m * tau0;
+      if (3 * m >= N) break;
+      // ADEV (overlapping).
+      let aSum = 0; let aN = 0;
+      const avg = (start: number, len: number) => {
+        let s = 0; for (let i = 0; i < len; i++) s += y[start + i]; return s / len;
+      };
+      for (let i = 0; i + 2 * m <= N; i++) {
+        const A = avg(i, m);
+        const B = avg(i + m, m);
+        aSum += (B - A) * (B - A); aN++;
+      }
+      const adev = aN > 0 ? Math.sqrt(aSum / (2 * aN)) : 0;
+      // MDEV (modified Allan).
+      let mSum = 0, mN = 0;
+      for (let i = 0; i + 3 * m <= N; i++) {
+        let acc = 0;
+        for (let j = 0; j < m; j++) {
+          const A = avg(i + j, m);
+          const B = avg(i + j + m, m);
+          acc += (B - A);
+        }
+        mSum += (acc / m) * (acc / m);
+        mN++;
+      }
+      const mdev = mN > 0 ? Math.sqrt(mSum / (2 * mN)) : 0;
+      // HDEV (Hadamard).
+      let hSum = 0, hN = 0;
+      for (let i = 0; i + 3 * m <= N; i++) {
+        const A = avg(i, m), B = avg(i + m, m), C = avg(i + 2 * m, m);
+        const d = C - 2 * B + A;
+        hSum += d * d; hN++;
+      }
+      const hdev = hN > 0 ? Math.sqrt(hSum / (6 * hN)) : 0;
+      // TDEV = (τ / √3) · MDEV.
+      const tdev = (tau / Math.sqrt(3)) * mdev;
+      points.push({ tau, mdev, hdev, tdev, adev });
+    }
+    // Plot log-log.
+    const padL = 50 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    if (points.length === 0) return;
+    let xLoLog = Math.log10(points[0].tau);
+    let xHiLog = Math.log10(points[points.length - 1].tau);
+    if (xHiLog - xLoLog < 1) xHiLog = xLoLog + 1;
+    let allMin = Infinity, allMax = -Infinity;
+    for (const p of points) {
+      for (const v of [p.mdev, p.hdev, p.tdev, p.adev]) {
+        if (v > 1e-30) {
+          const l = Math.log10(v);
+          if (l < allMin) allMin = l;
+          if (l > allMax) allMax = l;
+        }
+      }
+    }
+    if (!isFinite(allMin)) { allMin = -10; allMax = 0; }
+    if (allMax - allMin < 2) allMax = allMin + 2;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let dec = Math.ceil(xLoLog); dec <= Math.floor(xHiLog); dec++) {
+      const x = padL + ((dec - xLoLog) / (xHiLog - xLoLog)) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      const v = Math.pow(10, dec);
+      ctx.fillText(`${v}s`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    for (let dec = Math.ceil(allMin); dec <= Math.floor(allMax); dec++) {
+      const y2 = padT + (1 - (dec - allMin) / (allMax - allMin)) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y2); ctx.lineTo(padL + plotW, y2); ctx.stroke();
+      ctx.fillText(`1e${dec}`, 2 * dpr, y2 + 4 * dpr);
+    }
+    const traces: Array<{ key: 'adev'|'mdev'|'hdev'|'tdev'; col: string; lbl: string }> = [
+      { key: 'adev', col: '#557', lbl: 'ADEV' },
+      { key: 'mdev', col: '#cfffa3', lbl: 'MDEV' },
+      { key: 'hdev', col: '#fa6', lbl: 'HDEV' },
+      { key: 'tdev', col: '#5af', lbl: 'TDEV' },
+    ];
+    for (let t = 0; t < traces.length; t++) {
+      ctx.strokeStyle = traces[t].col;
+      ctx.fillStyle  = traces[t].col;
+      ctx.lineWidth = 1.3 * dpr;
+      ctx.beginPath();
+      let started = false;
+      for (const p of points) {
+        const v = p[traces[t].key];
+        if (v <= 1e-30) continue;
+        const x = padL + ((Math.log10(p.tau) - xLoLog) / (xHiLog - xLoLog)) * plotW;
+        const y2 = padT + (1 - (Math.log10(v) - allMin) / (allMax - allMin)) * plotH;
+        if (!started) { ctx.moveTo(x, y2); started = true; } else ctx.lineTo(x, y2);
+        ctx.fillRect(x - 2 * dpr, y2 - 2 * dpr, 4 * dpr, 4 * dpr);
+      }
+      ctx.stroke();
+      ctx.fillText(traces[t].lbl, padL + 4 * dpr + t * 50 * dpr, 14 * dpr);
+    }
+    this.$('mtdevStatus').textContent =
+      `MDEV / HDEV / TDEV / ADEV · τ₀=${Shell.MTDEV_TAU0_MS} ms · N=${N} samples`;
+  }
+
+  // ── GPSDO Lock / Holdover ───────────────────────────────────────
+  private feedGpsdo(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const sr = this.player.getInputRate() || 12000;
+    const samplesPerEmit = Math.floor(sr * 1);     // 1 Hz emit rate
+    const alpha = 0.0005;
+    let f = this.gpsdoFreq, ph = this.gpsdoPhase, cum = this.gpsdoCumPhase;
+    for (let i = 0; i < nPairs; i++) {
+      const I0 = dv.getInt16(i * 4, false) / 32768;
+      const Q0 = dv.getInt16(i * 4 + 2, false) / 32768;
+      const c = Math.cos(ph), s = Math.sin(ph);
+      const I = I0 * c + Q0 * s;
+      const Q = -I0 * s + Q0 * c;
+      const err = Math.atan2(Q, Math.abs(I) + 1e-9);
+      f += alpha * err * 0.05;
+      ph += f + alpha * err;
+      cum += f;
+      this.gpsdoSamplesSinceEmit++;
+      if (this.gpsdoSamplesSinceEmit >= samplesPerEmit) {
+        this.gpsdoSamplesSinceEmit = 0;
+        this.gpsdoHist[this.gpsdoHistWrite] = cum;
+        this.gpsdoHistWrite = (this.gpsdoHistWrite + 1) % Shell.GPSDO_HIST;
+        if (this.gpsdoHistFilled < Shell.GPSDO_HIST) this.gpsdoHistFilled++;
+      }
+    }
+    this.gpsdoFreq = f; this.gpsdoPhase = ph; this.gpsdoCumPhase = cum;
+  }
+  private renderGpsdo() {
+    const canvas = this.$('gpsdoCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const N = this.gpsdoHistFilled;
+    if (N < 2) {
+      this.$('gpsdoStatus').textContent = 'GPSDO Lock · gathering phase samples…';
+      return;
+    }
+    const ys: number[] = [];
+    for (let i = 0; i < N; i++) {
+      const k = (this.gpsdoHistWrite - N + i + Shell.GPSDO_HIST) % Shell.GPSDO_HIST;
+      ys.push(this.gpsdoHist[k]);
+    }
+    let yLo = Infinity, yHi = -Infinity;
+    for (const v of ys) { if (v < yLo) yLo = v; if (v > yHi) yHi = v; }
+    const range = Math.max(0.01, yHi - yLo);
+    const padL = 50 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      const v = yHi - (i / 4) * range;
+      ctx.fillText(v.toFixed(1), 2 * dpr, y + 4 * dpr);
+    }
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = padL + (i / Math.max(1, N - 1)) * plotW;
+      const y = padT + (1 - (ys[i] - yLo) / range) * plotH;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Linear-fit slope (drift rate).
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let i = 0; i < N; i++) { sx += i; sy += ys[i]; sxx += i * i; sxy += i * ys[i]; }
+    const denom = (N * sxx - sx * sx) || 1;
+    const slope = (N * sxy - sx * sy) / denom;      // rad / sec
+    // Convert to ppm: slope rad/sec ÷ (2π · centre carrier). We don't
+    // know the centre carrier from the IQ, so report Hz directly.
+    const slopeHz = slope / (2 * Math.PI);
+    const elapsedSec = (Date.now() - this.gpsdoStartTs) / 1000;
+    // Count jumps (sample-to-sample diff > 10× std).
+    let std = 0;
+    for (let i = 1; i < N; i++) std += Math.abs(ys[i] - ys[i - 1]);
+    std /= Math.max(1, N - 1);
+    let jumps = 0;
+    for (let i = 1; i < N; i++) if (Math.abs(ys[i] - ys[i - 1]) > 10 * std) jumps++;
+    this.$('gpsdoStatus').textContent =
+      `GPSDO · drift ${slopeHz.toExponential(2)} Hz/s · elapsed ${elapsedSec.toFixed(0)} s · jumps ${jumps} · σ_step ${std.toExponential(2)} rad`;
+  }
+
+  // ── Range-Doppler Map ───────────────────────────────────────────
+  private feedRdop(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    // Build reference from first RDOP_REFLEN samples.
+    if (!this.rdopHaveRef) {
+      for (let i = 0; i < nPairs && this.rdopRefW < Shell.RDOP_REFLEN; i++) {
+        this.rdopRefI[this.rdopRefW] = dv.getInt16(i * 4, false) / 32768;
+        this.rdopRefQ[this.rdopRefW] = dv.getInt16(i * 4 + 2, false) / 32768;
+        this.rdopRefW++;
+      }
+      if (this.rdopRefW >= Shell.RDOP_REFLEN) this.rdopHaveRef = true;
+      return;
+    }
+    // Once we have a reference, accumulate test samples into the map.
+    if (!this.rdopMap) this.rdopMap = new Float32Array(Shell.RDOP_RANGES * Shell.RDOP_DOPS);
+    const refI = this.rdopRefI, refQ = this.rdopRefQ;
+    const Lref = Shell.RDOP_REFLEN;
+    const map = this.rdopMap;
+    // Use the most recent IQ block as test data.
+    const testLen = Math.min(nPairs, Lref);
+    const testI = new Float32Array(testLen);
+    const testQ = new Float32Array(testLen);
+    for (let i = 0; i < testLen; i++) {
+      testI[i] = dv.getInt16(i * 4, false) / 32768;
+      testQ[i] = dv.getInt16(i * 4 + 2, false) / 32768;
+    }
+    // For each Doppler bin, mix reference by e^{j 2π fD n / sr} and
+    // correlate with test signal across delays.
+    const sr = this.player.getInputRate() || 12000;
+    const maxDopHz = 200;
+    for (let d = 0; d < Shell.RDOP_DOPS; d++) {
+      const fD = -maxDopHz + (2 * maxDopHz * d / (Shell.RDOP_DOPS - 1));
+      const dphi = 2 * Math.PI * fD / sr;
+      // For each delay bin, cross-correlate (limited length).
+      const corrLen = Math.min(testLen, Lref) - Shell.RDOP_RANGES;
+      if (corrLen <= 0) continue;
+      for (let r = 0; r < Shell.RDOP_RANGES; r++) {
+        let accRe = 0, accIm = 0;
+        let phi = 0;
+        for (let n = 0; n < corrLen; n++) {
+          const ri = refI[n], rq = refQ[n];
+          const ti = testI[n + r], tq = testQ[n + r];
+          // Mixed reference: ref · e^{jphi}.
+          const c = Math.cos(phi), s = Math.sin(phi);
+          const mri = ri * c - rq * s, mrq = ri * s + rq * c;
+          // Correlate: test · conj(mixed_ref)
+          accRe += ti * mri + tq * mrq;
+          accIm += tq * mri - ti * mrq;
+          phi += dphi;
+        }
+        const mag2 = accRe * accRe + accIm * accIm;
+        // Exponential moving accumulator.
+        map[d * Shell.RDOP_RANGES + r] = 0.9 * map[d * Shell.RDOP_RANGES + r] + 0.1 * mag2;
+      }
+    }
+  }
+  private renderRdop() {
+    if ((this.rdopRafTick++ % Shell.RDOP_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('rdopCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    if (!this.rdopMap || !this.rdopHaveRef) {
+      this.$('rdopStatus').textContent = 'Range-Doppler · capturing reference…';
+      return;
+    }
+    const off = document.createElement('canvas');
+    off.width = Shell.RDOP_RANGES; off.height = Shell.RDOP_DOPS;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.RDOP_RANGES, Shell.RDOP_DOPS);
+    const map = this.rdopMap;
+    let mMax = 0;
+    for (let i = 0; i < map.length; i++) if (map[i] > mMax) mMax = map[i];
+    const norm = mMax > 0 ? 1 / Math.log10(mMax + 1) : 0;
+    for (let y = 0; y < Shell.RDOP_DOPS; y++) {
+      for (let x = 0; x < Shell.RDOP_RANGES; x++) {
+        const v = map[y * Shell.RDOP_RANGES + x];
+        const t = v > 0 ? Math.log10(v + 1) * norm : 0;
+        const i = (y * Shell.RDOP_RANGES + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.5));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 0.3));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('rdopStatus').textContent =
+      `Range-Doppler · ranges 0–${(Shell.RDOP_RANGES * 1000 / (this.player.getInputRate() || 12000)).toFixed(1)} ms · ±200 Hz Doppler`;
+  }
+
+  // ── Spectral Coherence ──────────────────────────────────────────
+  private feedCoh(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const Ncoh = Shell.COH_FFT;
+    let w = this.cohBufWrite;
+    let dst = this.cohHaveA ? this.cohBufB : this.cohBufA;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      dst[w * 2] = I; dst[w * 2 + 1] = Q;
+      w++;
+      if (w >= Ncoh) {
+        w = 0;
+        if (!this.cohHaveA) { this.cohHaveA = true; dst = this.cohBufB; }
+        else { this.cohHaveA = false; dst = this.cohBufA; } // swap roles: A becomes old, B becomes A
+      }
+    }
+    this.cohBufWrite = w;
+    if (this.cohFill < Ncoh) this.cohFill = Math.min(Ncoh, this.cohFill + nPairs);
+  }
+  private renderCoh() {
+    if ((this.cohRafTick++ % Shell.COH_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('cohCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+      canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const N = Shell.COH_FFT;
+    if (!this.cohHaveA) {
+      this.$('cohStatus').textContent = 'Coherence · waiting for first window…';
+      return;
+    }
+    // Two FFTs: bufA, bufB.
+    const fft = (src: Float32Array): { re: Float32Array; im: Float32Array } => {
+      const re = new Float32Array(N), im = new Float32Array(N);
+      const twoPi = 2 * Math.PI / (N - 1);
+      for (let i = 0; i < N; i++) {
+        const w = 0.5 * (1 - Math.cos(twoPi * i));
+        re[i] = src[i * 2] * w;
+        im[i] = src[i * 2 + 1] * w;
+      }
+      this.fftInPlace(re, im);
+      return { re, im };
+    };
+    const A = fft(this.cohBufA);
+    const B = fft(this.cohBufB);
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    // Magnitude-squared coherence: |Sab|² / (Saa · Sbb)
+    const gamma2 = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) {
+      const aR = A.re[k], aI = A.im[k];
+      const bR = B.re[k], bI = B.im[k];
+      const sabR = aR * bR + aI * bI;
+      const sabI = aI * bR - aR * bI;
+      const sab2 = sabR * sabR + sabI * sabI;
+      const saa = aR * aR + aI * aI;
+      const sbb = bR * bR + bI * bI;
+      gamma2[k] = (saa > 1e-30 && sbb > 1e-30) ? sab2 / (saa * sbb) : 0;
+    }
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText((1 - i / 4).toFixed(2), 2 * dpr, y + 4 * dpr);
+    }
+    // 0.5 threshold line.
+    const yT = padT + 0.5 * plotH;
+    ctx.strokeStyle = '#a55'; ctx.lineWidth = 1 * dpr;
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.beginPath(); ctx.moveTo(padL, yT); ctx.lineTo(padL + plotW, yT); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = padL + ((k * binHz) / MAX_HZ) * plotW;
+      const y = padT + (1 - gamma2[k]) * plotH;
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    let avg = 0; for (let k = 0; k < bins; k++) avg += gamma2[k]; avg /= bins;
+    this.$('cohStatus').textContent =
+      `Coherence γ² · N=${N} · mean ${avg.toFixed(2)} · threshold @ 0.5`;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // Audio-side viewer batch-3 implementations
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Hilbert-Huang (EMD + IF on first 3 IMFs) ─────────────────────
+  private toggleHht() {
+    this.hhtOn = !this.hhtOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnHht'); const panel = this.$('hhtPanel');
+    btn.classList.toggle('active', this.hhtOn);
+    panel.style.display = this.hhtOn ? '' : 'none';
+    if (this.hhtOn) {
+      this.hhtBuf.fill(0); this.hhtBufWrite = 0; this.hhtBufFill = 0;
+      this.hhtImf1Hist.fill(0); this.hhtImf2Hist.fill(0); this.hhtImf3Hist.fill(0);
+      this.hhtHistWrite = 0; this.hhtHistFilled = 0;
+      this.player.onHht = (s) => this.feedHht(s);
+      this.hhtRafTick = 0;
+      const tick = () => {
+        if (!this.hhtOn) { this.hhtRaf = null; return; }
+        if ((this.hhtRafTick++ % Shell.HHT_RENDER_EVERY_N) === 0) this.drawHht();
+        this.hhtRaf = requestAnimationFrame(tick);
+      };
+      this.hhtRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onHht = null;
+      if (this.hhtRaf != null) { cancelAnimationFrame(this.hhtRaf); this.hhtRaf = null; }
+    }
+  }
+  private feedHht(samples: Int16Array) {
+    const buf = this.hhtBuf; const N = buf.length;
+    let w = this.hhtBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+      if (this.hhtBufFill < N) this.hhtBufFill++;
+    }
+    this.hhtBufWrite = w;
+  }
+  /** One-pass sift: smooth with 3-point local mean of extrema. Simple
+   *  educational implementation rather than full sifting. */
+  private hhtSift(x: Float32Array): Float32Array {
+    const N = x.length;
+    // Find local maxima + minima.
+    const maxIdx: number[] = []; const minIdx: number[] = [];
+    for (let i = 1; i < N - 1; i++) {
+      if (x[i] > x[i - 1] && x[i] >= x[i + 1]) maxIdx.push(i);
+      if (x[i] < x[i - 1] && x[i] <= x[i + 1]) minIdx.push(i);
+    }
+    if (maxIdx.length < 2 || minIdx.length < 2) return new Float32Array(x);
+    // Linear-interp envelopes.
+    const envUp = new Float32Array(N), envDn = new Float32Array(N);
+    const lerp = (arr: number[], yvals: Float32Array, out: Float32Array) => {
+      for (let i = 0; i < N; i++) {
+        if (i <= arr[0]) { out[i] = yvals[arr[0]]; continue; }
+        if (i >= arr[arr.length - 1]) { out[i] = yvals[arr[arr.length - 1]]; continue; }
+        let j = 0;
+        while (j < arr.length - 1 && arr[j + 1] < i) j++;
+        const a = arr[j], b = arr[j + 1];
+        const t = (i - a) / (b - a);
+        out[i] = yvals[a] * (1 - t) + yvals[b] * t;
+      }
+    };
+    lerp(maxIdx, x, envUp);
+    lerp(minIdx, x, envDn);
+    const imf = new Float32Array(N);
+    for (let i = 0; i < N; i++) imf[i] = x[i] - 0.5 * (envUp[i] + envDn[i]);
+    return imf;
+  }
+  /** Median IF estimate via zero-crossing rate (much cheaper than the
+   *  proper Hilbert transform IF, and good enough for a strip chart). */
+  private hhtMedianIfHz(imf: Float32Array, sr: number): number {
+    let zc = 0;
+    for (let i = 1; i < imf.length; i++) {
+      if ((imf[i - 1] >= 0 && imf[i] < 0) || (imf[i - 1] < 0 && imf[i] >= 0)) zc++;
+    }
+    return (zc * sr) / (2 * imf.length);
+  }
+  private drawHht() {
+    const canvas = this.$('hhtCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    if (this.hhtBufFill < this.hhtBuf.length / 2) {
+      this.$('hhtStatus').textContent = 'HHT · gathering audio…'; return;
+    }
+    const sr = this.player.getInputRate() || 12000;
+    const buf = this.hhtBuf; const N = buf.length;
+    const x = new Float32Array(N);
+    const wIdx = this.hhtBufWrite;
+    for (let i = 0; i < N; i++) x[i] = buf[(wIdx + i) % N];
+    // 3 EMD passes → IMF1, IMF2, IMF3 (cascaded residual).
+    const imf1 = this.hhtSift(x);
+    const resid1 = new Float32Array(N); for (let i = 0; i < N; i++) resid1[i] = x[i] - imf1[i];
+    const imf2 = this.hhtSift(resid1);
+    const resid2 = new Float32Array(N); for (let i = 0; i < N; i++) resid2[i] = resid1[i] - imf2[i];
+    const imf3 = this.hhtSift(resid2);
+    const f1 = this.hhtMedianIfHz(imf1, sr);
+    const f2 = this.hhtMedianIfHz(imf2, sr);
+    const f3 = this.hhtMedianIfHz(imf3, sr);
+    const w2 = this.hhtHistWrite;
+    this.hhtImf1Hist[w2] = f1; this.hhtImf2Hist[w2] = f2; this.hhtImf3Hist[w2] = f3;
+    this.hhtHistWrite = (w2 + 1) % Shell.HHT_HIST;
+    if (this.hhtHistFilled < Shell.HHT_HIST) this.hhtHistFilled++;
+    const padL = 50 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const ymin = 0, ymax = 4000, range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= 4000; f += 1000) {
+      const y = padT + (1 - (f - ymin) / range) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${(f / 1000).toFixed(0)}k`, 2 * dpr, y + 4 * dpr);
+    }
+    const traces: Array<{ hist: Float32Array; col: string; lbl: string }> = [
+      { hist: this.hhtImf1Hist, col: '#cfffa3', lbl: 'IMF1' },
+      { hist: this.hhtImf2Hist, col: '#fa6',    lbl: 'IMF2' },
+      { hist: this.hhtImf3Hist, col: '#5af',    lbl: 'IMF3' },
+    ];
+    for (let t = 0; t < traces.length; t++) {
+      ctx.strokeStyle = traces[t].col; ctx.fillStyle = traces[t].col; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      const nFilled = this.hhtHistFilled;
+      for (let i = 0; i < nFilled; i++) {
+        const k = (this.hhtHistWrite - nFilled + i + Shell.HHT_HIST) % Shell.HHT_HIST;
+        const v = traces[t].hist[k];
+        const xx = padL + (i / Math.max(1, Shell.HHT_HIST - 1)) * plotW;
+        const yy = padT + (1 - Math.max(0, Math.min(1, (v - ymin) / range))) * plotH;
+        if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+      }
+      ctx.stroke();
+      ctx.fillText(traces[t].lbl, padL + 4 * dpr + t * 60 * dpr, 14 * dpr);
+    }
+    this.$('hhtStatus').textContent =
+      `HHT · IMF1 ${f1.toFixed(0)} Hz · IMF2 ${f2.toFixed(0)} Hz · IMF3 ${f3.toFixed(0)} Hz`;
+  }
+
+  // ── Mel Spectrogram ──────────────────────────────────────────────
+  private toggleMel() {
+    this.melOn = !this.melOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnMel'); const panel = this.$('melPanel');
+    btn.classList.toggle('active', this.melOn);
+    panel.style.display = this.melOn ? '' : 'none';
+    if (this.melOn) {
+      this.melBuf.fill(0); this.melBufWrite = 0;
+      this.melFilterBank = null; this.melImage = null; this.melCol = 0;
+      this.player.onMel = (s) => this.feedMel(s);
+      this.melRafTick = 0;
+      const tick = () => {
+        if (!this.melOn) { this.melRaf = null; return; }
+        if ((this.melRafTick++ % Shell.MEL_RENDER_EVERY_N) === 0) this.drawMel();
+        this.melRaf = requestAnimationFrame(tick);
+      };
+      this.melRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onMel = null;
+      if (this.melRaf != null) { cancelAnimationFrame(this.melRaf); this.melRaf = null; }
+    }
+  }
+  private feedMel(samples: Int16Array) {
+    const buf = this.melBuf; const N = buf.length;
+    let w = this.melBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+    }
+    this.melBufWrite = w;
+  }
+  /** Build Mel filter bank covering [fLo, fHi] with B triangular
+   *  filters log-spaced on the Mel scale. */
+  private buildMelFilterBank(B: number, fLo: number, fHi: number, sr: number, N: number): Float32Array[] {
+    const mel = (f: number) => 2595 * Math.log10(1 + f / 700);
+    const invMel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
+    const mLo = mel(fLo), mHi = mel(fHi);
+    const centres: number[] = [];
+    for (let i = 0; i <= B + 1; i++) centres.push(invMel(mLo + (mHi - mLo) * i / (B + 1)));
+    const bins = N / 2;
+    const bank: Float32Array[] = [];
+    const binHz = sr / N;
+    for (let b = 1; b <= B; b++) {
+      const fL = centres[b - 1], fC = centres[b], fH = centres[b + 1];
+      const f = new Float32Array(bins);
+      for (let k = 0; k < bins; k++) {
+        const fk = k * binHz;
+        if (fk >= fL && fk <= fC) f[k] = (fk - fL) / Math.max(1e-9, fC - fL);
+        else if (fk > fC && fk <= fH) f[k] = (fH - fk) / Math.max(1e-9, fH - fC);
+      }
+      bank.push(f);
+    }
+    return bank;
+  }
+  private drawMel() {
+    const canvas = this.$('melCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.MEL_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    if (!this.melFftRe || this.melFftRe.length !== N) { this.melFftRe = new Float32Array(N); this.melFftIm = new Float32Array(N); }
+    if (!this.melFilterBank) this.melFilterBank = this.buildMelFilterBank(Shell.MEL_BANDS, 100, 6000, sr, N);
+    if (!this.melImage) this.melImage = new Float32Array(Shell.MEL_BANDS * Shell.MEL_COLS);
+    const re = this.melFftRe; const im = this.melFftIm!;
+    const buf = this.melBuf; const wIdx = this.melBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = buf[(wIdx + i) % N] * w; im[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    const bins = N / 2;
+    const pow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) pow[k] = re[k] * re[k] + im[k] * im[k];
+    const col = new Float32Array(Shell.MEL_BANDS);
+    for (let b = 0; b < Shell.MEL_BANDS; b++) {
+      let acc = 0; const f = this.melFilterBank![b];
+      for (let k = 0; k < bins; k++) acc += pow[k] * f[k];
+      col[b] = acc > 1e-30 ? 10 * Math.log10(acc) : -120;
+    }
+    const c = this.melCol;
+    for (let b = 0; b < Shell.MEL_BANDS; b++) this.melImage[b * Shell.MEL_COLS + c] = col[b];
+    this.melCol = (c + 1) % Shell.MEL_COLS;
+    if (!this.melOffCanvas) {
+      this.melOffCanvas = document.createElement('canvas');
+      this.melOffCanvas.width = Shell.MEL_COLS; this.melOffCanvas.height = Shell.MEL_BANDS;
+    }
+    const off = this.melOffCanvas; const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.MEL_COLS, Shell.MEL_BANDS);
+    const sorted = Array.from(this.melImage).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.1)];
+    const hi = sorted[Math.floor(sorted.length * 0.99)];
+    const range = Math.max(10, hi - lo);
+    for (let y = 0; y < Shell.MEL_BANDS; y++) {
+      const srcY = Shell.MEL_BANDS - 1 - y;
+      for (let x = 0; x < Shell.MEL_COLS; x++) {
+        const sx = (this.melCol + x) % Shell.MEL_COLS;
+        const v = this.melImage[srcY * Shell.MEL_COLS + sx];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * Shell.MEL_COLS + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.3));
+        id.data[i + 2] = Math.floor(255 * Math.pow(1 - t, 1.5));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('melStatus').textContent =
+      `Mel · ${Shell.MEL_BANDS} bands · 100 Hz – 6 kHz · ${Shell.MEL_COLS} cols`;
+  }
+
+  // ── Chromagram ──────────────────────────────────────────────────
+  private toggleChro() {
+    this.chroOn = !this.chroOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnChro'); const panel = this.$('chroPanel');
+    btn.classList.toggle('active', this.chroOn);
+    panel.style.display = this.chroOn ? '' : 'none';
+    if (this.chroOn) {
+      this.chroBuf.fill(0); this.chroBufWrite = 0;
+      if (this.chroImage) this.chroImage.fill(0);
+      this.chroCol = 0;
+      this.player.onChro = (s) => this.feedChro(s);
+      this.chroRafTick = 0;
+      const tick = () => {
+        if (!this.chroOn) { this.chroRaf = null; return; }
+        if ((this.chroRafTick++ % Shell.CHRO_RENDER_EVERY_N) === 0) this.drawChro();
+        this.chroRaf = requestAnimationFrame(tick);
+      };
+      this.chroRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onChro = null;
+      if (this.chroRaf != null) { cancelAnimationFrame(this.chroRaf); this.chroRaf = null; }
+    }
+  }
+  private feedChro(samples: Int16Array) {
+    const buf = this.chroBuf; const N = buf.length;
+    let w = this.chroBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+    }
+    this.chroBufWrite = w;
+  }
+  private drawChro() {
+    const canvas = this.$('chroCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.CHRO_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    if (!this.chroFftRe || this.chroFftRe.length !== N) { this.chroFftRe = new Float32Array(N); this.chroFftIm = new Float32Array(N); }
+    if (!this.chroImage) this.chroImage = new Float32Array(12 * Shell.CHRO_COLS);
+    const re = this.chroFftRe; const im = this.chroFftIm!;
+    const buf = this.chroBuf; const wIdx = this.chroBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = buf[(wIdx + i) % N] * w; im[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    const bins = N / 2;
+    const col = new Float32Array(12);
+    const binHz = sr / N;
+    for (let k = 1; k < bins; k++) {
+      const f = k * binHz;
+      if (f < 50 || f > 5000) continue;
+      // Map to pitch class via semitone position relative to A4=440.
+      const semi = 12 * Math.log2(f / 440);
+      const pc = ((Math.round(semi) % 12) + 12) % 12;
+      const mag = re[k] * re[k] + im[k] * im[k];
+      col[pc] += mag;
+    }
+    // Normalise.
+    let sum = 0; for (let i = 0; i < 12; i++) sum += col[i];
+    if (sum > 1e-9) for (let i = 0; i < 12; i++) col[i] /= sum;
+    const c = this.chroCol;
+    for (let i = 0; i < 12; i++) this.chroImage[i * Shell.CHRO_COLS + c] = col[i];
+    this.chroCol = (c + 1) % Shell.CHRO_COLS;
+    if (!this.chroOffCanvas) {
+      this.chroOffCanvas = document.createElement('canvas');
+      this.chroOffCanvas.width = Shell.CHRO_COLS; this.chroOffCanvas.height = 12;
+    }
+    const off = this.chroOffCanvas; const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.CHRO_COLS, 12);
+    for (let y = 0; y < 12; y++) {
+      const srcY = 11 - y;
+      for (let x = 0; x < Shell.CHRO_COLS; x++) {
+        const sx = (this.chroCol + x) % Shell.CHRO_COLS;
+        const v = this.chroImage[srcY * Shell.CHRO_COLS + sx];
+        const t = Math.max(0, Math.min(1, v * 8));
+        const i = (y * Shell.CHRO_COLS + x) * 4;
+        id.data[i] = Math.floor(255 * t);
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.2));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 0.5));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const labelW = 24 * dpr;
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, labelW, 0, W - labelW, H);
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#cfc';
+    for (let y = 0; y < 12; y++) {
+      const yy = H * (y + 0.5) / 12;
+      ctx.fillText(names[11 - y], 2 * dpr, yy + 4 * dpr);
+    }
+    let best = -1; let bestVal = -1;
+    for (let i = 0; i < 12; i++) if (col[i] > bestVal) { bestVal = col[i]; best = i; }
+    this.$('chroStatus').textContent =
+      `Chromagram · 12 pitch classes · dominant: ${best >= 0 ? names[best] : '—'}`;
+  }
+
+  // ── Modulation Spectrum ─────────────────────────────────────────
+  private toggleMspec() {
+    this.mspecOn = !this.mspecOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnMspec'); const panel = this.$('mspecPanel');
+    btn.classList.toggle('active', this.mspecOn);
+    panel.style.display = this.mspecOn ? '' : 'none';
+    if (this.mspecOn) {
+      this.mspecBuf.fill(0); this.mspecBufWrite = 0; this.mspecSampleSinceHop = 0;
+      this.mspecBinHistW = 0; this.mspecBinHistFilled = 0;
+      if (this.mspecBinHist) this.mspecBinHist.fill(0);
+      this.player.onMspec = (s) => this.feedMspec(s);
+      this.mspecRafTick = 0;
+      const tick = () => {
+        if (!this.mspecOn) { this.mspecRaf = null; return; }
+        if ((this.mspecRafTick++ % Shell.MSPEC_RENDER_EVERY_N) === 0) this.drawMspec();
+        this.mspecRaf = requestAnimationFrame(tick);
+      };
+      this.mspecRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onMspec = null;
+      if (this.mspecRaf != null) { cancelAnimationFrame(this.mspecRaf); this.mspecRaf = null; }
+    }
+  }
+  private feedMspec(samples: Int16Array) {
+    const buf = this.mspecBuf; const N = buf.length;
+    const innerBins = N / 2;
+    if (!this.mspecBinHist) this.mspecBinHist = new Float32Array(innerBins * Shell.MSPEC_HISTORY);
+    let w = this.mspecBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768;
+      w = (w + 1) % N;
+      this.mspecSampleSinceHop++;
+      if (this.mspecSampleSinceHop >= Shell.MSPEC_INNER_HOP) {
+        this.mspecSampleSinceHop = 0;
+        // FFT of latest N samples → bin-power → push column.
+        const re = new Float32Array(N), im = new Float32Array(N);
+        const twoPi = 2 * Math.PI / (N - 1);
+        for (let j = 0; j < N; j++) {
+          const wn = 0.5 * (1 - Math.cos(twoPi * j));
+          re[j] = buf[(w + j) % N] * wn;
+        }
+        this.fftInPlace(re, im);
+        const c = this.mspecBinHistW;
+        for (let k = 0; k < innerBins; k++) {
+          const p = re[k] * re[k] + im[k] * im[k];
+          this.mspecBinHist[k * Shell.MSPEC_HISTORY + c] = p > 1e-30 ? 10 * Math.log10(p) : -120;
+        }
+        this.mspecBinHistW = (c + 1) % Shell.MSPEC_HISTORY;
+        if (this.mspecBinHistFilled < Shell.MSPEC_HISTORY) this.mspecBinHistFilled++;
+      }
+    }
+    this.mspecBufWrite = w;
+  }
+  private drawMspec() {
+    const canvas = this.$('mspecCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const innerN = Shell.MSPEC_INNER_FFT;
+    const innerBins = innerN / 2;
+    const sr = this.player.getInputRate() || 12000;
+    const hopRate = sr / Shell.MSPEC_INNER_HOP;       // STFT frames per second
+    const M = Shell.MSPEC_HISTORY;
+    if (!this.mspecBinHist || this.mspecBinHistFilled < M) {
+      this.$('mspecStatus').textContent = `Modulation Spectrum · gathering frames (${this.mspecBinHistFilled}/${M})…`;
+      return;
+    }
+    // For each acoustic-freq bin, take the temporal series and FFT it
+    // to get modulation-rate energy. Downsample acoustic axis for cost.
+    const acStep = Math.max(1, Math.floor(innerBins / Shell.MSPEC_OUTER_BINS));
+    const acRows = Math.floor(innerBins / acStep);
+    const outBins = Shell.MSPEC_OUTER_BINS;
+    const map = new Float32Array(acRows * outBins);
+    const series = new Float32Array(M);
+    const re = new Float32Array(M), im = new Float32Array(M);
+    const twoPi = 2 * Math.PI / (M - 1);
+    for (let r = 0; r < acRows; r++) {
+      const k = r * acStep;
+      let mean = 0;
+      for (let t = 0; t < M; t++) {
+        const tt = (this.mspecBinHistW - M + t + M) % M;
+        series[t] = this.mspecBinHist[k * M + tt];
+        mean += series[t];
+      }
+      mean /= M;
+      for (let t = 0; t < M; t++) {
+        const win = 0.5 * (1 - Math.cos(twoPi * t));
+        re[t] = (series[t] - mean) * win; im[t] = 0;
+      }
+      this.fftInPlace(re, im);
+      for (let b = 0; b < outBins; b++) {
+        const p = re[b] * re[b] + im[b] * im[b];
+        map[r * outBins + b] = p > 1e-30 ? 10 * Math.log10(p) : -120;
+      }
+    }
+    const off = document.createElement('canvas');
+    off.width = outBins; off.height = acRows;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(outBins, acRows);
+    const sorted = Array.from(map).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.1)];
+    const hi = sorted[Math.floor(sorted.length * 0.99)];
+    const range = Math.max(10, hi - lo);
+    for (let y = 0; y < acRows; y++) {
+      const srcY = acRows - 1 - y;
+      for (let x = 0; x < outBins; x++) {
+        const v = map[srcY * outBins + x];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * outBins + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.3));
+        id.data[i + 2] = Math.floor(255 * Math.pow(1 - t, 1.5));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+    const maxModHz = hopRate / 2;
+    this.$('mspecStatus').textContent =
+      `Modulation Spectrum · X: 0–${maxModHz.toFixed(1)} Hz mod · Y: 0–${(sr/2/1000).toFixed(1)} kHz acoustic`;
+  }
+
+  // ── Autocorrelation Function ────────────────────────────────────
+  private toggleAcf() {
+    this.acfOn = !this.acfOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnAcf'); const panel = this.$('acfPanel');
+    btn.classList.toggle('active', this.acfOn);
+    panel.style.display = this.acfOn ? '' : 'none';
+    if (this.acfOn) {
+      this.acfBuf.fill(0); this.acfBufWrite = 0;
+      this.player.onAcf = (s) => this.feedAcf(s);
+      this.acfRafTick = 0;
+      const tick = () => {
+        if (!this.acfOn) { this.acfRaf = null; return; }
+        if ((this.acfRafTick++ % Shell.ACF_RENDER_EVERY_N) === 0) this.drawAcf();
+        this.acfRaf = requestAnimationFrame(tick);
+      };
+      this.acfRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onAcf = null;
+      if (this.acfRaf != null) { cancelAnimationFrame(this.acfRaf); this.acfRaf = null; }
+    }
+  }
+  private feedAcf(samples: Int16Array) {
+    const buf = this.acfBuf; const N = buf.length;
+    let w = this.acfBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+    }
+    this.acfBufWrite = w;
+  }
+  private drawAcf() {
+    const canvas = this.$('acfCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const sr = this.player.getInputRate() || 12000;
+    const N = this.acfBuf.length;
+    const wIdx = this.acfBufWrite;
+    const x = new Float32Array(N);
+    for (let i = 0; i < N; i++) x[i] = this.acfBuf[(wIdx + i) % N];
+    const L = Shell.ACF_LAGS;
+    const R = new Float32Array(L);
+    for (let lag = 0; lag < L; lag++) {
+      let acc = 0;
+      for (let i = 0; i < N - lag; i++) acc += x[i] * x[i + lag];
+      R[lag] = acc / (N - lag);
+    }
+    const R0 = Math.max(1e-12, R[0]);
+    for (let i = 0; i < L; i++) R[i] /= R0;
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    const maxLagMs = (L * 1000) / sr;
+    for (let ms = 0; ms <= maxLagMs; ms += 10) {
+      const xv = padL + (ms / maxLagMs) * plotW;
+      ctx.beginPath(); ctx.moveTo(xv, padT); ctx.lineTo(xv, padT + plotH); ctx.stroke();
+      ctx.fillText(`${ms}ms`, xv + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    for (let v = -1; v <= 1; v += 0.5) {
+      const yv = padT + (1 - (v + 1) / 2) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, yv); ctx.lineTo(padL + plotW, yv); ctx.stroke();
+      ctx.fillText(v.toFixed(1), 2 * dpr, yv + 4 * dpr);
+    }
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < L; i++) {
+      const xv = padL + (i / Math.max(1, L - 1)) * plotW;
+      const yv = padT + (1 - (R[i] + 1) / 2) * plotH;
+      if (i === 0) ctx.moveTo(xv, yv); else ctx.lineTo(xv, yv);
+    }
+    ctx.stroke();
+    // First non-trivial peak (period).
+    let peakLag = -1, peakVal = 0;
+    for (let i = Math.floor(sr / 5000); i < L; i++) {
+      if (R[i] > 0.3 && R[i] > R[i - 1] && R[i] >= R[i + 1]) { peakLag = i; peakVal = R[i]; break; }
+    }
+    const periodMs = peakLag > 0 ? (peakLag * 1000 / sr) : 0;
+    const fundHz = peakLag > 0 ? sr / peakLag : 0;
+    this.$('acfStatus').textContent =
+      `ACF · lag 0–${maxLagMs.toFixed(0)} ms` +
+      (peakLag > 0 ? ` · period ${periodMs.toFixed(2)} ms (${fundHz.toFixed(0)} Hz) @ R=${peakVal.toFixed(2)}` : ' · no clear period');
+  }
+
+  // ── Spectral Entropy ────────────────────────────────────────────
+  private toggleSent() {
+    this.sentOn = !this.sentOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnSent'); const panel = this.$('sentPanel');
+    btn.classList.toggle('active', this.sentOn);
+    panel.style.display = this.sentOn ? '' : 'none';
+    if (this.sentOn) {
+      this.sentBuf.fill(0); this.sentBufWrite = 0; this.sentBlockCount = 0;
+      this.sentHist.fill(0); this.sentHistWrite = 0; this.sentHistFilled = 0;
+      this.player.onSent = (s) => this.feedSent(s);
+      const tick = () => {
+        if (!this.sentOn) { this.sentRaf = null; return; }
+        this.drawSent();
+        this.sentRaf = requestAnimationFrame(tick);
+      };
+      this.sentRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onSent = null;
+      if (this.sentRaf != null) { cancelAnimationFrame(this.sentRaf); this.sentRaf = null; }
+    }
+  }
+  private feedSent(samples: Int16Array) {
+    const buf = this.sentBuf; const N = buf.length;
+    let w = this.sentBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+      this.sentBlockCount++;
+      if (this.sentBlockCount >= Shell.SENT_BLOCK) {
+        this.sentBlockCount = 0;
+        const re = new Float32Array(N), im = new Float32Array(N);
+        const twoPi = 2 * Math.PI / (N - 1);
+        for (let j = 0; j < N; j++) {
+          const wn = 0.5 * (1 - Math.cos(twoPi * j));
+          re[j] = buf[(w + j) % N] * wn;
+        }
+        this.fftInPlace(re, im);
+        const bins = N / 2;
+        let sum = 0;
+        const pow = new Float32Array(bins);
+        for (let k = 1; k < bins; k++) { pow[k] = re[k] * re[k] + im[k] * im[k]; sum += pow[k]; }
+        let H = 0;
+        if (sum > 1e-30) {
+          for (let k = 1; k < bins; k++) {
+            const p = pow[k] / sum;
+            if (p > 1e-30) H -= p * Math.log2(p);
+          }
+          H /= Math.log2(bins - 1);
+        }
+        this.sentHist[this.sentHistWrite] = H;
+        this.sentHistWrite = (this.sentHistWrite + 1) % Shell.SENT_HIST;
+        if (this.sentHistFilled < Shell.SENT_HIST) this.sentHistFilled++;
+      }
+    }
+    this.sentBufWrite = w;
+  }
+  private drawSent() {
+    const canvas = this.$('sentCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let v = 0; v <= 1; v += 0.25) {
+      const y = padT + (1 - v) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(v.toFixed(2), 2 * dpr, y + 4 * dpr);
+    }
+    const N = this.sentHistFilled;
+    let last = 0;
+    if (N > 1) {
+      ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (this.sentHistWrite - N + i + Shell.SENT_HIST) % Shell.SENT_HIST;
+        const v = this.sentHist[k]; last = v;
+        const x = padL + (i / Math.max(1, Shell.SENT_HIST - 1)) * plotW;
+        const y = padT + (1 - v) * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    let cls = 'unknown';
+    if (last < 0.3) cls = 'tonal';
+    else if (last < 0.6) cls = 'mixed tonal';
+    else if (last < 0.85) cls = 'noisy';
+    else cls = 'white noise';
+    this.$('sentStatus').textContent =
+      `Spectral Entropy · H=${last.toFixed(2)} (${cls}) · 30 s window`;
+  }
+
+  // ── Spectral Flatness ───────────────────────────────────────────
+  private toggleSflat() {
+    this.sflatOn = !this.sflatOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnSflat'); const panel = this.$('sflatPanel');
+    btn.classList.toggle('active', this.sflatOn);
+    panel.style.display = this.sflatOn ? '' : 'none';
+    if (this.sflatOn) {
+      this.sflatBuf.fill(0); this.sflatBufWrite = 0; this.sflatBlockCount = 0;
+      this.sflatHist.fill(0); this.sflatHistWrite = 0; this.sflatHistFilled = 0;
+      this.player.onSflat = (s) => this.feedSflat(s);
+      const tick = () => {
+        if (!this.sflatOn) { this.sflatRaf = null; return; }
+        this.drawSflat();
+        this.sflatRaf = requestAnimationFrame(tick);
+      };
+      this.sflatRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onSflat = null;
+      if (this.sflatRaf != null) { cancelAnimationFrame(this.sflatRaf); this.sflatRaf = null; }
+    }
+  }
+  private feedSflat(samples: Int16Array) {
+    const buf = this.sflatBuf; const N = buf.length;
+    let w = this.sflatBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+      this.sflatBlockCount++;
+      if (this.sflatBlockCount >= Shell.SFLAT_BLOCK) {
+        this.sflatBlockCount = 0;
+        const re = new Float32Array(N), im = new Float32Array(N);
+        const twoPi = 2 * Math.PI / (N - 1);
+        for (let j = 0; j < N; j++) {
+          const wn = 0.5 * (1 - Math.cos(twoPi * j));
+          re[j] = buf[(w + j) % N] * wn;
+        }
+        this.fftInPlace(re, im);
+        const bins = N / 2;
+        let logSum = 0, arithSum = 0; let cnt = 0;
+        for (let k = 1; k < bins; k++) {
+          const p = re[k] * re[k] + im[k] * im[k];
+          if (p > 1e-30) { logSum += Math.log(p); arithSum += p; cnt++; }
+        }
+        const sfm = cnt > 0 ? (Math.exp(logSum / cnt) / (arithSum / cnt)) : 0;
+        this.sflatHist[this.sflatHistWrite] = sfm;
+        this.sflatHistWrite = (this.sflatHistWrite + 1) % Shell.SFLAT_HIST;
+        if (this.sflatHistFilled < Shell.SFLAT_HIST) this.sflatHistFilled++;
+      }
+    }
+    this.sflatBufWrite = w;
+  }
+  private drawSflat() {
+    const canvas = this.$('sflatCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let v = 0; v <= 1; v += 0.25) {
+      const y = padT + (1 - v) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(v.toFixed(2), 2 * dpr, y + 4 * dpr);
+    }
+    const N = this.sflatHistFilled;
+    let last = 0;
+    if (N > 1) {
+      ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (this.sflatHistWrite - N + i + Shell.SFLAT_HIST) % Shell.SFLAT_HIST;
+        const v = this.sflatHist[k]; last = v;
+        const x = padL + (i / Math.max(1, Shell.SFLAT_HIST - 1)) * plotW;
+        const y = padT + (1 - v) * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    let cls = 'unknown';
+    if (last < 0.05) cls = 'strong tonal';
+    else if (last < 0.4) cls = 'mixed';
+    else if (last < 0.7) cls = 'noisy';
+    else cls = 'white';
+    this.$('sflatStatus').textContent =
+      `Spectral Flatness · SFM=${last.toFixed(3)} (${cls})`;
+  }
+
+  // ── Q-Q Plot ────────────────────────────────────────────────────
+  private toggleQq() {
+    this.qqOn = !this.qqOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnQq'); const panel = this.$('qqPanel');
+    btn.classList.toggle('active', this.qqOn);
+    panel.style.display = this.qqOn ? '' : 'none';
+    if (this.qqOn) {
+      this.qqEnv.fill(0); this.qqEnvW = 0; this.qqEnvFilled = 0;
+      this.player.onQq = (s) => this.feedQq(s);
+      this.qqRafTick = 0;
+      const tick = () => {
+        if (!this.qqOn) { this.qqRaf = null; return; }
+        if ((this.qqRafTick++ % Shell.QQ_RENDER_EVERY_N) === 0) this.drawQq();
+        this.qqRaf = requestAnimationFrame(tick);
+      };
+      this.qqRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onQq = null;
+      if (this.qqRaf != null) { cancelAnimationFrame(this.qqRaf); this.qqRaf = null; }
+    }
+  }
+  private feedQq(samples: Int16Array) {
+    // Use the audio sample itself for Gaussian, envelope for Rayleigh/Rician.
+    // We approximate analytic envelope via |x| (sub-optimal, but cheap).
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i] / 32768;
+      this.qqEnv[this.qqEnvW] = v;
+      this.qqEnvW = (this.qqEnvW + 1) % Shell.QQ_SAMPLES;
+      if (this.qqEnvFilled < Shell.QQ_SAMPLES) this.qqEnvFilled++;
+    }
+  }
+  private drawQq() {
+    const canvas = this.$('qqCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    if (this.qqEnvFilled < 32) { this.$('qqStatus').textContent = 'Q-Q · gathering samples…'; return; }
+    const N = this.qqEnvFilled;
+    // Empirical quantiles: pick sample values, optionally absolute for envelope tests.
+    let data: number[];
+    if (this.qqKind === 'gaussian') {
+      data = Array.from(this.qqEnv.subarray(0, N));
+    } else {
+      data = Array.from(this.qqEnv.subarray(0, N)).map(v => Math.abs(v));
+    }
+    data.sort((a, b) => a - b);
+    // Normalise to unit variance / scale for distribution comparison.
+    let mean = 0; for (const v of data) mean += v; mean /= N;
+    let varAcc = 0; for (const v of data) varAcc += (v - mean) * (v - mean);
+    const std = Math.sqrt(Math.max(1e-30, varAcc / N));
+    // Theoretical quantile inverse-CDF approximations.
+    // Φ⁻¹ via rational approximation (Acklam, 2003).
+    const normInv = (p: number) => {
+      // p in (0,1)
+      const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+      const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+      const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+      const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+      const pLo = 0.02425, pHi = 1 - pLo;
+      if (p < pLo) {
+        const q = Math.sqrt(-2 * Math.log(p));
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
+      }
+      if (p > pHi) {
+        const q = Math.sqrt(-2 * Math.log(1 - p));
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1);
+      }
+      const q = p - 0.5; const r = q * q;
+      return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
+    };
+    const rayleighInv = (p: number) => Math.sqrt(-2 * Math.log(1 - p));
+    const ricianInv = (p: number, K = 2) => {
+      // Approximate Rician CDF inverse via Newton's method seeded at sqrt(2 ln 1/(1-p)).
+      const s = Math.sqrt(2);
+      const a = Math.sqrt(2 * K);
+      let r = Math.sqrt(-2 * Math.log(Math.max(1e-9, 1 - p)));
+      // Crude approximation — non-central chi-2 CDF inverse via simple bisection.
+      let lo = 0, hi = 6, mid = r;
+      const ratioCdf = (rr: number) => 1 - Math.exp(-(rr * rr + a * a) / 2);   // upper bound (no Bessel)
+      for (let it = 0; it < 12; it++) {
+        mid = (lo + hi) / 2;
+        if (ratioCdf(mid) < p) lo = mid; else hi = mid;
+      }
+      return mid * s / s;     // s/s = 1, keeps signature explicit
+    };
+    const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.lineTo(padL + plotW, padT + plotH); ctx.stroke();
+    ctx.fillText('Empirical →', padL + plotW / 2 - 30 * dpr, padT + plotH + 14 * dpr);
+    ctx.fillText('Theoretical ↑', 2 * dpr, 14 * dpr);
+    // Plot scatter at evenly spaced quantiles, normalised to plot box.
+    const M = Math.min(200, N);
+    const emp: number[] = [], theo: number[] = [];
+    for (let i = 0; i < M; i++) {
+      const p = (i + 0.5) / M;
+      const eqi = data[Math.floor(p * N)];
+      let tq = 0;
+      if (this.qqKind === 'gaussian')      tq = mean + std * normInv(p);
+      else if (this.qqKind === 'rayleigh') tq = std * rayleighInv(p);
+      else                                 tq = std * ricianInv(p);
+      emp.push(eqi); theo.push(tq);
+    }
+    let eMin = Infinity, eMax = -Infinity, tMin = Infinity, tMax = -Infinity;
+    for (let i = 0; i < M; i++) {
+      if (emp[i] < eMin) eMin = emp[i]; if (emp[i] > eMax) eMax = emp[i];
+      if (theo[i] < tMin) tMin = theo[i]; if (theo[i] > tMax) tMax = theo[i];
+    }
+    const eR = Math.max(1e-9, eMax - eMin), tR = Math.max(1e-9, tMax - tMin);
+    // Diagonal reference line.
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT + plotH); ctx.lineTo(padL + plotW, padT); ctx.stroke();
+    ctx.fillStyle = '#cfffa3';
+    for (let i = 0; i < M; i++) {
+      const x = padL + ((emp[i] - eMin) / eR) * plotW;
+      const y = padT + (1 - (theo[i] - tMin) / tR) * plotH;
+      ctx.fillRect(x - 1 * dpr, y - 1 * dpr, 2 * dpr, 2 * dpr);
+    }
+    this.$('qqStatus').textContent =
+      `Q-Q · ${this.qqKind} reference · n=${N} · diagonal = perfect fit`;
+  }
+
+  // ── CI Periodogram ──────────────────────────────────────────────
+  private toggleCiper() {
+    this.ciperOn = !this.ciperOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnCiper'); const panel = this.$('ciperPanel');
+    btn.classList.toggle('active', this.ciperOn);
+    panel.style.display = this.ciperOn ? '' : 'none';
+    if (this.ciperOn) {
+      this.ciperBuf.fill(0); this.ciperBufWrite = 0;
+      this.ciperHist.length = 0;
+      if (this.ciperAvgSum) this.ciperAvgSum.fill(0);
+      this.player.onCiper = (s) => this.feedCiper(s);
+      this.ciperRafTick = 0;
+      const tick = () => {
+        if (!this.ciperOn) { this.ciperRaf = null; return; }
+        if ((this.ciperRafTick++ % Shell.CIPER_RENDER_EVERY_N) === 0) this.drawCiper();
+        this.ciperRaf = requestAnimationFrame(tick);
+      };
+      this.ciperRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onCiper = null;
+      if (this.ciperRaf != null) { cancelAnimationFrame(this.ciperRaf); this.ciperRaf = null; }
+    }
+  }
+  private feedCiper(samples: Int16Array) {
+    const buf = this.ciperBuf; const N = buf.length;
+    let w = this.ciperBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+    }
+    this.ciperBufWrite = w;
+  }
+  private drawCiper() {
+    const canvas = this.$('ciperCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    const N = Shell.CIPER_FFT;
+    const sr = this.player.getInputRate() || 12000;
+    const binHz = sr / N;
+    const MAX_HZ = 6000;
+    const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
+    if (!this.ciperFftRe || this.ciperFftRe.length !== N) { this.ciperFftRe = new Float32Array(N); this.ciperFftIm = new Float32Array(N); }
+    if (!this.ciperAvgSum || this.ciperAvgSum.length !== bins) { this.ciperAvgSum = new Float32Array(bins); this.ciperHist.length = 0; }
+    const re = this.ciperFftRe; const im = this.ciperFftIm!;
+    const buf = this.ciperBuf; const wIdx = this.ciperBufWrite;
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = buf[(wIdx + i) % N] * w; im[i] = 0;
+    }
+    this.fftInPlace(re, im);
+    const newPow = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) newPow[k] = re[k] * re[k] + im[k] * im[k];
+    if (this.ciperHist.length >= Shell.CIPER_AVG) {
+      const old = this.ciperHist.shift()!;
+      for (let k = 0; k < bins; k++) this.ciperAvgSum[k] -= old[k];
+    }
+    for (let k = 0; k < bins; k++) this.ciperAvgSum[k] += newPow[k];
+    this.ciperHist.push(newPow);
+    const M = this.ciperHist.length;
+    // χ²_{2M} 95% CI: lower / upper multipliers (relative to mean).
+    // Conf interval in dB: ±10·log10(χ²(α/2, 2M)/(2M)) etc.
+    // For 95% (α=0.05) and 2M dof, multipliers are approximated:
+    //   lo = 2M / chi2inv(0.975, 2M)
+    //   hi = 2M / chi2inv(0.025, 2M)
+    // Use Wilson–Hilferty approximation for chi-square inverse.
+    const chi2InvWH = (p: number, k: number) => {
+      const z = (() => { // Φ⁻¹(p)
+        const a1 = -3.969683028665376e+01, a2 = 2.209460984245205e+02, a3 = -2.759285104469687e+02, a4 = 1.383577518672690e+02, a5 = -3.066479806614716e+01, a6 = 2.506628277459239e+00;
+        const b1 = -5.447609879822406e+01, b2 = 1.615858368580409e+02, b3 = -1.556989798598866e+02, b4 = 6.680131188771972e+01, b5 = -1.328068155288572e+01;
+        const q = p - 0.5; const r = q * q;
+        return (((((a1*r+a2)*r+a3)*r+a4)*r+a5)*r+a6) * q / (((((b1*r+b2)*r+b3)*r+b4)*r+b5)*r+1);
+      })();
+      const f = 1 - 2 / (9 * k) + z * Math.sqrt(2 / (9 * k));
+      return k * f * f * f;
+    };
+    const dof = 2 * M;
+    const loMult = dof / chi2InvWH(0.975, dof);
+    const hiMult = dof / chi2InvWH(0.025, dof);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const curDb = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) { const p = this.ciperAvgSum[k] / M; curDb[k] = p > 1e-30 ? 10 * Math.log10(p) : -200; }
+    const sorted = Array.from(curDb).sort((a, b) => a - b);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    const ymax = med + 60, ymin = med - 20, range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let f = 0; f <= MAX_HZ; f += 1000) {
+      const x = padL + (f / MAX_HZ) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.fillText(`${(f / 1000) | 0}k`, x + 2 * dpr, padT + plotH + 14 * dpr);
+    }
+    const xForHz = (hz: number) => padL + (hz / MAX_HZ) * plotW;
+    const yForDb = (db: number) => padT + (1 - (db - ymin) / range) * plotH;
+    // CI band (shaded).
+    ctx.fillStyle = 'rgba(100, 200, 100, 0.18)';
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const p = this.ciperAvgSum[k] / M;
+      const upDb = 10 * Math.log10(p * hiMult);
+      const x = xForHz(k * binHz);
+      const y = yForDb(upDb);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    for (let k = bins - 1; k >= 0; k--) {
+      const p = this.ciperAvgSum[k] / M;
+      const loDb = 10 * Math.log10(Math.max(1e-30, p * loMult));
+      const x = xForHz(k * binHz);
+      const y = yForDb(loDb);
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath(); ctx.fill();
+    // Centre trace.
+    ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    for (let k = 0; k < bins; k++) {
+      const x = xForHz(k * binHz); const y = yForDb(curDb[k]);
+      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    this.$('ciperStatus').textContent =
+      `CI Periodogram · ${M} segments · 95% χ² band · DOF=${dof}`;
+  }
+
+  // ── Phase Portrait ──────────────────────────────────────────────
+  private togglePhaseP() {
+    this.phasePOn = !this.phasePOn;
+    this.updateWaterfallStream();
+    const btn = this.$('btnPhaseP'); const panel = this.$('phasePPanel');
+    btn.classList.toggle('active', this.phasePOn);
+    panel.style.display = this.phasePOn ? '' : 'none';
+    if (this.phasePOn) {
+      this.phasePBuf.fill(0); this.phasePBufWrite = 0;
+      this.player.onPhaseP = (s) => this.feedPhaseP(s);
+      this.phasePRafTick = 0;
+      const tick = () => {
+        if (!this.phasePOn) { this.phasePRaf = null; return; }
+        if ((this.phasePRafTick++ % Shell.PHASEP_RENDER_EVERY_N) === 0) this.drawPhaseP();
+        this.phasePRaf = requestAnimationFrame(tick);
+      };
+      this.phasePRaf = requestAnimationFrame(tick);
+    } else {
+      this.player.onPhaseP = null;
+      if (this.phasePRaf != null) { cancelAnimationFrame(this.phasePRaf); this.phasePRaf = null; }
+    }
+  }
+  private feedPhaseP(samples: Int16Array) {
+    const buf = this.phasePBuf; const N = buf.length;
+    let w = this.phasePBufWrite;
+    for (let i = 0; i < samples.length; i++) {
+      buf[w] = samples[i] / 32768; w = (w + 1) % N;
+    }
+    this.phasePBufWrite = w;
+  }
+  private drawPhaseP() {
+    const canvas = this.$('phasePCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const N = this.phasePBuf.length;
+    const tau = Math.max(1, Math.min(N / 2, this.phasePTau));
+    const wIdx = this.phasePBufWrite;
+    // Read N samples in chronological order.
+    const x = new Float32Array(N);
+    for (let i = 0; i < N; i++) x[i] = this.phasePBuf[(wIdx + i) % N];
+    const side = Math.min(W, H);
+    const ox = (W - side) / 2, oy = (H - side) / 2;
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1 * dpr;
+    ctx.beginPath(); ctx.moveTo(ox + side / 2, oy); ctx.lineTo(ox + side / 2, oy + side);
+    ctx.moveTo(ox, oy + side / 2); ctx.lineTo(ox + side, oy + side / 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(207, 255, 163, 0.6)';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < N - tau; i++) {
+      const px = ox + (x[i] + 1) * 0.5 * side;
+      const py = oy + (1 - (x[i + tau] + 1) * 0.5) * side;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    this.$('phasePStatus').textContent =
+      `Phase Portrait · τ=${tau} samples (${(tau * 1000 / (this.player.getInputRate() || 12000)).toFixed(2)} ms) · pts=${N}`;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // IQ-side viewer batch-3 implementations
+  // ════════════════════════════════════════════════════════════════
+
+  /** Decode IQ bytes into a complex pair stream and append into the
+   *  given I/Q buffers as a ring. */
+  private appendIqRing(iqBytes: Uint8Array, bufI: Float32Array, bufQ: Float32Array, write: number, fillCount: number): { write: number; fillCount: number } {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const N = bufI.length;
+    let w = write, fc = fillCount;
+    for (let i = 0; i < nPairs; i++) {
+      bufI[w] = dv.getInt16(i * 4, false) / 32768;
+      bufQ[w] = dv.getInt16(i * 4 + 2, false) / 32768;
+      w = (w + 1) % N;
+      if (fc < N) fc++;
+    }
+    return { write: w, fillCount: fc };
+  }
+
+  // ── Wigner-Ville (SP-WVD) ───────────────────────────────────────
+  private feedWvd(iqBytes: Uint8Array) {
+    const r = this.appendIqRing(iqBytes, this.wvdBufI, this.wvdBufQ, this.wvdBufWrite, this.wvdBufFill);
+    this.wvdBufWrite = r.write; this.wvdBufFill = r.fillCount;
+  }
+  private renderWvd() {
+    if ((this.wvdRafTick++ % Shell.WVD_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('wvdCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    if (this.wvdBufFill < this.wvdBufI.length / 2) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      this.$('wvdStatus').textContent = 'WVD · gathering IQ…';
+      return;
+    }
+    const Nfft = Shell.WVD_FREQS;
+    if (!this.wvdImage) this.wvdImage = new Float32Array(Shell.WVD_FREQS * Shell.WVD_COLS);
+    // Sample the centre of the ring; compute pseudo-WVD at one time index.
+    // PWVD: W(t,f) = ∫ z(t+τ/2) · z*(t−τ/2) · h(τ) · e^{−j2πfτ} dτ
+    const M = Nfft;     // half-lag count
+    const re = new Float32Array(2 * M), im = new Float32Array(2 * M);
+    const wIdx = this.wvdBufWrite;
+    const tCentre = (wIdx - M + this.wvdBufI.length) % this.wvdBufI.length;
+    // Time-smoothing window g(t) — simplified: average kernel evaluated
+    // at single time (skip smoothing pass for cost). Frequency window h(τ).
+    for (let n = -M; n < M; n++) {
+      const idxP = (tCentre + n + this.wvdBufI.length) % this.wvdBufI.length;
+      const idxM = (tCentre - n + this.wvdBufI.length) % this.wvdBufI.length;
+      const aR = this.wvdBufI[idxP], aI = this.wvdBufQ[idxP];
+      const bR = this.wvdBufI[idxM], bI = -this.wvdBufQ[idxM];   // conj
+      const cR = aR * bR - aI * bI;
+      const cI = aR * bI + aI * bR;
+      // Hann window over τ in [-M, M).
+      const w = 0.5 * (1 + Math.cos(Math.PI * n / M));
+      re[n + M] = cR * w; im[n + M] = cI * w;
+    }
+    // FFT of length 2M.
+    this.fftInPlace(re, im);
+    const col = new Float32Array(Nfft);
+    // |W|: real part of the FFT gives WVD; we take magnitude for plotting.
+    for (let k = 0; k < Nfft; k++) {
+      const v = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      col[k] = v > 1e-30 ? 10 * Math.log10(v) : -120;
+    }
+    const c = this.wvdCol;
+    for (let k = 0; k < Nfft; k++) this.wvdImage[k * Shell.WVD_COLS + c] = col[k];
+    this.wvdCol = (c + 1) % Shell.WVD_COLS;
+    if (!this.wvdOffCanvas) {
+      this.wvdOffCanvas = document.createElement('canvas');
+      this.wvdOffCanvas.width = Shell.WVD_COLS; this.wvdOffCanvas.height = Nfft;
+    }
+    const off = this.wvdOffCanvas; const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(Shell.WVD_COLS, Nfft);
+    const sorted = Array.from(this.wvdImage).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.1)];
+    const hi = sorted[Math.floor(sorted.length * 0.99)];
+    const range = Math.max(10, hi - lo);
+    for (let y = 0; y < Nfft; y++) {
+      const srcY = Nfft - 1 - y;
+      for (let x = 0; x < Shell.WVD_COLS; x++) {
+        const sx = (this.wvdCol + x) % Shell.WVD_COLS;
+        const v = this.wvdImage[srcY * Shell.WVD_COLS + sx];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * Shell.WVD_COLS + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.3));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 0.4));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('wvdStatus').textContent =
+      `SP-WVD · ${Nfft}-pt freq · M=${M} lags · ${Shell.WVD_COLS} cols`;
+  }
+
+  // ── Stockwell S-Transform ───────────────────────────────────────
+  private feedStxf(iqBytes: Uint8Array) {
+    const r = this.appendIqRing(iqBytes, this.stxfBufI, this.stxfBufQ, this.stxfBufWrite, this.stxfBufFill);
+    this.stxfBufWrite = r.write; this.stxfBufFill = r.fillCount;
+  }
+  private renderStxf() {
+    if ((this.stxfRafTick++ % Shell.STXF_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('stxfCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    if (this.stxfBufFill < this.stxfBufI.length) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      this.$('stxfStatus').textContent = 'S-Transform · gathering IQ…';
+      return;
+    }
+    const N = this.stxfBufI.length;
+    const wIdx = this.stxfBufWrite;
+    const xR = new Float32Array(N), xI = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      xR[i] = this.stxfBufI[(wIdx + i) % N];
+      xI[i] = this.stxfBufQ[(wIdx + i) % N];
+    }
+    // FFT of x.
+    const Re = new Float32Array(N), Im = new Float32Array(N);
+    for (let i = 0; i < N; i++) { Re[i] = xR[i]; Im[i] = xI[i]; }
+    this.fftInPlace(Re, Im);
+    if (!this.stxfImage) this.stxfImage = new Float32Array(Shell.STXF_FREQS * Shell.STXF_COLS);
+    // S(τ, f) = sum_k X(k) · G(k, f) · e^{j2π k τ / N}
+    // where G is Gaussian centred at frequency f.
+    const F = Shell.STXF_FREQS;
+    const COLS = Shell.STXF_COLS;
+    const fStep = Math.max(1, Math.floor((N / 2) / F));
+    const tStep = Math.max(1, Math.floor(N / COLS));
+    const col = new Float32Array(F);
+    // Evaluate S at the latest time index (single column).
+    const tau = N - 1;
+    for (let fi = 0; fi < F; fi++) {
+      const f = (fi + 1) * fStep;
+      if (f >= N / 2) break;
+      // Gaussian window in freq domain.
+      let sR = 0, sI = 0;
+      const sigma = N / Math.max(1, f);
+      for (let k = -16; k <= 16; k++) {
+        const idx = (f + k + N) % N;
+        const g = Math.exp(-2 * Math.PI * Math.PI * (k * k) / (sigma * sigma));
+        const phi = 2 * Math.PI * idx * tau / N;
+        const c = Math.cos(phi), s = Math.sin(phi);
+        sR += (Re[idx] * c - Im[idx] * s) * g;
+        sI += (Re[idx] * s + Im[idx] * c) * g;
+      }
+      const m = sR * sR + sI * sI;
+      col[fi] = m > 1e-30 ? 10 * Math.log10(m) : -120;
+    }
+    const c = this.stxfCol;
+    for (let k = 0; k < F; k++) this.stxfImage[k * COLS + c] = col[k];
+    this.stxfCol = (c + 1) % COLS;
+    if (!this.stxfOffCanvas) {
+      this.stxfOffCanvas = document.createElement('canvas');
+      this.stxfOffCanvas.width = COLS; this.stxfOffCanvas.height = F;
+    }
+    const off = this.stxfOffCanvas; const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(COLS, F);
+    const sorted = Array.from(this.stxfImage).sort((a, b) => a - b);
+    const lo = sorted[Math.floor(sorted.length * 0.1)];
+    const hi = sorted[Math.floor(sorted.length * 0.99)];
+    const range = Math.max(10, hi - lo);
+    void tStep;
+    for (let y = 0; y < F; y++) {
+      const srcY = F - 1 - y;
+      for (let x = 0; x < COLS; x++) {
+        const sx = (this.stxfCol + x) % COLS;
+        const v = this.stxfImage[srcY * COLS + sx];
+        const t = Math.max(0, Math.min(1, (v - lo) / range));
+        const i = (y * COLS + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.6));
+        id.data[i + 1] = Math.floor(255 * t);
+        id.data[i + 2] = Math.floor(255 * Math.pow(1 - t, 1.5));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('stxfStatus').textContent =
+      `S-Transform · ${F} freq · multi-resolution (σ ∝ 1/f)`;
+  }
+
+  // ── Cyclic Spectrum SCF ─────────────────────────────────────────
+  private feedScf(iqBytes: Uint8Array) {
+    const r = this.appendIqRing(iqBytes, this.scfBufI, this.scfBufQ, this.scfBufWrite, this.scfBufFill);
+    this.scfBufWrite = r.write; this.scfBufFill = r.fillCount;
+  }
+  private renderScf() {
+    if ((this.scfRafTick++ % Shell.SCF_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('scfCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    if (this.scfBufFill < this.scfBufI.length) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      this.$('scfStatus').textContent = 'SCF · gathering IQ…';
+      return;
+    }
+    const N = this.scfBufI.length;
+    const wIdx = this.scfBufWrite;
+    const Re = new Float32Array(N), Im = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const idx = (wIdx + i) % N;
+      Re[i] = this.scfBufI[idx]; Im[i] = this.scfBufQ[idx];
+    }
+    this.fftInPlace(Re, Im);
+    if (!this.scfMap) this.scfMap = new Float32Array(Shell.SCF_FBINS * Shell.SCF_ABINS);
+    // SCF[f, α] ≈ X(f + α/2) · X*(f − α/2). Smooth in α direction.
+    const F = Shell.SCF_FBINS, A = Shell.SCF_ABINS;
+    const fStep = Math.max(1, Math.floor((N / 4) / F));
+    const aStep = Math.max(1, Math.floor((N / 4) / A));
+    const map = this.scfMap;
+    for (let fi = 0; fi < F; fi++) {
+      const f = fi * fStep;
+      for (let ai = 0; ai < A; ai++) {
+        const a = ai * aStep;
+        const k1 = (f + Math.floor(a / 2) + N) % N;
+        const k2 = (f - Math.floor(a / 2) + N) % N;
+        const aR = Re[k1] * Re[k2] + Im[k1] * Im[k2];
+        const aI = Im[k1] * Re[k2] - Re[k1] * Im[k2];
+        const m = Math.sqrt(aR * aR + aI * aI);
+        // EMA accumulate.
+        map[fi * A + ai] = 0.9 * map[fi * A + ai] + 0.1 * m;
+      }
+    }
+    const off = document.createElement('canvas');
+    off.width = A; off.height = F;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(A, F);
+    let mMax = 0; for (let i = 0; i < map.length; i++) if (map[i] > mMax) mMax = map[i];
+    const norm = mMax > 0 ? 1 / Math.log10(mMax + 1) : 0;
+    for (let y = 0; y < F; y++) {
+      const srcY = F - 1 - y;
+      for (let x = 0; x < A; x++) {
+        const v = map[srcY * A + x];
+        const t = v > 0 ? Math.log10(v + 1) * norm : 0;
+        const i = (y * A + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.7));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.2));
+        id.data[i + 2] = Math.floor(255 * Math.pow(1 - t, 1.4));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('scfStatus').textContent =
+      `Cyclic Spectrum · X: cycle freq α (0–${aStep * A}/N) · Y: spectral freq f (0–${fStep * F}/N)`;
+  }
+
+  // ── Bispectrum / Bicoherence ────────────────────────────────────
+  private feedBisp(iqBytes: Uint8Array) {
+    const r = this.appendIqRing(iqBytes, this.bispBufI, this.bispBufQ, this.bispBufWrite, this.bispBufFill);
+    this.bispBufWrite = r.write; this.bispBufFill = r.fillCount;
+  }
+  private renderBisp() {
+    if ((this.bispRafTick++ % Shell.BISP_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('bispCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    if (this.bispBufFill < Shell.BISP_FFT) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      this.$('bispStatus').textContent = 'Bispectrum · gathering IQ…';
+      return;
+    }
+    const N = Shell.BISP_FFT;
+    const wIdx = this.bispBufWrite;
+    const Re = new Float32Array(N), Im = new Float32Array(N);
+    const buf = this.bispBufI.length;
+    for (let i = 0; i < N; i++) {
+      const idx = (wIdx - N + i + buf) % buf;
+      Re[i] = this.bispBufI[idx]; Im[i] = this.bispBufQ[idx];
+    }
+    this.fftInPlace(Re, Im);
+    // B(f1, f2) = X(f1) · X(f2) · X*(f1+f2). Plot |B| on (f1, f2) grid.
+    if (!this.bispMap) this.bispMap = new Float32Array(N * N);
+    const map = this.bispMap;
+    const M = N >> 1;
+    for (let f1 = 0; f1 < M; f1++) {
+      for (let f2 = 0; f2 <= f1; f2++) {     // symmetric region
+        const f3 = (f1 + f2);
+        if (f3 >= M) continue;
+        const a = Re[f1], b = Im[f1];
+        const c = Re[f2], d = Im[f2];
+        const e = Re[f3], g = -Im[f3];   // conj
+        // (a+jb)*(c+jd) = (ac-bd) + j(ad+bc)
+        const m1R = a * c - b * d, m1I = a * d + b * c;
+        // m1 * (e+jg)
+        const r = m1R * e - m1I * g;
+        const im2 = m1R * g + m1I * e;
+        const mag = Math.sqrt(r * r + im2 * im2);
+        const idx = f1 * N + f2;
+        map[idx] = 0.85 * map[idx] + 0.15 * mag;
+      }
+    }
+    this.bispFrames++;
+    const off = document.createElement('canvas');
+    off.width = M; off.height = M;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(M, M);
+    let mMax = 0;
+    for (let i = 0; i < map.length; i++) if (map[i] > mMax) mMax = map[i];
+    const norm = mMax > 0 ? 1 / Math.log10(mMax + 1) : 0;
+    for (let y = 0; y < M; y++) {
+      const srcY = M - 1 - y;
+      for (let x = 0; x < M; x++) {
+        const v = map[srcY * N + x];
+        const t = v > 0 ? Math.log10(v + 1) * norm : 0;
+        const i = (y * M + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.5));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.2));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 2));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('bispStatus').textContent =
+      `Bispectrum · ${N}-pt · ${this.bispFrames} frames · X=f1, Y=f2 (f3=f1+f2)`;
+  }
+
+  // ── Ambiguity Function ──────────────────────────────────────────
+  private feedAmbig(iqBytes: Uint8Array) {
+    if (!this.ambigHaveRef) {
+      const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+      const nPairs = (iqBytes.length / 4) | 0;
+      for (let i = 0; i < nPairs && this.ambigRefW < Shell.AMBIG_REF; i++) {
+        this.ambigRefI[this.ambigRefW] = dv.getInt16(i * 4, false) / 32768;
+        this.ambigRefQ[this.ambigRefW] = dv.getInt16(i * 4 + 2, false) / 32768;
+        this.ambigRefW++;
+      }
+      if (this.ambigRefW >= Shell.AMBIG_REF) {
+        this.ambigHaveRef = true;
+        this.computeAmbig();
+      }
+    }
+  }
+  private computeAmbig() {
+    const REF = Shell.AMBIG_REF;
+    const T = Shell.AMBIG_TAU, F = Shell.AMBIG_NU;
+    if (!this.ambigMap) this.ambigMap = new Float32Array(T * F);
+    const sr = this.player.getInputRate() || 12000;
+    const maxNu = 200;          // Hz
+    for (let ti = 0; ti < T; ti++) {
+      const tau = ti - T / 2;
+      for (let fi = 0; fi < F; fi++) {
+        const nu = -maxNu + (2 * maxNu * fi / (F - 1));
+        const dphi = 2 * Math.PI * nu / sr;
+        let aR = 0, aI = 0; let phi = 0;
+        const start = Math.max(0, -tau);
+        const end = Math.min(REF, REF - tau);
+        for (let n = start; n < end; n++) {
+          const sR = this.ambigRefI[n], sI = this.ambigRefQ[n];
+          const tR = this.ambigRefI[n + tau], tI = -this.ambigRefQ[n + tau];   // conj
+          const pR = sR * tR - sI * tI;
+          const pI = sR * tI + sI * tR;
+          const c = Math.cos(phi), s = Math.sin(phi);
+          aR += pR * c - pI * s;
+          aI += pR * s + pI * c;
+          phi += dphi;
+        }
+        this.ambigMap[fi * T + ti] = Math.sqrt(aR * aR + aI * aI);
+      }
+    }
+  }
+  private renderAmbig() {
+    if ((this.ambigRafTick++ % Shell.AMBIG_RENDER_EVERY_N) !== 0) return;
+    const canvas = this.$('ambigCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    if (!this.ambigMap || !this.ambigHaveRef) {
+      this.$('ambigStatus').textContent = 'Ambiguity · capturing reference…';
+      return;
+    }
+    const T = Shell.AMBIG_TAU, F = Shell.AMBIG_NU;
+    const off = document.createElement('canvas');
+    off.width = T; off.height = F;
+    const offCtx = off.getContext('2d', { alpha: false })!;
+    const id = offCtx.createImageData(T, F);
+    let mMax = 0; for (let i = 0; i < this.ambigMap.length; i++) if (this.ambigMap[i] > mMax) mMax = this.ambigMap[i];
+    const norm = mMax > 0 ? 1 / mMax : 0;
+    for (let y = 0; y < F; y++) {
+      for (let x = 0; x < T; x++) {
+        const v = this.ambigMap[y * T + x] * norm;
+        const t = Math.max(0, Math.min(1, v));
+        const i = (y * T + x) * 4;
+        id.data[i] = Math.floor(255 * Math.pow(t, 0.5));
+        id.data[i + 1] = Math.floor(255 * Math.pow(t, 1.2));
+        id.data[i + 2] = Math.floor(255 * Math.pow(t, 2));
+        id.data[i + 3] = 255;
+      }
+    }
+    offCtx.putImageData(id, 0, 0);
+    (ctx as CanvasRenderingContext2D).imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, W, H);
+    this.$('ambigStatus').textContent =
+      `Ambiguity · X: delay τ (±${T/2} samples) · Y: Doppler ν (±200 Hz) · ref ${Shell.AMBIG_REF} samples`;
+  }
+
+  // ── I/Q Imbalance Monitor ───────────────────────────────────────
+  private feedIqimb(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    for (let i = 0; i < nPairs; i++) {
+      const I = dv.getInt16(i * 4, false) / 32768;
+      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
+      this.iqimbSumI += I; this.iqimbSumQ += Q;
+      this.iqimbSumI2 += I * I; this.iqimbSumQ2 += Q * Q;
+      this.iqimbSumIQ += I * Q;
+      this.iqimbBlock++;
+      if (this.iqimbBlock >= Shell.IQIMB_BLOCK) {
+        const n = this.iqimbBlock;
+        const mI = this.iqimbSumI / n, mQ = this.iqimbSumQ / n;
+        const varI = Math.max(1e-30, this.iqimbSumI2 / n - mI * mI);
+        const varQ = Math.max(1e-30, this.iqimbSumQ2 / n - mQ * mQ);
+        const covIQ = this.iqimbSumIQ / n - mI * mQ;
+        const ampDb = 10 * Math.log10(varI / varQ);
+        const phaseDeg = (180 / Math.PI) * Math.asin(Math.max(-1, Math.min(1, covIQ / Math.sqrt(varI * varQ))));
+        const dcDbI = 20 * Math.log10(Math.abs(mI) + 1e-30);
+        const dcDbQ = 20 * Math.log10(Math.abs(mQ) + 1e-30);
+        const w = this.iqimbHistWrite;
+        this.iqimbHist[w * 4 + 0] = ampDb;
+        this.iqimbHist[w * 4 + 1] = phaseDeg;
+        this.iqimbHist[w * 4 + 2] = dcDbI;
+        this.iqimbHist[w * 4 + 3] = dcDbQ;
+        this.iqimbHistWrite = (w + 1) % Shell.IQIMB_HIST;
+        if (this.iqimbHistFilled < Shell.IQIMB_HIST) this.iqimbHistFilled++;
+        this.iqimbBlock = 0;
+        this.iqimbSumI = 0; this.iqimbSumQ = 0;
+        this.iqimbSumI2 = 0; this.iqimbSumQ2 = 0;
+        this.iqimbSumIQ = 0;
+      }
+    }
+  }
+  private renderIqimb() {
+    const canvas = this.$('iqimbCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 50 * dpr, padR = 60 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const N = this.iqimbHistFilled;
+    if (N < 2) { this.$('iqimbStatus').textContent = 'I/Q Imbalance · gathering blocks…'; return; }
+    const traces: Array<{ idx: number; col: string; lbl: string; lo: number; hi: number }> = [
+      { idx: 0, col: '#cfffa3', lbl: 'amp dB', lo: -3, hi: 3 },
+      { idx: 1, col: '#fa6',    lbl: 'phase °', lo: -10, hi: 10 },
+      { idx: 2, col: '#5af',    lbl: 'DC_I dB', lo: -80, hi: -20 },
+      { idx: 3, col: '#f5a',    lbl: 'DC_Q dB', lo: -80, hi: -20 },
+    ];
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + (i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+    }
+    // Plot each trace normalised independently into the same box.
+    const w = (this.iqimbHistWrite - 1 + Shell.IQIMB_HIST) % Shell.IQIMB_HIST;
+    for (let t = 0; t < traces.length; t++) {
+      ctx.strokeStyle = traces[t].col; ctx.fillStyle = traces[t].col; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      const lo = traces[t].lo, hi = traces[t].hi;
+      for (let i = 0; i < N; i++) {
+        const k = (this.iqimbHistWrite - N + i + Shell.IQIMB_HIST) % Shell.IQIMB_HIST;
+        const v = this.iqimbHist[k * 4 + traces[t].idx];
+        const x = padL + (i / Math.max(1, N - 1)) * plotW;
+        const yN = 1 - Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+        const y = padT + yN * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.fillText(`${traces[t].lbl} cur ${this.iqimbHist[w * 4 + traces[t].idx].toFixed(1)}`, padL + plotW + 4 * dpr, padT + (t * 16 + 12) * dpr);
+    }
+    this.$('iqimbStatus').textContent =
+      `I/Q Imbalance · amp (green) · phase (orange) · DC_I (cyan) · DC_Q (pink)`;
+  }
+
+  // ── Mirror-Image Rejection ──────────────────────────────────────
+  private feedMirr(iqBytes: Uint8Array) {
+    const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
+    const nPairs = (iqBytes.length / 4) | 0;
+    const N = this.mirrBufI.length;
+    let w = this.mirrBufWrite;
+    for (let i = 0; i < nPairs; i++) {
+      this.mirrBufI[w] = dv.getInt16(i * 4, false) / 32768;
+      this.mirrBufQ[w] = dv.getInt16(i * 4 + 2, false) / 32768;
+      w = (w + 1) % N;
+      if (this.mirrBufFill < N) this.mirrBufFill++;
+    }
+    this.mirrBufWrite = w;
+    if (this.mirrBufFill < N) return;
+    // Compute one ratio per buffer-full.
+    const Re = new Float32Array(N), Im = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const idx = (w + i) % N;
+      Re[i] = this.mirrBufI[idx]; Im[i] = this.mirrBufQ[idx];
+    }
+    this.fftInPlace(Re, Im);
+    let pPos = 0, pNeg = 0;
+    for (let k = 1; k < N / 2; k++) {
+      pPos += Re[k] * Re[k] + Im[k] * Im[k];
+      const kn = N - k;
+      pNeg += Re[kn] * Re[kn] + Im[kn] * Im[kn];
+    }
+    const rejDb = pPos + pNeg > 1e-30
+      ? Math.abs(10 * Math.log10(pPos / Math.max(1e-30, pNeg)))
+      : 0;
+    this.mirrHist[this.mirrHistWrite] = rejDb;
+    this.mirrHistWrite = (this.mirrHistWrite + 1) % Shell.MIRR_HIST;
+    if (this.mirrHistFilled < Shell.MIRR_HIST) this.mirrHistFilled++;
+  }
+  private renderMirr() {
+    const canvas = this.$('mirrCanvas') as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+    if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) { canvas.width = cssW * dpr; canvas.height = cssH * dpr; }
+    const W = canvas.width, H = canvas.height;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const ymin = 0, ymax = 80, range = ymax - ymin;
+    ctx.font = `${10 * dpr}px ui-monospace, monospace`;
+    ctx.fillStyle = '#557'; ctx.strokeStyle = '#1a2030'; ctx.lineWidth = 1 * dpr;
+    for (let db = 0; db <= 80; db += 20) {
+      const y = padT + (1 - (db - ymin) / range) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.fillText(`${db}dB`, 2 * dpr, y + 4 * dpr);
+    }
+    const N = this.mirrHistFilled;
+    let last = 0;
+    if (N > 1) {
+      ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const k = (this.mirrHistWrite - N + i + Shell.MIRR_HIST) % Shell.MIRR_HIST;
+        const v = this.mirrHist[k]; last = v;
+        const x = padL + (i / Math.max(1, Shell.MIRR_HIST - 1)) * plotW;
+        const y = padT + (1 - Math.max(0, Math.min(1, (v - ymin) / range))) * plotH;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    this.$('mirrStatus').textContent =
+      `Mirror-Image Rejection · current ${last.toFixed(1)} dB`;
+  }
+
   /** Toggle the WSPR-15 batch decoder. UTC-aligned on 15-minute
    *  boundaries (:00/:15/:30/:45). Defaults the dial to 137.500 kHz
    *  USB (the 2200 m WSPR-15 sub-band) if the receiver isn't already
@@ -19220,7 +24882,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
 
-    const padL = 36 * dpr, padR = 8 * dpr, padT = 6 * dpr, padB = 16 * dpr;
+    const padL = 36 * dpr, padR = 8 * dpr, padT = 22 * dpr, padB = 16 * dpr;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
     const fMin = 0, fMax = 3600;        // Hz
@@ -19244,7 +24906,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const hist = this.fmntHistory;
     if (hist.length < 2) {
       ctx.fillStyle = '#cfffa3';
-      ctx.fillText('FMNT — waiting for voice…', padL, padT + 12 * dpr);
+      ctx.fillText('FMNT — waiting for voice…', padL, 14 * dpr);
       this.$('fmntStatus').textContent = 'FMNT — voice formant tracker (F1/F2/F3 vs time)';
       return;
     }
@@ -21070,7 +26732,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
     else                      this.client.resumeWaterfall();
   }
 
-  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'ceps' | 'mhum' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
+  private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'ceps' | 'mhum' | 'welch' | 'crest' | 'mask' | 'rspec' | 'lpc' | 'gdelay' | 'abspec' | 'wavelet' | 'hht' | 'mel' | 'chro' | 'mspec' | 'acf' | 'sent' | 'sflat' | 'qq' | 'ciper' | 'phaseP' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
     // ── Self-managed overlay panels (MEM / AI) — these aren't part
     //    of the `name` union because they're opened from the keypad
     //    rather than via this dispatcher, but they live in the same
@@ -21124,6 +26786,24 @@ Lock state computed from the % of recent (last 50 samples) errors with
     if (this.envpOn   && name !== 'envp')   this.toggleEnvp();
     if (this.cepsOn   && name !== 'ceps')   this.toggleCeps();
     if (this.mhumOn   && name !== 'mhum')   this.toggleMhum();
+    if (this.welchOn  && name !== 'welch')  this.toggleWelch();
+    if (this.crestOn  && name !== 'crest')  this.toggleCrest();
+    if (this.maskOn   && name !== 'mask')   this.toggleMask();
+    if (this.rspecOn  && name !== 'rspec')  this.toggleRspec();
+    if (this.lpcOn    && name !== 'lpc')    this.toggleLpc();
+    if (this.gdelayOn && name !== 'gdelay') this.toggleGdelay();
+    if (this.abspecOn && name !== 'abspec') this.toggleAbspec();
+    if (this.waveletOn && name !== 'wavelet') this.toggleWavelet();
+    if (this.hhtOn    && name !== 'hht')    this.toggleHht();
+    if (this.melOn    && name !== 'mel')    this.toggleMel();
+    if (this.chroOn   && name !== 'chro')   this.toggleChro();
+    if (this.mspecOn  && name !== 'mspec')  this.toggleMspec();
+    if (this.acfOn    && name !== 'acf')    this.toggleAcf();
+    if (this.sentOn   && name !== 'sent')   this.toggleSent();
+    if (this.sflatOn  && name !== 'sflat')  this.toggleSflat();
+    if (this.qqOn     && name !== 'qq')     this.toggleQq();
+    if (this.ciperOn  && name !== 'ciper')  this.toggleCiper();
+    if (this.phasePOn && name !== 'phaseP') this.togglePhaseP();
     if (this.grayOn   && name !== 'gray')   this.toggleGray();
     if (this.vectOn   && name !== 'vect')   this.toggleVect();
     if (this.iqEyeOn  && name !== 'eye')    this.toggleIqEye();

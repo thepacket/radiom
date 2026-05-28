@@ -580,6 +580,72 @@ body.panel-ext .ft8-panel {
 #cepsPanel #cepsCanvas { min-height: 0; height: auto !important; }
 #mhumPanel { overflow: hidden; }
 #mhumPanel #mhumCanvas { min-height: 0; height: auto !important; }
+#welchPanel { overflow: hidden; }
+#welchPanel #welchCanvas { min-height: 0; height: auto !important; }
+#crestPanel { overflow: hidden; }
+#crestPanel #crestCanvas { min-height: 0; height: auto !important; }
+#maskPanel { overflow: hidden; }
+#maskPanel #maskCanvas { min-height: 0; height: auto !important; }
+#rspecPanel { overflow: hidden; }
+#rspecPanel #rspecCanvas { min-height: 0; height: auto !important; }
+#lpcPanel { overflow: hidden; }
+#lpcPanel #lpcCanvas { min-height: 0; height: auto !important; }
+#gdelayPanel { overflow: hidden; }
+#gdelayPanel #gdelayCanvas { min-height: 0; height: auto !important; }
+#abspecPanel { overflow: hidden; }
+#abspecPanel #abspecCanvas { min-height: 0; height: auto !important; }
+#waveletPanel { overflow: hidden; }
+#waveletPanel #waveletCanvas { min-height: 0; height: auto !important; }
+#cdenPanel { overflow: hidden; }
+#cdenPanel #cdenCanvas { min-height: 0; height: auto !important; }
+#evmPanel { overflow: hidden; }
+#evmPanel #evmCanvas { min-height: 0; height: auto !important; }
+#hocPanel { overflow: hidden; }
+#hocPanel #hocCanvas { min-height: 0; height: auto !important; }
+#pnoisePanel { overflow: hidden; }
+#pnoisePanel #pnoiseCanvas { min-height: 0; height: auto !important; }
+#mtdevPanel { overflow: hidden; }
+#mtdevPanel #mtdevCanvas { min-height: 0; height: auto !important; }
+#gpsdoPanel { overflow: hidden; }
+#gpsdoPanel #gpsdoCanvas { min-height: 0; height: auto !important; }
+#rdopPanel { overflow: hidden; }
+#rdopPanel #rdopCanvas { min-height: 0; height: auto !important; }
+#cohPanel { overflow: hidden; }
+#cohPanel #cohCanvas { min-height: 0; height: auto !important; }
+#hhtPanel { overflow: hidden; }
+#hhtPanel #hhtCanvas { min-height: 0; height: auto !important; }
+#melPanel { overflow: hidden; }
+#melPanel #melCanvas { min-height: 0; height: auto !important; }
+#chroPanel { overflow: hidden; }
+#chroPanel #chroCanvas { min-height: 0; height: auto !important; }
+#mspecPanel { overflow: hidden; }
+#mspecPanel #mspecCanvas { min-height: 0; height: auto !important; }
+#acfPanel { overflow: hidden; }
+#acfPanel #acfCanvas { min-height: 0; height: auto !important; }
+#sentPanel { overflow: hidden; }
+#sentPanel #sentCanvas { min-height: 0; height: auto !important; }
+#sflatPanel { overflow: hidden; }
+#sflatPanel #sflatCanvas { min-height: 0; height: auto !important; }
+#qqPanel { overflow: hidden; }
+#qqPanel #qqCanvas { min-height: 0; height: auto !important; }
+#ciperPanel { overflow: hidden; }
+#ciperPanel #ciperCanvas { min-height: 0; height: auto !important; }
+#phasePPanel { overflow: hidden; }
+#phasePPanel #phasePCanvas { min-height: 0; height: auto !important; }
+#wvdPanel { overflow: hidden; }
+#wvdPanel #wvdCanvas { min-height: 0; height: auto !important; }
+#stxfPanel { overflow: hidden; }
+#stxfPanel #stxfCanvas { min-height: 0; height: auto !important; }
+#scfPanel { overflow: hidden; }
+#scfPanel #scfCanvas { min-height: 0; height: auto !important; }
+#bispPanel { overflow: hidden; }
+#bispPanel #bispCanvas { min-height: 0; height: auto !important; }
+#ambigPanel { overflow: hidden; }
+#ambigPanel #ambigCanvas { min-height: 0; height: auto !important; }
+#iqimbPanel { overflow: hidden; }
+#iqimbPanel #iqimbCanvas { min-height: 0; height: auto !important; }
+#mirrPanel { overflow: hidden; }
+#mirrPanel #mirrCanvas { min-height: 0; height: auto !important; }
 #ifrqPanel { overflow: hidden; }
 #ifrqPanel #ifrqCanvas { min-height: 0; height: auto !important; }
 #aldvPanel { overflow: hidden; }

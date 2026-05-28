@@ -1245,6 +1245,32 @@ export class AudioPlayer {
   onCeps: ((s: Int16Array) => void) | null = null;
   /** Optional sink — Mains-Hum Tracker panel. */
   onMhum: ((s: Int16Array) => void) | null = null;
+  /** Optional sink — Welch PSD panel. Averaged periodogram. */
+  onWelch: ((s: Int16Array) => void) | null = null;
+  /** Optional sinks — 2026 audio-side viewer batch (Crest Factor /
+   *  Spectral Mask / Reassigned Spectrogram / LPC Envelope / Group
+   *  Delay / A-B Spectrum Compare / Wavelet Scalogram). Same int16
+   *  PCM stream as the other audio decoders. */
+  onCrest: ((s: Int16Array) => void) | null = null;
+  onMask: ((s: Int16Array) => void) | null = null;
+  onRspec: ((s: Int16Array) => void) | null = null;
+  onLpc: ((s: Int16Array) => void) | null = null;
+  onGdelay: ((s: Int16Array) => void) | null = null;
+  onAbspec: ((s: Int16Array) => void) | null = null;
+  onWavelet: ((s: Int16Array) => void) | null = null;
+  /** Optional sinks — 2026 audio-side viewer batch-3 (HHT / Mel / Chro
+   *  / ModSpec / ACF / Spectral Entropy / Spectral Flatness / Q-Q /
+   *  CI Periodogram / Phase Portrait). */
+  onHht: ((s: Int16Array) => void) | null = null;
+  onMel: ((s: Int16Array) => void) | null = null;
+  onChro: ((s: Int16Array) => void) | null = null;
+  onMspec: ((s: Int16Array) => void) | null = null;
+  onAcf: ((s: Int16Array) => void) | null = null;
+  onSent: ((s: Int16Array) => void) | null = null;
+  onSflat: ((s: Int16Array) => void) | null = null;
+  onQq: ((s: Int16Array) => void) | null = null;
+  onCiper: ((s: Int16Array) => void) | null = null;
+  onPhaseP: ((s: Int16Array) => void) | null = null;
   /** Optional sink — used by the QRSS slow-CW grabber. Receives the
    *  same demodulated int16 PCM stream as the other audio decoders;
    *  QRSS itself runs a long-window audio FFT for sub-Hz resolution. */
@@ -1396,7 +1422,7 @@ export class AudioPlayer {
     } else {
       src = decodePcmBe(frame.payload);
       // For PCM also produce int16 view for transcriber/recorder/ft8.
-      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onDsd || this.onMultimon || this.onMsk144 || this.onAis || this.onAcars || this.onTetrapol || this.onOp25 || this.onLrpt || this.onScope || this.onThd || this.onPersist || this.onEnvp || this.onCeps || this.onMhum || this.onVect || this.onQrss || this.onIqAudio) {
+      if (this.onRawSamples || this.onRecord || this.onFt8 || this.onCw || this.onRtty || this.onOlivia || this.onPsk || this.onClassify || this.onWefax || this.onNavtex || this.onMfsk || this.onAle || this.onPacket || this.onWspr || this.onWspr15 || this.onJs8 || this.onJt9 || this.onJt65 || this.onQ65 || this.onJt4 || this.onFst4 || this.onFst4w || this.onStanag || this.onStanag4539 || this.onHell || this.onSstv || this.onFreedv || this.onThrob || this.onSelcal || this.onPocsag || this.onDsd || this.onMultimon || this.onMsk144 || this.onAis || this.onAcars || this.onTetrapol || this.onOp25 || this.onLrpt || this.onScope || this.onThd || this.onPersist || this.onEnvp || this.onCeps || this.onMhum || this.onWelch || this.onCrest || this.onMask || this.onRspec || this.onLpc || this.onGdelay || this.onAbspec || this.onWavelet || this.onHht || this.onMel || this.onChro || this.onMspec || this.onAcf || this.onSent || this.onSflat || this.onQq || this.onCiper || this.onPhaseP || this.onVect || this.onQrss || this.onIqAudio) {
         const n = src.length;
         const i16 = new Int16Array(n);
         for (let i = 0; i < n; i++) i16[i] = src[i] * 32767 | 0;
@@ -1459,6 +1485,24 @@ export class AudioPlayer {
       if (this.onEnvp     && int16) this.onEnvp(int16);
       if (this.onCeps     && int16) this.onCeps(int16);
       if (this.onMhum     && int16) this.onMhum(int16);
+      if (this.onWelch    && int16) this.onWelch(int16);
+      if (this.onCrest    && int16) this.onCrest(int16);
+      if (this.onMask     && int16) this.onMask(int16);
+      if (this.onRspec    && int16) this.onRspec(int16);
+      if (this.onLpc      && int16) this.onLpc(int16);
+      if (this.onGdelay   && int16) this.onGdelay(int16);
+      if (this.onAbspec   && int16) this.onAbspec(int16);
+      if (this.onWavelet  && int16) this.onWavelet(int16);
+      if (this.onHht      && int16) this.onHht(int16);
+      if (this.onMel      && int16) this.onMel(int16);
+      if (this.onChro     && int16) this.onChro(int16);
+      if (this.onMspec    && int16) this.onMspec(int16);
+      if (this.onAcf      && int16) this.onAcf(int16);
+      if (this.onSent     && int16) this.onSent(int16);
+      if (this.onSflat    && int16) this.onSflat(int16);
+      if (this.onQq       && int16) this.onQq(int16);
+      if (this.onCiper    && int16) this.onCiper(int16);
+      if (this.onPhaseP   && int16) this.onPhaseP(int16);
       if (this.onVect     && int16) this.onVect(int16);
       if (this.onQrss     && int16) this.onQrss(int16);
       if (this.onIqAudio  && int16) this.onIqAudio(int16);
@@ -1631,6 +1675,24 @@ export class AudioPlayer {
     if (this.onEnvp)       this.onEnvp(int16);
     if (this.onCeps)       this.onCeps(int16);
     if (this.onMhum)       this.onMhum(int16);
+    if (this.onWelch)      this.onWelch(int16);
+    if (this.onCrest)      this.onCrest(int16);
+    if (this.onMask)       this.onMask(int16);
+    if (this.onRspec)      this.onRspec(int16);
+    if (this.onLpc)        this.onLpc(int16);
+    if (this.onGdelay)     this.onGdelay(int16);
+    if (this.onAbspec)     this.onAbspec(int16);
+    if (this.onWavelet)    this.onWavelet(int16);
+    if (this.onHht)        this.onHht(int16);
+    if (this.onMel)        this.onMel(int16);
+    if (this.onChro)       this.onChro(int16);
+    if (this.onMspec)      this.onMspec(int16);
+    if (this.onAcf)        this.onAcf(int16);
+    if (this.onSent)       this.onSent(int16);
+    if (this.onSflat)      this.onSflat(int16);
+    if (this.onQq)         this.onQq(int16);
+    if (this.onCiper)      this.onCiper(int16);
+    if (this.onPhaseP)     this.onPhaseP(int16);
     if (this.onVect)       this.onVect(int16);
     if (this.onIqAudio)    this.onIqAudio(int16);
     if (this.onQrss)       this.onQrss(int16);
