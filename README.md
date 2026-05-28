@@ -150,9 +150,44 @@ Additional cross-cutting tooling:
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
 
+### Viewer library (27 panels)
+
+Real-time analysis views reachable from the **VIEW** picker. Tap a row
+to open the panel; long-press a row to read its detailed help overlay.
+
+| View                            | Input | What it shows |
+|---------------------------------|-------|---------------|
+| Allan Deviation Plot            | IQ    | σ_y(τ) of a PLL-tracked carrier on log-log axes (0.1–100 s) — receiver / source stability metric |
+| Anti-Carrier                    | IQ    | Adaptive null on the dominant carrier so weaker signals nearby become audible |
+| Audio Constellation             | audio | Quadrature-mixed demod audio plotted as a constellation; optional Costas lock (BPSK / QPSK / 8PSK) |
+| Audio FFT                       | audio | 16384-pt high-resolution audio spectrum 0–6 kHz with running average + hover cursor |
+| Audio Scope                     | audio | Triggered oscilloscope on the demod audio, with auto / shot modes and adjustable trigger level / polarity |
+| Audio Spectrogram               | audio | Rolling waterfall of the demod audio with auto-stretch and contrast controls |
+| Carrier Zoom                    | IQ    | 32k-sample long-FFT for sub-Hz resolution around the dial — read frequency drift to fractions of a Hz |
+| Cepstrum / Pitch Contour        | audio | Real cepstrum + scrolling pitch trace; voice F₀, MFSK tone spacing, echo delays |
+| Channel-Sounder Echo Profile    | IQ    | Autocorrelation of \|z(t)\|² envelope vs lag τ (ms); multipath / skywave hop delays as peaks |
+| Clock Drift                     | IQ    | Parts-per-million offset of the receiver clock vs a stable reference carrier, with strip chart |
+| Cyclostationary CAF Heatmap     | IQ    | \|R(α,τ)\| over τ ∈ {4…512} samples; symbol rates of digital modes (PSK31, RTTY, FT8, MT63…) appear as bright stripes at α = baud |
+| Delay-Doppler Scattering        | IQ    | 2D channel scattering map (delay × Doppler) for ionospheric / multipath diagnosis |
+| Doppler Tracker                 | IQ    | PLL-locked Δf of the strongest in-band carrier vs time, 30-min strip |
+| Envelope PDF                    | audio | Probability density of the analytic envelope \|x + jH{x}\|; Rayleigh / Rician / bimodal / speech shape with heuristic classifier |
+| Eye Diagram                     | IQ    | Symbol-period folded IQ trace — eye open = clean digital reception, eye closed = noise / clock mismatch |
+| Instantaneous Frequency Trace   | IQ    | d/dt(arg z) on raw IQ as a 4-s scrolling trace; FM voice, chirped radar, drift slope all visible |
+| IQ Constellation                | IQ    | Raw I-vs-Q scatter of complex baseband |
+| Kurtosis vs Time                | IQ    | 4th-order moment of IQ amplitude — Gaussian noise sits at 3, sub-Gaussian (carrier) below, super-Gaussian (bursts) above |
+| Mains-Hum Tracker               | audio | Narrow-band FFT + scrolling waterfall over 0–250 Hz with reference lines at 50 / 60 / 100 / 120 / 150 / 180 / 200 / 240 Hz |
+| Over-The-Horizon Radar          | IQ    | Slow waterfall + FMCW / pulsed-sweep classifier for OTH radars (Container / ROTHR / JORN / …) |
+| RFI Visualizer                  | IQ    | Catalogues narrow tones detected in the IQ window over time — freq, magnitude, last-seen |
+| Sferic Lightning Visualizer     | IQ    | Counts wideband impulse spikes per second; rolling 60-s bar chart with peak / floor readout |
+| Signal Meter                    | RSSI  | Analog-style S-meter dial (dBm and S-units) |
+| Signal over Time Plot           | RSSI  | RSSI strip chart, last 60 s + full-session capture/export |
+| Symbol Clock Recovery Scope     | IQ    | PLL on the symbol-clock spectral line; plots tracked baud + phase error and reports lock state |
+| Vector / Lissajous Plot         | audio | x(t) vs x(t−τ) on demod audio with adjustable τ (1–3000 samples); reveals modulation symmetry / harmonics |
+| Voice Formant Tracker (exp)     | audio | Tracks the first three vocal-tract resonances (F1 / F2 / F3) on speech audio |
+
 ### Integrated signal generator (GEN button)
 
-Some shipped decoder can be exercised without a live HF signal via the
+Some shipped decoder can be exercised without a live signal via the
 **GEN** button in the function row. It opens a categorised picker
 (`openModesPicker`) of curated test samples — synthesized reference
 transmissions plus a handful of real off-air recordings — covering CW,
