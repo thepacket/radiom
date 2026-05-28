@@ -1829,6 +1829,7 @@ export class Shell {
           <button class="fnbtn" id="btnAmnotch" style="display:none" title="NT2 — moved to DSP panel">NT2</button>
           <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
           <button class="fnbtn" id="btnPshift" style="display:none" title="PS — Pitch shifter (DSP picker). Cycles off → −6 semitones → −12 semitones → +6 → +12 → off on each tap. Negative = lower pitch (good for fast CW), positive = higher pitch.">PS</button>
+          <button class="fnbtn" id="btnVad" style="display:none" title="VAD — Voice Activity Detection. Gates audio open when voice-like energy is detected, closed otherwise. Smarter than RSSI squelch: requires both energy (above adaptive noise floor) AND voice-characteristic zero-crossing rate. Cycles off → 6 dB (aggressive) → 12 dB (balanced) → 18 dB (strict) → off.">VAD</button>
           <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
           <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
           <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
@@ -2754,6 +2755,51 @@ export class Shell {
       if (Number.isFinite(s)) this.player.setPitchShifterSemitones(s);
       if (wasOn) this.player.setPitchShifterEnabled(true);
       updatePshiftBtn();
+    } catch { /* ignored */ }
+    // VAD — Voice Activity Detection / audio gate. Cycles aggressive
+    // (6 dB above noise floor) → balanced (12 dB) → strict (18 dB) → off.
+    // Reached via the DSP picker.
+    const vadSteps = [6, 12, 18];     // threshold in dB above noise floor
+    const vadLabels = ['aggressive', 'balanced', 'strict'];
+    const btnVad = this.$('btnVad') as HTMLButtonElement;
+    const updateVadBtn = () => {
+      const on = this.player.isVadEnabled();
+      const db = this.player.getVadThresholdDb();
+      btnVad.classList.toggle('active', on);
+      btnVad.textContent = on ? `VAD ${db}dB` : 'VAD';
+    };
+    btnVad.addEventListener('click', () => {
+      const on = this.player.isVadEnabled();
+      const cur = this.player.getVadThresholdDb();
+      if (!on) {
+        this.player.setVadThresholdDb(vadSteps[0]);
+        this.player.setVadEnabled(true);
+        this.banner(`VAD ${vadLabels[0]} (${vadSteps[0]} dB)`, 1200);
+        try { localStorage.setItem('radiom.vadOn', 'true');
+              localStorage.setItem('radiom.vadDb', String(vadSteps[0])); } catch {}
+      } else {
+        const idx = vadSteps.findIndex(s => Math.abs(s - cur) < 0.5);
+        const next = idx >= 0 && idx < vadSteps.length - 1 ? idx + 1 : -1;
+        if (next < 0) {
+          this.player.setVadEnabled(false);
+          this.banner('VAD OFF', 1000);
+          try { localStorage.setItem('radiom.vadOn', 'false'); } catch {}
+        } else {
+          this.player.setVadThresholdDb(vadSteps[next]);
+          this.banner(`VAD ${vadLabels[next]} (${vadSteps[next]} dB)`, 1200);
+          try { localStorage.setItem('radiom.vadDb', String(vadSteps[next])); } catch {}
+        }
+      }
+      updateVadBtn();
+    });
+    updateVadBtn();
+    // Restore last VAD state.
+    try {
+      const wasOn = localStorage.getItem('radiom.vadOn') === 'true';
+      const db = parseFloat(localStorage.getItem('radiom.vadDb') || '');
+      if (Number.isFinite(db)) this.player.setVadThresholdDb(db);
+      if (wasOn) this.player.setVadEnabled(true);
+      updateVadBtn();
     } catch { /* ignored */ }
     // WF row-duplication cycle button (1 → 2 → 3 → 4 → 1).
     const btnWfDup = this.$('btnWfDup') as HTMLButtonElement;
@@ -5040,6 +5086,7 @@ export class Shell {
       { label: 'AFF', selector: '#btnAfrm' },
       { label: 'EQ',  selector: '#btnEq' },
       { label: 'PS',  selector: '#btnPshift' },
+      { label: 'VAD', selector: '#btnVad' },
       { label: 'GEN', selector: '#btnModes' },
     ];
 

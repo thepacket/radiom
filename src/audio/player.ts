@@ -96,6 +96,14 @@ export class AudioPlayer {
   private pshiftLoading: Promise<void> | null = null;
   private pshiftEnabled = false;
   private pshiftSemitones = 0;
+  /** VAD — Voice Activity Detector / audio gate. Placed AFTER every
+   *  audio-domain transform (last in chain) so the operator hears the
+   *  cleanest possible signal when the gate is open. */
+  private vadNode: AudioWorkletNode | null = null;
+  private vadLoading: Promise<void> | null = null;
+  private vadEnabled = false;
+  private vadThresholdDb = 6;
+  private vadHangMs = 300;
   private vTrackEnabled = false;
   private vTrackTimer: number | null = null;
   private vTrackCenter = 1500;
@@ -809,8 +817,8 @@ export class AudioPlayer {
   }
 
   /** Rebuild the chain segment vAnt23 → (dckNode →)? (rfwNode →)?
-   *  (nb2Node →)? (pshiftNode →)? dhisOut. Called whenever any of the
-   *  insertable worklets loads so the new node is spliced in. */
+   *  (nb2Node →)? (pshiftNode →)? (vadNode →)? dhisOut. VAD sits at the
+   *  end so the gate decision sees the fully-processed audio. */
   private rewireDhisChain(): void {
     if (!this.vAnt23 || !this.dhisOut) return;
     try { this.vAnt23.disconnect(); } catch {}
@@ -818,11 +826,13 @@ export class AudioPlayer {
     try { this.rfwNode?.disconnect(); } catch {}
     try { this.nb2Node?.disconnect(); } catch {}
     try { this.pshiftNode?.disconnect(); } catch {}
+    try { this.vadNode?.disconnect(); } catch {}
     let prev: AudioNode = this.vAnt23;
-    if (this.dckNode)   { prev.connect(this.dckNode);   prev = this.dckNode; }
-    if (this.rfwNode)   { prev.connect(this.rfwNode);   prev = this.rfwNode; }
-    if (this.nb2Node)   { prev.connect(this.nb2Node);   prev = this.nb2Node; }
-    if (this.pshiftNode){ prev.connect(this.pshiftNode); prev = this.pshiftNode; }
+    if (this.dckNode)    { prev.connect(this.dckNode);    prev = this.dckNode; }
+    if (this.rfwNode)    { prev.connect(this.rfwNode);    prev = this.rfwNode; }
+    if (this.nb2Node)    { prev.connect(this.nb2Node);    prev = this.nb2Node; }
+    if (this.pshiftNode) { prev.connect(this.pshiftNode); prev = this.pshiftNode; }
+    if (this.vadNode)    { prev.connect(this.vadNode);    prev = this.vadNode; }
     prev.connect(this.dhisOut);
   }
 
@@ -941,6 +951,72 @@ export class AudioPlayer {
     this.pshiftNode?.port.postMessage({ semitones: this.pshiftSemitones });
   }
   getPitchShifterSemitones(): number { return this.pshiftSemitones; }
+
+  /** Lazy-load the VAD worklet. Spliced into the dhisOut chain after
+   *  every other DSP so the gate decision sees the cleanest signal. */
+  ensureVadWorklet(log: LogFn = () => {}): Promise<void> {
+    if (this.vadNode) return Promise.resolve();
+    if (this.vadLoading) return this.vadLoading;
+    const ctx = this.ensureGraph();
+    if (!ctx || !ctx.audioWorklet || !this.vAnt23 || !this.dhisOut) {
+      return Promise.resolve();
+    }
+    this.vadLoading = (async () => {
+      try {
+        await ctx.audioWorklet.addModule('/vad-worklet.js');
+        const node = new AudioWorkletNode(ctx, 'vad', {
+          numberOfInputs: 1, numberOfOutputs: 1,
+          channelCount: 1, channelCountMode: 'explicit',
+          channelInterpretation: 'speakers',
+          processorOptions: {
+            enabled: this.vadEnabled,
+            thresholdDb: this.vadThresholdDb,
+            hangMs: this.vadHangMs,
+          },
+        });
+        this.vadNode = node;
+        this.rewireDhisChain();
+        node.port.postMessage({
+          enabled: this.vadEnabled,
+          thresholdDb: this.vadThresholdDb,
+          hangMs: this.vadHangMs,
+        });
+        log('audio: VAD worklet loaded');
+      } catch (e) {
+        log('audio: VAD worklet load failed — ' + (e as Error).message);
+      }
+    })();
+    return this.vadLoading;
+  }
+
+  setVadEnabled(on: boolean): void {
+    this.vadEnabled = !!on;
+    if (this.vadNode) {
+      this.vadNode.port.postMessage({ enabled: this.vadEnabled });
+    } else {
+      this.ensureVadWorklet();
+    }
+  }
+  isVadEnabled(): boolean { return this.vadEnabled; }
+
+  /** Gate-opening threshold in dB above the adaptive noise floor.
+   *  6 = aggressive (opens easily, may false-trigger on noise),
+   *  12 = relaxed (only clear voice), 18 = very strict. Range 0..30. */
+  setVadThresholdDb(db: number): void {
+    if (!Number.isFinite(db)) return;
+    this.vadThresholdDb = Math.max(0, Math.min(30, db));
+    this.vadNode?.port.postMessage({ thresholdDb: this.vadThresholdDb });
+  }
+  getVadThresholdDb(): number { return this.vadThresholdDb; }
+
+  /** Hang time in ms — gate stays open this long after the last
+   *  energetic voice frame, so pauses between words don't clip. */
+  setVadHangMs(ms: number): void {
+    if (!Number.isFinite(ms)) return;
+    this.vadHangMs = Math.max(50, Math.min(2000, ms));
+    this.vadNode?.port.postMessage({ hangMs: this.vadHangMs });
+  }
+  getVadHangMs(): number { return this.vadHangMs; }
 
   /** Begin async-loading the RFWhisper (RNNoise) worklet. Idempotent.
    *  Fetches /rnnoise.wasm on the main thread (AudioWorklet context can't
