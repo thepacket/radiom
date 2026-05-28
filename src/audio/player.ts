@@ -104,14 +104,15 @@ export class AudioPlayer {
   private vadEnabled = false;
   private vadThresholdDb = 6;
   private vadHangMs = 300;
-  /** EXP — Downward expander / soft gate. Smoother than VAD: attenuates
-   *  rather than fully gates. Placed between pshiftNode and vadNode so
-   *  VAD's hard binary decision sees expanded audio. */
-  private expNode: AudioWorkletNode | null = null;
-  private expLoading: Promise<void> | null = null;
-  private expEnabled = false;
-  private expThresholdDb = 12;
-  private expRatio = 2;
+  /** SM — Tecsun-style RSSI-driven Soft Mute. A simple GainNode whose
+   *  gain is set on every incoming audio frame from f.rssiDbm. No
+   *  worklet needed — RSSI is already on the main thread and the
+   *  GainNode automation handles smooth transitions. Placed between
+   *  pshiftNode and vadNode in the chain. */
+  private softMuteGain: GainNode | null = null;
+  private softMuteEnabled = false;
+  private softMuteThresholdDbm = -110;     // mute below this RSSI
+  private softMuteRolloffDb = 10;          // dB below threshold → silent
   private vTrackEnabled = false;
   private vTrackTimer: number | null = null;
   private vTrackCenter = 1500;
@@ -825,9 +826,8 @@ export class AudioPlayer {
   }
 
   /** Rebuild the chain segment vAnt23 → (dckNode →)? (rfwNode →)?
-   *  (nb2Node →)? (pshiftNode →)? (expNode →)? (vadNode →)? dhisOut.
-   *  EXP sits between PS and VAD so VAD's hard gate decision sees
-   *  expanded audio; VAD remains the very last stage. */
+   *  (nb2Node →)? (pshiftNode →)? (softMuteGain →)? (vadNode →)?
+   *  dhisOut. SM (RSSI soft mute) sits between PS and VAD. */
   private rewireDhisChain(): void {
     if (!this.vAnt23 || !this.dhisOut) return;
     try { this.vAnt23.disconnect(); } catch {}
@@ -835,15 +835,15 @@ export class AudioPlayer {
     try { this.rfwNode?.disconnect(); } catch {}
     try { this.nb2Node?.disconnect(); } catch {}
     try { this.pshiftNode?.disconnect(); } catch {}
-    try { this.expNode?.disconnect(); } catch {}
+    try { this.softMuteGain?.disconnect(); } catch {}
     try { this.vadNode?.disconnect(); } catch {}
     let prev: AudioNode = this.vAnt23;
-    if (this.dckNode)    { prev.connect(this.dckNode);    prev = this.dckNode; }
-    if (this.rfwNode)    { prev.connect(this.rfwNode);    prev = this.rfwNode; }
-    if (this.nb2Node)    { prev.connect(this.nb2Node);    prev = this.nb2Node; }
-    if (this.pshiftNode) { prev.connect(this.pshiftNode); prev = this.pshiftNode; }
-    if (this.expNode)    { prev.connect(this.expNode);    prev = this.expNode; }
-    if (this.vadNode)    { prev.connect(this.vadNode);    prev = this.vadNode; }
+    if (this.dckNode)       { prev.connect(this.dckNode);       prev = this.dckNode; }
+    if (this.rfwNode)       { prev.connect(this.rfwNode);       prev = this.rfwNode; }
+    if (this.nb2Node)       { prev.connect(this.nb2Node);       prev = this.nb2Node; }
+    if (this.pshiftNode)    { prev.connect(this.pshiftNode);    prev = this.pshiftNode; }
+    if (this.softMuteGain)  { prev.connect(this.softMuteGain);  prev = this.softMuteGain; }
+    if (this.vadNode)       { prev.connect(this.vadNode);       prev = this.vadNode; }
     prev.connect(this.dhisOut);
   }
 
@@ -1029,71 +1029,93 @@ export class AudioPlayer {
   }
   getVadHangMs(): number { return this.vadHangMs; }
 
-  /** Lazy-load the Expander worklet. Spliced between pshiftNode and
-   *  vadNode so VAD's hard binary decision sees expanded audio. */
-  ensureExpanderWorklet(log: LogFn = () => {}): Promise<void> {
-    if (this.expNode) return Promise.resolve();
-    if (this.expLoading) return this.expLoading;
+  /** Lazy-create the soft-mute GainNode. Idempotent. */
+  ensureSoftMuteNode(): void {
+    if (this.softMuteGain) return;
     const ctx = this.ensureGraph();
-    if (!ctx || !ctx.audioWorklet || !this.vAnt23 || !this.dhisOut) {
-      return Promise.resolve();
-    }
-    this.expLoading = (async () => {
-      try {
-        await ctx.audioWorklet.addModule('/expander-worklet.js');
-        const node = new AudioWorkletNode(ctx, 'expander', {
-          numberOfInputs: 1, numberOfOutputs: 1,
-          channelCount: 1, channelCountMode: 'explicit',
-          channelInterpretation: 'speakers',
-          processorOptions: {
-            enabled: this.expEnabled,
-            thresholdDb: this.expThresholdDb,
-            ratio: this.expRatio,
-          },
-        });
-        this.expNode = node;
-        this.rewireDhisChain();
-        node.port.postMessage({
-          enabled: this.expEnabled,
-          thresholdDb: this.expThresholdDb,
-          ratio: this.expRatio,
-        });
-        log('audio: expander worklet loaded');
-      } catch (e) {
-        log('audio: expander worklet load failed — ' + (e as Error).message);
-      }
-    })();
-    return this.expLoading;
+    if (!ctx || !this.vAnt23 || !this.dhisOut) return;
+    this.softMuteGain = ctx.createGain();
+    this.softMuteGain.gain.value = 1;        // start fully open
+    this.rewireDhisChain();
   }
 
-  setExpanderEnabled(on: boolean): void {
-    this.expEnabled = !!on;
-    if (this.expNode) {
-      this.expNode.port.postMessage({ enabled: this.expEnabled });
-    } else {
-      this.ensureExpanderWorklet();
+  setSoftMuteEnabled(on: boolean): void {
+    this.softMuteEnabled = !!on;
+    this.ensureSoftMuteNode();
+    if (!on && this.softMuteGain) {
+      // Disabled → snap to unity, no further automation.
+      const ctx = this.softMuteGain.context;
+      this.softMuteGain.gain.cancelScheduledValues(ctx.currentTime);
+      this.softMuteGain.gain.setValueAtTime(1, ctx.currentTime);
     }
   }
-  isExpanderEnabled(): boolean { return this.expEnabled; }
+  isSoftMuteEnabled(): boolean { return this.softMuteEnabled; }
 
-  /** Threshold in dB above the adaptive noise floor at which the
-   *  expander stops attenuating (i.e. passes through unchanged).
-   *  Below threshold, attenuation scales with `ratio`. Range 0..30. */
-  setExpanderThresholdDb(db: number): void {
+  /** RSSI (dBm) at and above which the gate is fully open. Below this,
+   *  attenuation begins; `softMuteRolloffDb` below threshold = silent.
+   *  Typical range -120..-70 dBm. */
+  setSoftMuteThresholdDbm(dbm: number): void {
+    if (!Number.isFinite(dbm)) return;
+    this.softMuteThresholdDbm = Math.max(-140, Math.min(-30, dbm));
+  }
+  getSoftMuteThresholdDbm(): number { return this.softMuteThresholdDbm; }
+
+  /** Width of the soft-mute roll-off region in dB. Smaller = more
+   *  Tecsun-aggressive (steep cliff into silence). Range 1..30. */
+  setSoftMuteRolloffDb(db: number): void {
     if (!Number.isFinite(db)) return;
-    this.expThresholdDb = Math.max(0, Math.min(30, db));
-    this.expNode?.port.postMessage({ thresholdDb: this.expThresholdDb });
+    this.softMuteRolloffDb = Math.max(1, Math.min(30, db));
   }
-  getExpanderThresholdDb(): number { return this.expThresholdDb; }
+  getSoftMuteRolloffDb(): number { return this.softMuteRolloffDb; }
 
-  /** Downward expansion ratio. 1 = bypass. 2 = soft expansion (each
-   *  1 dB below threshold becomes 2 dB), 4 = aggressive. Range 1..10. */
-  setExpanderRatio(r: number): void {
-    if (!Number.isFinite(r)) return;
-    this.expRatio = Math.max(1, Math.min(10, r));
-    this.expNode?.port.postMessage({ ratio: this.expRatio });
+  /** Map the GATE knob (0..100) onto the Soft Mute. 0 = off (gate
+   *  fully open, no attenuation regardless of RSSI). 1..100 → RSSI
+   *  threshold from -134 dBm (near S0 / deep noise) up to -64 dBm
+   *  (well above S9). Rolloff stays at a fixed 10 dB. */
+  setSoftMuteFromKnob(knob: number): void {
+    if (!Number.isFinite(knob)) return;
+    knob = Math.max(0, Math.min(100, Math.round(knob)));
+    if (knob <= 0) {
+      this.setSoftMuteEnabled(false);
+      return;
+    }
+    // Linear: knob 1..100 → -134..-64 dBm.
+    const dbm = -134 + (knob - 1) * (70 / 99);
+    this.setSoftMuteThresholdDbm(dbm);
+    this.setSoftMuteRolloffDb(10);
+    this.setSoftMuteEnabled(true);
   }
-  getExpanderRatio(): number { return this.expRatio; }
+
+  /** Called from the audio-frame handler on every incoming frame.
+   *  Computes the soft-mute gain from the frame's RSSI and applies it
+   *  to softMuteGain.gain with a short setTargetAtTime ramp so the
+   *  audio transitions are click-free.
+   *
+   *  Gain curve (linear in the dB region between threshold and
+   *  threshold - rolloff):
+   *
+   *     rssi >= threshold                  → gain = 1
+   *     rssi <= threshold - rolloff        → gain = 0
+   *     else                               → gain = (rssi - (thresh - roll)) / roll
+   */
+  setSoftMuteGainFromRssi(rssiDbm: number): void {
+    if (!this.softMuteEnabled || !this.softMuteGain) return;
+    const t = this.softMuteThresholdDbm;
+    const r = this.softMuteRolloffDb;
+    let gain: number;
+    if (rssiDbm >= t) {
+      gain = 1;
+    } else if (rssiDbm <= t - r) {
+      gain = 0;
+    } else {
+      gain = (rssiDbm - (t - r)) / r;
+    }
+    const ctx = this.softMuteGain.context;
+    // setTargetAtTime: smooth exponential approach to target with ~25 ms
+    // time constant. Fast enough to feel responsive while tuning,
+    // slow enough to avoid clicks on step changes.
+    this.softMuteGain.gain.setTargetAtTime(gain, ctx.currentTime, 0.025);
+  }
 
   /** Begin async-loading the RFWhisper (RNNoise) worklet. Idempotent.
    *  Fetches /rnnoise.wasm on the main thread (AudioWorklet context can't
@@ -1544,25 +1566,8 @@ export class AudioPlayer {
    *  Unlike `setSquelchGate` (driven by Kiwi RSSI metadata, useless on
    *  OWRX) this works on every source — it looks at the decoded
    *  audio's amplitude. */
-  private gateDbfs: number | null = null;
-  /** Last applied gain, persisted across frames for the envelope
-   *  follower. 1.0 = fully open, 0 = fully closed. */
-  private gateGain = 1;
-  /** Expander ratio: 4:1 means 1 dB below threshold → 4 dB output
-   *  attenuation. Higher = harder gate; lower = subtler expansion. */
-  private static readonly GATE_RATIO = 4;
-  /** Soft-knee width in dB (centred on threshold). */
-  private static readonly GATE_KNEE_DB = 6;
-  /** EMA coefficients per frame for the envelope smoothing. ~10 ms
-   *  attack / ~150 ms release at typical 1024-sample @ 12 kHz frames
-   *  (≈ 85 ms / frame): use frame-rate-independent τ values mapped
-   *  back to α from the actual frame duration in pushAudio. */
-  private static readonly GATE_ATTACK_MS = 10;
-  private static readonly GATE_RELEASE_MS = 150;
-  setNoiseGate(thresholdDbfs: number | null): void {
-    this.gateDbfs = thresholdDbfs;
-    if (thresholdDbfs == null) this.gateGain = 1;
-  }
+  // The old audio-RMS noise gate was removed in 0.4.28; the GATE knob
+  // now drives the RSSI Soft Mute below (player.setSoftMuteFromKnob).
   /** When true, Kiwi audio is NOT routed to any decoder sink. Used by the
    *  MODES picker's "feed → decoder" mode so injected test samples aren't
    *  mixed with live Kiwi input. Recorder/FT8/raw sinks remain active. */
@@ -1724,55 +1729,6 @@ export class AudioPlayer {
     // the audible playback drops to silence below the threshold.
     if (this.squelchDbm != null && frame.rssiDbm < this.squelchDbm) {
       src = new Float32Array(src.length);   // zero-filled
-    }
-    // GATE — soft downward expander on the demodulated audio. Runs
-    // *after* the RSSI squelch so the two stack. See setNoiseGate for
-    // the full design notes; quick summary: above threshold → unity,
-    // below → smooth (RATIO−1)×dB attenuation with a soft knee, EMA-
-    // smoothed with separate attack/release time-constants so it
-    // doesn't click between speech consonants.
-    if (this.gateDbfs != null && src.length > 0) {
-      let sumSq = 0;
-      for (let i = 0; i < src.length; i++) { const v = src[i]; sumSq += v * v; }
-      const rms = Math.sqrt(sumSq / src.length);
-      const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -200;
-      const T = this.gateDbfs;
-      const R = AudioPlayer.GATE_RATIO;
-      const K = AudioPlayer.GATE_KNEE_DB;
-      // Target gain (in dB) from the expander curve with soft knee.
-      // x = level − threshold (positive when above threshold).
-      const x = rmsDb - T;
-      let attenDb: number;
-      if (x >= K / 2) {
-        attenDb = 0;
-      } else if (x <= -K / 2) {
-        attenDb = (R - 1) * (-x);   // below knee: full expansion
-      } else {
-        // Quadratic soft knee: smoothly interpolates from 0 dB attenuation
-        // at +K/2 to (R−1)·(K/2) at −K/2. Standard compressor-knee shape
-        // applied symmetrically.
-        const t = (K / 2 - x) / K;  // 0 at +K/2, 1 at −K/2
-        attenDb = (R - 1) * (K / 2) * t * t;
-      }
-      const targetGain = Math.pow(10, -attenDb / 20);
-      // Frame-rate-independent EMA: choose α from how many ms this
-      // frame represents. Faster α when target < current (release is
-      // actually a fall here since we're "releasing" the attenuation
-      // when audio comes back).
-      const frameMs = (src.length / this.inputRate) * 1000;
-      const tauMs = targetGain < this.gateGain
-        ? AudioPlayer.GATE_ATTACK_MS    // gain dropping → attack (fast)
-        : AudioPlayer.GATE_RELEASE_MS;  // gain rising  → release (slow)
-      const alpha = 1 - Math.exp(-frameMs / Math.max(1, tauMs));
-      this.gateGain += (targetGain - this.gateGain) * alpha;
-      // Apply the smoothed gain to a fresh copy so we don't mutate
-      // whatever upstream holds the original buffer.
-      const g = this.gateGain;
-      if (g < 0.999) {
-        const out = new Float32Array(src.length);
-        for (let i = 0; i < src.length; i++) out[i] = src[i] * g;
-        src = out;
-      }
     }
     if (src.length === 0) return;
     const dstRate = this.ctx.sampleRate;

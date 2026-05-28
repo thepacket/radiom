@@ -1796,12 +1796,12 @@ export class Shell {
 
         <div class="knobs">
           ${(() => {
-            const labels = ['VOL','SQL','GATE','RF','LoF','HiF','LoW','HiW','VTG'];
+            const labels = ['VOL','SQL','SM','RF','LoF','HiF','LoW','HiW','VTG'];
             const slugs  = ['vol','sql','gate','rf','lof','hif','wlo','whi','vtg'];
             const titles: Record<string, string> = {
               VOL: 'VOL — speaker output level (0–100%)',
               SQL: 'SQL — squelch threshold (S-units above noise floor). Audio mutes when RSSI falls below this',
-              GATE:'GATE — audio noise gate. 0 = off; otherwise mutes the speaker when the per-frame audio RMS falls below the threshold. Knob value maps linearly to −100…0 dBFS',
+              SM:  'SM — Tecsun-style Soft Mute. 0 = off; otherwise smoothly mutes the audio when received signal strength (RSSI) falls below the knob threshold. Knob value 1..100 maps linearly to −134..−64 dBm RSSI; rolloff fixed at 10 dB. Watches RF level, not audio content — so it never chops voice or sustained signals (FT8, CW) at strong RSSI',
               RF:  'RF — server-side RF gain. Cycles SLOW / MED / FAST / OFF via the MED button; this knob is the manual override when AGC is OFF',
               LoF: 'LoF — low-cut frequency of the audio passband (Hz)',
               HiF: 'HiF — high-cut frequency of the audio passband (Hz)',
@@ -1830,7 +1830,6 @@ export class Shell {
           <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
           <button class="fnbtn" id="btnPshift" style="display:none" title="PS — Pitch shifter (DSP picker). Cycles off → −6 semitones → −12 semitones → +6 → +12 → off on each tap. Negative = lower pitch (good for fast CW), positive = higher pitch.">PS</button>
           <button class="fnbtn" id="btnVad" style="display:none" title="VAD — Voice Activity Detection. Gates audio open when voice-like energy is detected, closed otherwise. Smarter than RSSI squelch: requires both energy (above adaptive noise floor) AND voice-characteristic zero-crossing rate. Cycles off → 6 dB (aggressive) → 12 dB (balanced) → 18 dB (strict) → off.">VAD</button>
-          <button class="fnbtn" id="btnExp" style="display:none" title="EXP — Downward audio expander / soft gate. Smoothly attenuates audio below an adaptive (valley-follower) threshold instead of fully gating like VAD. Voice-aware timing: 200 ms hold + 350 ms release bridges SSB inter-syllable gaps without chopping. Voice-agnostic — works equally well on music / broadcast / CW. Cycles off → gentle (8 dB / 2.5:1) → medium (14 dB / 4:1) → strong (20 dB / 6:1, hits −40 dB floor cap) → off.">EXP</button>
           <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
           <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
           <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
@@ -2802,66 +2801,8 @@ export class Shell {
       if (wasOn) this.player.setVadEnabled(true);
       updateVadBtn();
     } catch { /* ignored */ }
-    // EXP — downward audio expander / soft gate. Cycles three presets:
-    // gentle (6 dB, 1.5:1) → medium (12 dB, 2:1) → strong (18 dB, 3:1).
-    // Reached via the DSP picker.
-    // EXP presets — chosen so even the gentlest setting is audibly
-    // distinguishable. With a valley-follower noise floor that locks
-    // onto the actual background level, ratio 1.5:1 produced only ~3 dB
-    // of attenuation between voice and pause — inaudible. These steps
-    // hit the −40 dB floor cap on the strong setting during real
-    // pauses, and ~−12 dB at gentle.
-    const expPresets: Array<{ db: number; ratio: number; label: string }> = [
-      { db: 8,  ratio: 2.5, label: 'gentle'   },
-      { db: 14, ratio: 4.0, label: 'medium'   },
-      { db: 20, ratio: 6.0, label: 'strong'   },
-    ];
-    const btnExp = this.$('btnExp') as HTMLButtonElement;
-    const updateExpBtn = () => {
-      const on = this.player.isExpanderEnabled();
-      const db = this.player.getExpanderThresholdDb();
-      const r  = this.player.getExpanderRatio();
-      btnExp.classList.toggle('active', on);
-      btnExp.textContent = on ? `EXP ${db}dB ${r}:1` : 'EXP';
-    };
-    btnExp.addEventListener('click', () => {
-      const on = this.player.isExpanderEnabled();
-      const curDb = this.player.getExpanderThresholdDb();
-      if (!on) {
-        this.player.setExpanderThresholdDb(expPresets[0].db);
-        this.player.setExpanderRatio(expPresets[0].ratio);
-        this.player.setExpanderEnabled(true);
-        this.banner(`EXP ${expPresets[0].label} (${expPresets[0].db} dB, ${expPresets[0].ratio}:1)`, 1200);
-        try { localStorage.setItem('radiom.expOn', 'true');
-              localStorage.setItem('radiom.expIdx', '0'); } catch {}
-      } else {
-        const idx = expPresets.findIndex(p => Math.abs(p.db - curDb) < 0.5);
-        const next = idx >= 0 && idx < expPresets.length - 1 ? idx + 1 : -1;
-        if (next < 0) {
-          this.player.setExpanderEnabled(false);
-          this.banner('EXP OFF', 1000);
-          try { localStorage.setItem('radiom.expOn', 'false'); } catch {}
-        } else {
-          this.player.setExpanderThresholdDb(expPresets[next].db);
-          this.player.setExpanderRatio(expPresets[next].ratio);
-          this.banner(`EXP ${expPresets[next].label} (${expPresets[next].db} dB, ${expPresets[next].ratio}:1)`, 1200);
-          try { localStorage.setItem('radiom.expIdx', String(next)); } catch {}
-        }
-      }
-      updateExpBtn();
-    });
-    updateExpBtn();
-    // Restore last EXP state.
-    try {
-      const wasOn = localStorage.getItem('radiom.expOn') === 'true';
-      const idx = parseInt(localStorage.getItem('radiom.expIdx') || '', 10);
-      if (Number.isFinite(idx) && idx >= 0 && idx < expPresets.length) {
-        this.player.setExpanderThresholdDb(expPresets[idx].db);
-        this.player.setExpanderRatio(expPresets[idx].ratio);
-      }
-      if (wasOn) this.player.setExpanderEnabled(true);
-      updateExpBtn();
-    } catch { /* ignored */ }
+    // (GATE knob now drives the Tecsun-style Soft Mute — see
+    // setKnob('gate') above. No DSP-picker entry needed.)
     // WF row-duplication cycle button (1 → 2 → 3 → 4 → 1).
     const btnWfDup = this.$('btnWfDup') as HTMLButtonElement;
     btnWfDup.textContent = `x ${this.wfDup}`;
@@ -5147,7 +5088,6 @@ export class Shell {
       { label: 'AFF', selector: '#btnAfrm' },
       { label: 'EQ',  selector: '#btnEq' },
       { label: 'PS',  selector: '#btnPshift' },
-      { label: 'EXP', selector: '#btnExp' },
       { label: 'VAD', selector: '#btnVad' },
       { label: 'GEN', selector: '#btnModes' },
     ];
@@ -7681,9 +7621,11 @@ Lock state computed from the % of recent (last 50 samples) errors with
     } else if (id === 'gate') {
       this.gate = clamp(Math.round(v), 0, 100);
       localStorage.setItem('radiom.gate', String(this.gate));
-      // 0 = gate off (null threshold). 1..100 → -100..-1 dBFS.
-      const dbfs = this.gate > 0 ? -100 + this.gate : null;
-      this.player.setNoiseGate(dbfs);
+      // GATE knob now drives the Tecsun-style Soft Mute: knob value
+      // maps to an RSSI threshold (-134..-64 dBm); below that level
+      // the audio is smoothly attenuated to silence over a 10 dB
+      // roll-off. 0 = off. See player.setSoftMuteFromKnob.
+      this.player.setSoftMuteFromKnob(this.gate);
     } else if (id === 'rf') {
       this.rfGain = clamp(Math.round(v), 0, 120);
       localStorage.setItem('radiom.rfGain', String(this.rfGain));
@@ -9006,6 +8948,10 @@ Lock state computed from the % of recent (last 50 samples) errors with
         const a = 0.2;
         this.smeterDbm = this.smeterDbm * (1 - a) + f.rssiDbm * a;
         if (this.sPlotOn) this.sPlotPushSample(f.rssiDbm);
+        // Tecsun-style Soft Mute (DSP picker → SM). Drive the GainNode
+        // from the smoothed S-meter dBm value, not the raw per-frame
+        // dBm, so the mute doesn't flicker on momentary RSSI spikes.
+        this.player.setSoftMuteGainFromRssi(this.smeterDbm);
       },
       onWaterfall: (f: WaterfallFrame) => {
         this.lastFrameTs = Date.now();
@@ -9110,7 +9056,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
     this.client.setTune({ mode: this.mode, freqKHz: this.freqKHz, lowCutHz: this.lowCut, highCutHz: this.highCut });
     this.client.setSquelch(this.sql);
     this.player.setSquelchGate(this.sql > 0 ? -111 + this.sql : null);
-    this.player.setNoiseGate(this.gate > 0 ? -100 + this.gate : null);
+    this.player.setSoftMuteFromKnob(this.gate);
     this.client.setNoiseReduction(this.nrMode);
     this.client.setAdpcm(this.toggles.adpcm);
     this.client.setWfSpeed(this.wfSpeed);
@@ -11810,11 +11756,13 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const root = document.createElement('div');
     root.className = 'band-modal ftx-picker';
     root.dataset.pickerId = 'bw';
+    const active = this.activeBwPreset;
     root.innerHTML = `
       <div class="band-grid">
         ${FILTER_WIDTHS.map((w) => {
           const label = w < 1 ? `${Math.round(w * 1000)}` : `${w}k`;
-          return `<button class="band-btn" data-bw="${w}">${label}</button>`;
+          const isActive = active != null && Math.abs(w - active) < 1e-6;
+          return `<button class="band-btn ${isActive ? 'active' : ''}" data-bw="${w}">${label}</button>`;
         }).join('')}
       </div>
     `;
