@@ -150,7 +150,7 @@ Additional cross-cutting tooling:
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
 
-### Viewer library (60 panels)
+### Viewer library (59 panels)
 
 Real-time analysis views reachable from the **VIEW** picker. Tap a row
 to open the panel; long-press a row to read its detailed help overlay.
@@ -160,7 +160,6 @@ to open the panel; long-press a row to read its detailed help overlay.
 | A/B Spectrum Compare            | audio | Tap "A" to lock current Welch PSD as reference; display shows current (green), reference (orange), and difference in dB (white) |
 | Allan Deviation Plot            | IQ    | σ_y(τ) of a PLL-tracked carrier on log-log axes (0.1–100 s) — receiver / source stability metric |
 | Ambiguity Function              | IQ    | Full 2D \|χ(τ, ν)\| of the captured first-second reference waveform against itself; range-Doppler resolution map |
-| Anti-Carrier                    | IQ    | Adaptive null on the dominant carrier so weaker signals nearby become audible |
 | Audio Constellation             | audio | Quadrature-mixed demod audio plotted as a constellation; optional Costas lock (BPSK / QPSK / 8PSK) |
 | Audio FFT                       | audio | 16384-pt high-resolution audio spectrum 0–6 kHz with running average + hover cursor |
 | Audio Scope                     | audio | Triggered oscilloscope on the demod audio, with auto / shot modes and adjustable trigger level / polarity |

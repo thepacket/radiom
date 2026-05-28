@@ -2139,7 +2139,7 @@ export class Shell {
             <button class="kpbtn c" data-cmd="modePicker" title="Pick demodulation mode — list filtered by the active server (Kiwi vs OpenWebRX)">MODE</button>
             <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
             <button class="kpbtn kpbtn-aux" tabindex="-1" title="Use MODE picker">·</button>
-            <button class="kpbtn" id="btnAntc" title="ANTC — anti-carrier visualizer. Shows the residual carrier offset after the SAM PLL has locked (useful for tuning ECSS-style)">ANTC</button>
+            <button class="kpbtn" id="btnAntc" style="display:none" title="AC — Anti-Carrier diagnostic. Companion to the NT (auto-notch carrier-killer) DSP function: shows the before/after spectrum overlay around the strongest narrow tone in a 4096-sample windowed FFT, so you can see what the carrier null is acting on. Reached from the DSP picker.">ANTC</button>
             <button class="kpbtn" id="btnDlds" title="Delay-Doppler scattering function — HF channel sounder">DLDS</button>
             <button class="kpbtn" id="btnDopp" title="DOPP — Doppler tracker. Displays frequency-drift slope of the strongest in-band signal vs time (HF DX rising / falling fade)">DOPP</button>
             <button class="kpbtn" id="btnIfrq" style="display:none" title="IFRQ — instantaneous frequency trace. Plots d/dt(arg z(t)) of the raw IQ stream against time. Steady carrier → flat line at the offset. FM voice → squiggly band. Chirped radar → ramps. Drift → slope. Complements the DOPP tracker by showing every freq component, not just one locked carrier.">IFRQ</button>
@@ -4720,7 +4720,6 @@ export class Shell {
     this.closeAllCategoryPanels();   // see openDecPicker note
     const PICKER_ID = 'disp';
     const ENTRIES: Array<{ label: string; selector: string }> = [
-      { label: 'Anti-Carrier', selector: '#btnAntc' },
       { label: 'Delay-Doppler Scattering', selector: '#btnDlds' },
       { label: 'Doppler Tracker', selector: '#btnDopp' },
       { label: 'Instantaneous Frequency Trace', selector: '#btnIfrq' },
@@ -4986,6 +4985,7 @@ export class Shell {
       { label: 'AGC', selector: '#btnAgc' },
       { label: 'NB',  selector: '[data-cmd="nb"]' },
       { label: 'NT',  selector: '[data-cmd="antch"]' },
+      { label: 'AC',  selector: '#btnAntc' },
       { label: 'NR',  selector: '[data-cmd="nr"]' },
       { label: 'CP',  selector: '[data-toggle="comp"]' },
       { label: 'NB2', selector: '#btnNb2' },
@@ -5712,32 +5712,39 @@ For raw "all frequency content at once" instead of one locked carrier,
 use the Instantaneous Frequency Trace.`,
 
       btnAntc:
-`# Anti-Carrier
+`# Anti-Carrier (AC) — DSP diagnostic
 
-Adaptive nulling of the dominant carrier within the IQ window. Shows
-what's "underneath" the loudest signal in the passband.
+Visualisation companion to the **NT** (auto-notch carrier-killer)
+DSP function. Reached from the **DSP** picker, not the VIEW picker.
 
-## Display
+Every render tick, locks onto the strongest narrow tone in a
+4096-sample windowed FFT around the dial, then plots two overlaid
+spectra:
 
-A waterfall or spectrum with the strongest carrier suppressed in real
-time. The notch tracks the carrier if it drifts.
+- **Red, dim** — the spectrum *before* the carrier is removed
+- **Green, bright** — the spectrum *after* the locked carrier (and
+  its ±1 immediate neighbours) are zeroed
 
-## Reading the result
+## Status line
 
-- **A bright line where the carrier was, suddenly dark** — null is
-  working
-- **Weak features now visible beside the original carrier** — those
-  were the signals the loud carrier was masking
-- **Residual fringes around the null** — narrow-band notch shape; the
-  immediate neighbours of the carrier are still partly suppressed
+\`AC — carrier XX.X Hz · YY dB\` — locked carrier offset (relative
+to the dial) and its peak magnitude.
 
 ## Use it for
 
-- Listening "through" a strong nearby broadcast carrier to weaker
-  signals on the same channel
-- Finding a digital sub-band hidden under an SSB conversation
-- Diagnosing in-band intermodulation products that hide near a
-  carrier`,
+- See what NT is acting on — confirm it's locked to the right tone
+- Tune the dial to put the strongest carrier inside the ±2 kHz
+  window
+- Find a digital sub-band hidden under an SSB conversation
+- Diagnose in-band intermodulation products that hide near a
+  carrier
+
+## Note
+
+The audio-chain carrier removal is performed by the **NT** DSP
+toggle (\`[data-cmd="antch"]\`). The AC panel is a diagnostic
+display only; opening it does not by itself attenuate the carrier
+in your headphones. Use NT for that.`,
 
       btnPpmc:
 `# Clock Drift
