@@ -462,6 +462,15 @@ export class Shell {
   private lastWfBins: Uint8Array | null = null;
   private lastWfXBinServer = 0;
   private noDataTimer: number | null = null;
+  /** Server connection waiting to be logged to localStorage.serverHistory.
+   *  Set by switchToServer, committed by the onStatus handler when
+   *  s.connected first goes true. Cleared on disconnect so a half-open
+   *  session that never reached "connected" is never recorded. */
+  private pendingHistoryEntry: { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string } | null = null;
+  /** Last fully-connected source — used to debounce the onStatus
+   *  history commit so flickering connection state doesn't spam the
+   *  log with duplicates within a single picker-click session. */
+  private lastConnectedKey: string | null = null;
   private weakAudioCtx: AudioContext | null = null;
   private weakSp: ScriptProcessorNode | null = null;
   private weakOutQueue: Float32Array[] = [];
@@ -614,9 +623,10 @@ export class Shell {
       <header class="topbar">
         <button id="menu" class="menu">☰</button>
         <button id="help" class="menu" aria-label="decoder help" title="Help · all buttons / knobs reference">?</button>
-        <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">KiwiSDR</button>
+        <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">Kiwi</button>
         <button id="owrxPicker" class="kpbtn source-btn" title="OpenWebRx — switch source and open the OpenWebRx server picker (mutually exclusive with KiwiSDR / RTL)" aria-label="OpenWebRx source">OpenWebRx</button>
         <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">RTL</button>
+        <button id="histPicker" class="menu" title="Recent server connections — click any row to switch source and reconnect" aria-label="recent server connections">↺</button>
         <!-- Hidden: still used internally to hold the host:port string. -->
         <input id="server" class="server" style="display:none" value="${escapeAttr(localStorage.getItem('radiom.lastServer') || '')}" placeholder="host:port" spellcheck="false" readonly />
         <span id="connDot" class="conn-dot" data-state="off" aria-label="connection status"></span>
@@ -4315,12 +4325,7 @@ export class Shell {
       localStorage.setItem('radiom.activeSource', 'kiwi');
       this.refreshSourceButtonState();
       openServerList((url, entry) => {
-        (this.$('server') as HTMLInputElement).value = url;
-        localStorage.setItem('radiom.lastServer', url);
-        if (this.powered) this.disconnect();
-        this.seedUsersFromEntry(entry);
-        if (this.powered) this.connect();
-        this.refresh();
+        this.switchToServer('kiwi', url, entry?.name);
       });
     });
     // OpenWebRx: short tap → server picker; long-press while already
@@ -4334,12 +4339,7 @@ export class Shell {
         localStorage.setItem('radiom.activeSource', 'owrx');
         this.refreshSourceButtonState();
         openOwrxList((url, entry) => {
-          localStorage.setItem('radiom.lastOwrxServer', url);
-          (this.$('server') as HTMLInputElement).value = url;
-          if (this.powered) this.disconnect();
-          if (this.powered) this.connect();
-          const name = entry?.name ? ` — ${entry.name.slice(0, 50)}` : '';
-          this.banner(`OpenWebRX: ${url}${name}`, 2500);
+          this.switchToServer('owrx', url, entry?.name);
         });
       };
       btn.addEventListener('pointerdown', (e) => {
@@ -4361,13 +4361,13 @@ export class Shell {
       localStorage.setItem('radiom.activeSource', 'rtl');
       this.refreshSourceButtonState();
       openRtlList((url, entry) => {
-        localStorage.setItem('radiom.lastRtlServer', url);
-        (this.$('server') as HTMLInputElement).value = url;
-        if (this.powered) this.disconnect();
-        if (this.powered) this.connect();
-        const name = entry?.name ? ` — ${entry.name.slice(0, 50)}` : '';
-        this.banner(`rtl_tcp: ${url}${name}`, 2500);
+        this.switchToServer('rtl', url, entry?.name);
       });
+    });
+    // 🕘 Recent-server log — tap to see a flat list of the last few
+    // connections (across all source kinds), tap a row to re-connect.
+    this.$('histPicker').addEventListener('click', () => {
+      this.openServerHistoryPicker();
     });
 
     // Keypad
@@ -4558,6 +4558,124 @@ export class Shell {
       const el = this.$(id) as HTMLElement | null;
       el?.classList.toggle('active', src === kind);
     }
+  }
+
+  /** Single source-switch path used by every picker callback AND by
+   *  the recent-history picker. Centralises the disconnect/reconnect,
+   *  active-button refresh, localStorage write, banner toast, and
+   *  history-log append. */
+  private switchToServer(kind: 'kiwi' | 'owrx' | 'rtl', url: string, name?: string): void {
+    localStorage.setItem('radiom.activeSource', kind);
+    this.refreshSourceButtonState();
+    (this.$('server') as HTMLInputElement).value = url;
+    if (kind === 'kiwi') {
+      localStorage.setItem('radiom.lastServer', url);
+      if (this.powered) this.disconnect();
+      this.seedUsersFromEntry(findServerEntry(url));
+      if (this.powered) this.connect();
+      this.refresh();
+    } else if (kind === 'owrx') {
+      localStorage.setItem('radiom.lastOwrxServer', url);
+      if (this.powered) this.disconnect();
+      if (this.powered) this.connect();
+    } else {
+      localStorage.setItem('radiom.lastRtlServer', url);
+      if (this.powered) this.disconnect();
+      if (this.powered) this.connect();
+    }
+    const labels: Record<string, string> = { kiwi: 'KiwiSDR', owrx: 'OpenWebRX', rtl: 'rtl_tcp' };
+    const tail = name ? ` — ${name.slice(0, 50)}` : '';
+    this.banner(`${labels[kind]}: ${url}${tail}`, 2500);
+    // Stage the history entry; the onStatus handler commits it once the
+    // WebSocket actually reports `connected: true`. If the connection
+    // never succeeds, disconnect() clears the pending entry and nothing
+    // is logged.
+    this.pendingHistoryEntry = { kind, url, name };
+    this.lastConnectedKey = null;
+  }
+
+  /** Append a server-connection event to localStorage.serverHistory.
+   *  Dedupes by `${kind}:${url}` — repeating a known connection just
+   *  bubbles it to the top with a refreshed timestamp. Capped at 30. */
+  private recordServerConnection(kind: 'kiwi' | 'owrx' | 'rtl', url: string, name?: string): void {
+    if (!url) return;
+    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string; ts: number };
+    let hist: HistEntry[] = [];
+    try {
+      const raw = localStorage.getItem('radiom.serverHistory');
+      if (raw) hist = JSON.parse(raw) as HistEntry[];
+      if (!Array.isArray(hist)) hist = [];
+    } catch { hist = []; }
+    const key = `${kind}:${url}`;
+    hist = hist.filter(e => `${e.kind}:${e.url}` !== key);
+    hist.unshift({ kind, url, name, ts: Date.now() });
+    if (hist.length > 30) hist.length = 30;
+    try { localStorage.setItem('radiom.serverHistory', JSON.stringify(hist)); } catch { /* quota */ }
+  }
+
+  /** Open the 🕘 Recent Servers picker. Each row shows the source kind,
+   *  the URL, the server's display name (if known), and a relative
+   *  timestamp. Tapping a row re-runs switchToServer for that entry. */
+  private openServerHistoryPicker(): void {
+    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string; ts: number };
+    let hist: HistEntry[] = [];
+    try {
+      const raw = localStorage.getItem('radiom.serverHistory');
+      if (raw) hist = JSON.parse(raw) as HistEntry[];
+      if (!Array.isArray(hist)) hist = [];
+    } catch { hist = []; }
+    this.closeAllBandModals();
+    const PICKER_ID = 'hist';
+    const root = document.createElement('div');
+    root.className = 'band-modal rtty-picker dec-picker hist-picker';
+    root.dataset.pickerId = PICKER_ID;
+    const relTime = (ms: number) => {
+      const dt = Math.max(0, Date.now() - ms);
+      if (dt < 60_000)        return 'just now';
+      if (dt < 3_600_000)     return `${Math.floor(dt / 60_000)} m ago`;
+      if (dt < 86_400_000)    return `${Math.floor(dt / 3_600_000)} h ago`;
+      const days = Math.floor(dt / 86_400_000);
+      return days === 1 ? 'yesterday' : `${days} d ago`;
+    };
+    const kindLabel: Record<string, string> = { kiwi: 'KIWI', owrx: 'OWRX', rtl: 'RTL' };
+    if (hist.length === 0) {
+      root.innerHTML = `
+        <div class="rtty-list">
+          <div class="rtty-row" style="opacity:.6;cursor:default">
+            <div class="rtty-row-name">No recent connections</div>
+            <div class="rtty-row-meta">Pick a server from KiwiSDR / OpenWebRx / RTL to populate this log.</div>
+          </div>
+        </div>`;
+    } else {
+      root.innerHTML = `
+        <div class="rtty-list">
+          ${hist.map((e, i) => {
+            const tag = kindLabel[e.kind] ?? e.kind.toUpperCase();
+            const name = e.name ? ` · ${e.name.slice(0, 60)}` : '';
+            return `
+              <button class="rtty-row" data-idx="${i}">
+                <div class="rtty-row-name">${tag} · ${escapeAttr(e.url)}</div>
+                <div class="rtty-row-meta">${escapeAttr(name.replace(/^ · /, ''))}${name ? ' · ' : ''}${relTime(e.ts)}</div>
+              </button>`;
+          }).join('')}
+        </div>
+      `;
+    }
+    document.body.appendChild(root);
+    this.anchorPickerOverWaterfall(root);
+    root.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest('button.rtty-row') as HTMLElement | null;
+      if (!btn) {
+        if (ev.target === root) root.remove();
+        return;
+      }
+      const idx = parseInt(btn.dataset.idx ?? '', 10);
+      if (!Number.isFinite(idx)) return;
+      const entry = hist[idx];
+      if (!entry) return;
+      root.remove();
+      this.switchToServer(entry.kind, entry.url, entry.name);
+    });
   }
 
 
@@ -8940,6 +9058,19 @@ Lock state computed from the % of recent (last 50 samples) errors with
       onStatus: (s: KiwiStatus) => {
         if (!this.powered) { this.setLedDot('off'); return; }
         this.setLedDot(s.connected ? 'on' : 'connecting');
+        // Commit the pending history entry the first time we hear
+        // s.connected = true after a switchToServer call. The
+        // lastConnectedKey check makes the commit idempotent against
+        // a flickering onStatus stream within a single session.
+        if (s.connected && this.pendingHistoryEntry) {
+          const e = this.pendingHistoryEntry;
+          const key = `${e.kind}:${e.url}`;
+          if (this.lastConnectedKey !== key) {
+            this.recordServerConnection(e.kind, e.url, e.name);
+            this.lastConnectedKey = key;
+          }
+          this.pendingHistoryEntry = null;
+        }
       },
       onMessage: this.makeKvHandler(),
       onAudio: (f: AudioFrame) => {
@@ -9199,6 +9330,11 @@ Lock state computed from the % of recent (last 50 samples) errors with
     if (this.noDataTimer != null) { clearInterval(this.noDataTimer); this.noDataTimer = null; }
     if (this.wfAutoTimer != null) { clearInterval(this.wfAutoTimer); this.wfAutoTimer = null; }
     this.lastFrameTs = 0;
+    // Drop any staged history entry — if we're disconnecting before
+    // s.connected was ever true, the connection never succeeded and
+    // shouldn't be logged.
+    this.pendingHistoryEntry = null;
+    this.lastConnectedKey = null;
     // Note: leave #noDataLabel display alone — the watchdog may have
     // just set it visible before calling us; the next connect() hides it.
     this.client?.disconnect(); this.client = null;
