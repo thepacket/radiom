@@ -327,7 +327,7 @@ main > * { flex-shrink: 0; }
 }
 .audio-fft-ext-btn {
   position: absolute;
-  top: 8px; left: 14px;
+  bottom: 8px; left: 14px;
   z-index: 6;
   height: 22px; padding: 0 8px;
   background: rgba(0,0,0,0.7);
@@ -343,7 +343,7 @@ main > * { flex-shrink: 0; }
  * the ext button but placed next to it. */
 .audio-fft-auto-btn {
   position: absolute;
-  top: 8px; left: 60px;
+  bottom: 8px; left: 60px;
   z-index: 6;
   height: 22px; padding: 0 8px;
   background: rgba(0,0,0,0.7);
@@ -508,9 +508,28 @@ body.wefax-ext .wefax-canvas {
   letter-spacing: 1px;
 }
 .ft8-actions {
-  position: absolute; top: 4px; right: 6px;
-  display: flex; gap: 4px;
+  position: absolute;
+  left: 6px; right: 6px; bottom: 4px;
+  /* `wrap-reverse` so overflow rows stack ABOVE the bottom-anchored
+   * first row instead of below it (which would be off the panel).
+   * `justify-content: flex-end` right-aligns each row. */
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  gap: 4px;
   z-index: 6;
+}
+/* When the user taps `ext` on a panel's action row, body gains
+ * `.panel-ext` — promoting every .ft8-panel to a full-viewport
+ * overlay so the visible panel covers the rest of the UI. Inline
+ * display:none on hidden panels still takes priority, so only the
+ * currently-active panel actually appears. */
+body.panel-ext .ft8-panel {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  border-radius: 0;
+  z-index: 9999;
 }
 .ft8-lines {
   overflow-y: auto;
@@ -531,13 +550,8 @@ body.wefax-ext .wefax-canvas {
 }
 #scopePanel .ft8-actions { gap: 6px; align-items: center; }
 
-/* WSPR panel: pin its copy/clear actions to the bottom-right corner so
- * they don't compete with the long status line at the top. */
-#wsprPanel .ft8-actions { top: auto; bottom: 4px; }
-/* RFI panel: same bottom-right override — the long-running emitter
- * list runs from the top down, so the copy button stays out of the way
- * at the bottom. */
-#rfiPanel .ft8-actions { top: auto; bottom: 4px; }
+/* (.ft8-actions defaults to bottom-right globally now — historical
+ *  per-panel overrides for wspr / rfi removed.) */
 /* IQ View panel: pin its CLK/baud/ext controls to the bottom-right so the
  * full canvas is unobstructed at the top. */
 #iqViewPanel .iq-view-actions { top: auto; bottom: 6px; right: 8px; }

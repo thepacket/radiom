@@ -293,6 +293,9 @@ export class Shell {
   // Scratch buffers.
   private echoFftRe: Float32Array | null = null;
   private echoFftIm: Float32Array | null = null;
+  /** Pointer-driven crosshair on the echo profile canvas. */
+  private echoCursorX: number | null = null;
+  private echoCursorBound = false;
   /** Symbol Clock Recovery Scope — detect dominant symbol-clock line
    *  in the IQ envelope spectrum (|z|² FFT), then run a 1st-order PLL
    *  that tracks it. Plots symbol-rate (Hz) and PLL phase error (rad)
@@ -317,7 +320,6 @@ export class Shell {
   private sclkErrHist = new Float32Array(Shell.SCLK_HIST_LEN);
   private sclkHistWrite = 0;
   private sclkHistFilled = 0;
-  private sclkSampleAccum = 0;
   private sclkSampleCount = 0;
   private sclkRafTick = 0;
   // Scratch buffers (no per-frame allocs).
@@ -546,6 +548,7 @@ export class Shell {
     });
     pickerObserver.observe(document.body, { childList: true });
     this.installVizCloseChip();
+    this.installPanelActions();
     this.wireViewHelp();
     this.refreshSourceButtonState();
     this.spectrum = new SpectrumView(
@@ -2659,7 +2662,6 @@ export class Shell {
       this.sclkHistFilled = 0;
       this.sclkSymHz = 0;
       this.sclkNcoPhase = 0;
-      this.sclkSampleAccum = 0;
       this.sclkSampleCount = 0;
       this.sclkPeakConfidence = 0;
     });
@@ -3982,7 +3984,7 @@ export class Shell {
     this.root.querySelectorAll('button[data-cmd^="f-"], button[data-cmd^="f+"]').forEach((btn) => {
       const el = btn as HTMLElement;
       const offsetHz = +el.dataset.cmd!.slice(1);
-      wire(el, () => this.nudgeFreq(offsetHz), 200);
+      wire(el, () => this.nudgeFreq(offsetHz), 1000);
     });
     // Pan buttons auto-repeat at 1 s — slower than the tuning nudges
     // because each pan jumps a half-window and walking too quickly
@@ -4855,6 +4857,76 @@ export class Shell {
       this.closeForegroundOverlay();
       refresh();
     });
+  }
+
+  /** Walk every .ft8-panel and ensure its action row carries `copy /
+   *  clear / ext` at the bottom. Any panel that's already wired up
+   *  with custom-named buttons (cwCopy, sfrcClear, aconExt, …) keeps
+   *  its bindings — we only add the buttons that are *missing*.
+   *
+   *  Generic handlers are used for newly-added buttons:
+   *    copy  → snapshot the panel's status line + visible text body to clipboard
+   *    clear → wipe the panel's .ft8-lines / .cw-text body (if any)
+   *    ext   → toggle body.panel-ext to promote the panel to full-viewport
+   *
+   *  Per-panel behaviour stays intact because we never replace existing
+   *  buttons — we only append the ones whose lowercase label isn't
+   *  already represented in the row. */
+  private installPanelActions(): void {
+    const panels = this.root.querySelectorAll<HTMLElement>('.ft8-panel');
+    for (const panel of panels) {
+      // Pick up any existing action row (`ft8-actions`, `acon-actions`,
+      // `iq-view-actions`, …) so we don't double up. If none exists,
+      // create a fresh `.ft8-actions` at the bottom of the panel.
+      let actions = panel.querySelector<HTMLElement>(':scope > [class*="-actions"]');
+      if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'ft8-actions';
+        panel.appendChild(actions);
+      }
+      const has = (label: string): boolean =>
+        Array.from(actions!.querySelectorAll('button')).some(
+          (b) => (b.textContent || '').trim().toLowerCase() === label,
+        );
+      const make = (label: string, title: string, onClick: () => void): void => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'transcript-btn';
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onClick();
+        });
+        actions!.appendChild(b);
+      };
+      if (!has('copy')) {
+        make('copy', 'Copy this panel\'s text content to the clipboard', () => {
+          const status = panel.querySelector('.ft8-status');
+          const lines = panel.querySelector('.ft8-lines, .cw-text');
+          const text = [
+            (status?.textContent || '').trim(),
+            (lines?.textContent || '').trim(),
+          ].filter(Boolean).join('\n\n');
+          if (!text) { this.banner('Nothing to copy', 1200); return; }
+          this.copyText(text).then(
+            () => this.banner('Panel copied', 1200),
+            () => this.banner('Copy failed', 1500),
+          );
+        });
+      }
+      if (!has('clear')) {
+        make('clear', 'Clear this panel\'s text body', () => {
+          const lines = panel.querySelector('.ft8-lines, .cw-text');
+          if (lines) (lines as HTMLElement).textContent = '';
+        });
+      }
+      if (!has('ext')) {
+        make('ext', 'Expand panel to full-viewport overlay', () => {
+          document.body.classList.toggle('panel-ext');
+        });
+      }
+    }
   }
 
   /** Detailed long-press help for the recent batch of analysis views.
@@ -12497,6 +12569,15 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.echoBufFilled = 0;
       if (this.echoAvg) this.echoAvg.fill(0);
       this.echoAvgCount = 0;
+      if (!this.echoCursorBound) {
+        const canvas = this.$('echoCanvas') as HTMLCanvasElement;
+        canvas.addEventListener('pointermove', (e) => {
+          const r = canvas.getBoundingClientRect();
+          this.echoCursorX = e.clientX - r.left;
+        });
+        canvas.addEventListener('pointerleave', () => { this.echoCursorX = null; });
+        this.echoCursorBound = true;
+      }
     } else if (name === 'sclk') {
       this.sclkBufI.fill(0);
       this.sclkBufQ.fill(0);
@@ -12508,7 +12589,6 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.sclkHistFilled = 0;
       this.sclkSymHz = 0;
       this.sclkNcoPhase = 0;
-      this.sclkSampleAccum = 0;
       this.sclkSampleCount = 0;
       this.sclkPeakConfidence = 0;
     } else if (name === 'wusb' || name === 'wlsb') {
@@ -13212,10 +13292,6 @@ Lock state computed from the % of recent (last 50 samples) errors with
         `CAF — buffering · ${this.cafBufFilled} / ${needed} samples`;
       return;
     }
-    // Snapshot the latest N+maxTau samples into linear scratch arrays.
-    // We keep two arrays — one indexed by n, one by n−τ — but since τ
-    // varies per row we instead linearise once and index with offsets.
-    const lin = needed;
     // Reuse the FFT input as the "current n" buffer; allocate a small
     // separate one-time linear copy for n−τ access. We use re/im as
     // n-window for one row, then refill per τ.
@@ -13485,7 +13561,6 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const dbFloor = -50, dbCeil = 0;
     const yForDb = (db: number) =>
       plotT + (1 - (Math.max(dbFloor, Math.min(dbCeil, db)) - dbFloor) / (dbCeil - dbFloor)) * plotH;
-    const tauForX = (xN: number) => xN * (Shell.ECHO_MAX_MS / 1000) * fs;
     const xForTau = (t: number) => plotL + (t / lagBins) * plotW;
     const dbAt = (t: number) => {
       const a = Math.abs(avg[t]);
@@ -13564,11 +13639,10 @@ Lock state computed from the % of recent (last 50 samples) errors with
       }
     }
     peaks.sort((a, b) => b.db - a.db);
-    // Draw + label the top few peaks.
+    // Draw the top few peaks as dots. Lag labels are surfaced in the
+    // status line + the live cursor readout — printing them on the
+    // canvas overcrowds the plot when several echoes cluster.
     ctx.fillStyle = '#fd5';
-    ctx.strokeStyle = '#fd5';
-    ctx.textBaseline = 'bottom';
-    ctx.textAlign = 'center';
     for (let i = 0; i < Math.min(5, peaks.length); i++) {
       const p = peaks[i];
       const x = xForTau((p.tMs / 1000) * fs);
@@ -13576,10 +13650,30 @@ Lock state computed from the % of recent (last 50 samples) errors with
       ctx.beginPath();
       ctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI);
       ctx.fill();
-      ctx.fillText(`${p.tMs.toFixed(1)} ms`, x, y - 4 * dpr);
     }
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
+
+    // Pointer-driven crosshair — yellow vertical line at the current
+    // pointer X, with the lag (ms) and dB readout under the line. The
+    // mapping is the inverse of xForTau: cursor CSS-px → device-px →
+    // fractional position across plotW → lag-bin index.
+    let cursorTxt: string | null = null;
+    if (this.echoCursorX != null) {
+      const cssW = cv.clientWidth;
+      const xCss = Math.max(0, Math.min(cssW - 1, this.echoCursorX));
+      const xPx = xCss * dpr;
+      if (xPx >= plotL && xPx <= plotR) {
+        const xRelN = (xPx - plotL) / plotW;
+        const tBin = Math.max(1, Math.min(lagBins - 1, Math.round(xRelN * lagBins)));
+        const tMs = (tBin / fs) * 1000;
+        const dbVal = dbAt(tBin);
+        ctx.strokeStyle = '#fd5';
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(xPx, plotT); ctx.lineTo(xPx, plotB);
+        ctx.stroke();
+        cursorTxt = ` · cursor ${tMs.toFixed(2)} ms @ ${dbVal.toFixed(1)} dB`;
+      }
+    }
 
     // Status line.
     const status = this.$('echoStatus');
@@ -13588,7 +13682,8 @@ Lock state computed from the % of recent (last 50 samples) errors with
         ? ` · peaks ${peaks.slice(0, 3).map(p => `${p.tMs.toFixed(1)} ms (${p.db.toFixed(0)} dB)`).join(', ')}`
         : ' · no echoes above floor + 6 dB';
       status.textContent =
-        `ECHO — ${N} pt · ${(N / fs * 1000).toFixed(0)} ms window · floor ${floorDb.toFixed(0)} dB${topTxt}`;
+        `ECHO — ${N} pt · ${(N / fs * 1000).toFixed(0)} ms window · floor ${floorDb.toFixed(0)} dB${topTxt}`
+        + (cursorTxt ?? '');
     }
   }
 
@@ -13738,7 +13833,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
 
     // Top half: tracked symbol-rate strip chart.
     const topT = pad, topB = pad + halfH;
-    const botT = H - pad - halfH, botB = H - pad;
+    const botT = H - pad - halfH;
     // Y range for rate: 0 .. max(observed, SCLK_MAX_HZ/4) so a low-baud
     // PSK signal doesn't sit at the very bottom of the chart.
     let rateMax = Shell.SCLK_MAX_HZ;
@@ -20976,6 +21071,15 @@ Lock state computed from the % of recent (last 50 samples) errors with
   }
 
   private exclusiveActivate(name: 'cw' | 'rtty' | 'psk' | 'psk31b' | 'olivia' | 'mfsk' | 'mt63' | 'fsq' | 'thor' | 'dominoex' | 'contestia' | 'ftx' | 'wefax' | 'auto' | 'sfax' | 'navtex' | 'sitor' | 'wwv' | 'ale' | 'hfdl' | 'isb' | 'ssbf' | 'qrss' | 'packet' | 'packet-vhf' | 'packet-9600' | 'packet-il2p' | 'wspr' | 'wspr15' | 'jt9' | 'jt65' | 'q65' | 'jt4' | 'js8' | 'fst4' | 'fst4w' | 'stanag' | 'stanag4539' | 'hell' | 'sstv' | 'freedv' | 'throb' | 'selcal' | 'pocs' | 'dsd' | 'multimon' | 'vendored' | 'scope' | 'thd' | 'persist' | 'envp' | 'ceps' | 'mhum' | 'gray' | 'vect' | 'eye' | 'spec' | 'iqview' | 'splot' | 'sdial' | 'drift' | 'fmnt' | 'acon') {
+    // ── Self-managed overlay panels (MEM / AI) — these aren't part
+    //    of the `name` union because they're opened from the keypad
+    //    rather than via this dispatcher, but they live in the same
+    //    .ft8-panel slot as decoder output. Without closing them
+    //    here, a freshly-activated decoder opens behind the MEM /
+    //    AI panel and the operator only sees the older one (e.g.
+    //    9600 Packet "replaced by the memory logs panel" symptom).
+    if (this.memPanelOn) this.toggleMemPanel();
+    if (this.aiPanelOn)  this.toggleAiPanel();
     // ── Decoder panels ──
     if (this.cwOn     && name !== 'cw')     this.toggleCw();
     if (this.rttyOn   && name !== 'rtty')   this.toggleRtty();
