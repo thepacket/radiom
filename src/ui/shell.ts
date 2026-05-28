@@ -7,6 +7,8 @@ import { openServerList, findServerEntry, type ServerEntry } from './server-list
 import { openOwrxList, owrxWsUrl } from './openwebrx-list';
 import { openRtlList } from './rtl-list';
 import { RtlTcpClient } from '../rtltcp/client';
+import { openAirspyList } from './airspy-list';
+import { SpyServerClient } from '../spyserver/client';
 import { OpenWebRxClient } from '../openwebrx/client';
 import type { AudioFrame, KiwiStatus, WaterfallFrame } from '../kiwi/types';
 import { openPresetsModal } from './presets-modal';
@@ -113,7 +115,7 @@ const DEFAULT_PASSBANDS: Record<Mode, [number, number]> = {
 
 export class Shell {
   private root: HTMLElement;
-  private client: KiwiClient | OpenWebRxClient | RtlTcpClient | null = null;
+  private client: KiwiClient | OpenWebRxClient | RtlTcpClient | SpyServerClient | null = null;
   private player = new AudioPlayer();
   private spectrum!: SpectrumView;
   private fftAvg!: FftAverager;
@@ -466,7 +468,7 @@ export class Shell {
    *  Set by switchToServer, committed by the onStatus handler when
    *  s.connected first goes true. Cleared on disconnect so a half-open
    *  session that never reached "connected" is never recorded. */
-  private pendingHistoryEntry: { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string } | null = null;
+  private pendingHistoryEntry: { kind: 'kiwi' | 'owrx' | 'rtl' | 'airspy'; url: string; name?: string } | null = null;
   /** Last fully-connected source — used to debounce the onStatus
    *  history commit so flickering connection state doesn't spam the
    *  log with duplicates within a single picker-click session. */
@@ -623,9 +625,10 @@ export class Shell {
       <header class="topbar">
         <button id="menu" class="menu">☰</button>
         <button id="help" class="menu" aria-label="decoder help" title="Help · all buttons / knobs reference">?</button>
-        <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">Kiwi</button>
-        <button id="owrxPicker" class="kpbtn source-btn" title="OpenWebRx — switch source and open the OpenWebRx server picker (mutually exclusive with KiwiSDR / RTL)" aria-label="OpenWebRx source">OpenWebRx</button>
-        <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">RTL</button>
+        <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">kiwi</button>
+        <button id="owrxPicker" class="kpbtn source-btn" title="OpenWebRx — switch source and open the OpenWebRx server picker (mutually exclusive with KiwiSDR / RTL)" aria-label="OpenWebRx source">owrx</button>
+        <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">rtl</button>
+        <button id="airspyPicker" class="kpbtn source-btn" title="Airspy SpyServer — switch source and open the SpyServer picker. Connects to a public Airspy HF+ / R2 server via the binary SpyServer protocol, decimates IQ server-side, streams int16 IQ to the browser" aria-label="Airspy source">airspy</button>
         <button id="histPicker" class="menu" title="Recent server connections — click any row to switch source and reconnect" aria-label="recent server connections">↺</button>
         <!-- Hidden: still used internally to hold the host:port string. -->
         <input id="server" class="server" style="display:none" value="${escapeAttr(localStorage.getItem('radiom.lastServer') || '')}" placeholder="host:port" spellcheck="false" readonly />
@@ -4364,6 +4367,14 @@ export class Shell {
         this.switchToServer('rtl', url, entry?.name);
       });
     });
+    // Airspy SpyServer source — same shape as the rtl_tcp button.
+    this.$('airspyPicker').addEventListener('click', () => {
+      localStorage.setItem('radiom.activeSource', 'airspy');
+      this.refreshSourceButtonState();
+      openAirspyList((url, entry) => {
+        this.switchToServer('airspy', url, entry?.name);
+      });
+    });
     // 🕘 Recent-server log — tap to see a flat list of the last few
     // connections (across all source kinds), tap a row to re-connect.
     this.$('histPicker').addEventListener('click', () => {
@@ -4543,6 +4554,10 @@ export class Shell {
   isRtlSource(): boolean {
     return localStorage.getItem('radiom.activeSource') === 'rtl';
   }
+  /** Symmetric helper for Airspy SpyServer source. */
+  isAirspySource(): boolean {
+    return localStorage.getItem('radiom.activeSource') === 'airspy';
+  }
 
   /** Source buttons are mutually exclusive — apply the `.active`
    *  class to whichever matches the persisted source. Called whenever
@@ -4550,9 +4565,10 @@ export class Shell {
   private refreshSourceButtonState(): void {
     const src = localStorage.getItem('radiom.activeSource') ?? 'kiwi';
     const ids: Array<[string, string]> = [
-      ['kiwiPicker', 'kiwi'],
-      ['owrxPicker', 'owrx'],
-      ['rtlPicker',  'rtl'],
+      ['kiwiPicker',   'kiwi'],
+      ['owrxPicker',   'owrx'],
+      ['rtlPicker',    'rtl'],
+      ['airspyPicker', 'airspy'],
     ];
     for (const [id, kind] of ids) {
       const el = this.$(id) as HTMLElement | null;
@@ -4564,7 +4580,7 @@ export class Shell {
    *  the recent-history picker. Centralises the disconnect/reconnect,
    *  active-button refresh, localStorage write, banner toast, and
    *  history-log append. */
-  private switchToServer(kind: 'kiwi' | 'owrx' | 'rtl', url: string, name?: string): void {
+  private switchToServer(kind: 'kiwi' | 'owrx' | 'rtl' | 'airspy', url: string, name?: string): void {
     localStorage.setItem('radiom.activeSource', kind);
     this.refreshSourceButtonState();
     (this.$('server') as HTMLInputElement).value = url;
@@ -4578,12 +4594,16 @@ export class Shell {
       localStorage.setItem('radiom.lastOwrxServer', url);
       if (this.powered) this.disconnect();
       if (this.powered) this.connect();
+    } else if (kind === 'airspy') {
+      localStorage.setItem('radiom.lastAirspyServer', url);
+      if (this.powered) this.disconnect();
+      if (this.powered) this.connect();
     } else {
       localStorage.setItem('radiom.lastRtlServer', url);
       if (this.powered) this.disconnect();
       if (this.powered) this.connect();
     }
-    const labels: Record<string, string> = { kiwi: 'KiwiSDR', owrx: 'OpenWebRX', rtl: 'rtl_tcp' };
+    const labels: Record<string, string> = { kiwi: 'KiwiSDR', owrx: 'OpenWebRX', rtl: 'rtl_tcp', airspy: 'Airspy' };
     const tail = name ? ` — ${name.slice(0, 50)}` : '';
     this.banner(`${labels[kind]}: ${url}${tail}`, 2500);
     // Stage the history entry; the onStatus handler commits it once the
@@ -4597,9 +4617,9 @@ export class Shell {
   /** Append a server-connection event to localStorage.serverHistory.
    *  Dedupes by `${kind}:${url}` — repeating a known connection just
    *  bubbles it to the top with a refreshed timestamp. Capped at 30. */
-  private recordServerConnection(kind: 'kiwi' | 'owrx' | 'rtl', url: string, name?: string): void {
+  private recordServerConnection(kind: 'kiwi' | 'owrx' | 'rtl' | 'airspy', url: string, name?: string): void {
     if (!url) return;
-    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string; ts: number };
+    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl' | 'airspy'; url: string; name?: string; ts: number };
     let hist: HistEntry[] = [];
     try {
       const raw = localStorage.getItem('radiom.serverHistory');
@@ -4617,7 +4637,7 @@ export class Shell {
    *  the URL, the server's display name (if known), and a relative
    *  timestamp. Tapping a row re-runs switchToServer for that entry. */
   private openServerHistoryPicker(): void {
-    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl'; url: string; name?: string; ts: number };
+    type HistEntry = { kind: 'kiwi' | 'owrx' | 'rtl' | 'airspy'; url: string; name?: string; ts: number };
     let hist: HistEntry[] = [];
     try {
       const raw = localStorage.getItem('radiom.serverHistory');
@@ -4637,7 +4657,7 @@ export class Shell {
       const days = Math.floor(dt / 86_400_000);
       return days === 1 ? 'yesterday' : `${days} d ago`;
     };
-    const kindLabel: Record<string, string> = { kiwi: 'KIWI', owrx: 'OWRX', rtl: 'RTL' };
+    const kindLabel: Record<string, string> = { kiwi: 'KIWI', owrx: 'OWRX', rtl: 'RTL', airspy: 'AIRSPY' };
     if (hist.length === 0) {
       root.innerHTML = `
         <div class="rtty-list">
@@ -9035,7 +9055,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
   }
 
   private async connect() {
-    const source = (localStorage.getItem('radiom.activeSource') as 'kiwi' | 'owrx' | 'rtl') || 'kiwi';
+    const source = (localStorage.getItem('radiom.activeSource') as 'kiwi' | 'owrx' | 'rtl' | 'airspy') || 'kiwi';
     this.client?.disconnect();
 
     try {
@@ -9141,8 +9161,19 @@ Lock state computed from the % of recent (last 50 samples) errors with
             centerFreq: Math.round(this.freqKHz * 1000), bandwidth: 250_000,
           } as KiwiStatus),
           // RTL emits IQ samples directly — route to player.onIq so the
-          // existing IQ-consuming decoders (HFDL/ISB/SSBf/LRPT) work.
-          onIq: (iq) => { this.player.onIq?.(iq); },
+          // existing IQ-consuming decoders (HFDL/ISB/SSBf/LRPT) work,
+          // and feed every other onIq* channel so the viewers populate.
+          // Update lastFrameTs too — the no-data watchdog kills the
+          // session after 12 s otherwise (RTL has no audio / wf frames
+          // to keep it alive).
+          onIq: (iq) => {
+            this.lastFrameTs = Date.now();
+            this.player.onIq?.(iq);
+            this.player.onIqView?.(iq);
+            this.player.onIqEye?.(iq);
+            this.player.onIq5?.(iq);
+            this.player.onIqRecord?.(iq);
+          },
         },
       );
       // The wrapper exposes connect()/setTune() shape the shell expects.
@@ -9150,6 +9181,63 @@ Lock state computed from the % of recent (last 50 samples) errors with
       // shell's `this.client.connect()` below is a no-op for it.
       this.client = rtlClient;
       originLabel = `rtl_tcp ${url}`;
+    } else if (source === 'airspy') {
+      const url = localStorage.getItem('radiom.lastAirspyServer') || (this.$('server') as HTMLInputElement).value.trim();
+      if (!url || !/^[\w.-]+:\d+$/.test(url)) {
+        this.log('no Airspy SpyServer picked (expecting host:port)');
+        return;
+      }
+      // SpyServer is pure IQ — same as rtl_tcp. The bridge picks a
+      // decimation stage that yields roughly 200..400 kS/s; the actual
+      // rate is reported in the hello message. We seed the input-rate
+      // hint with a typical Airspy HF+ value (192 kS/s after decim
+      // stage 2) and update once the hello arrives.
+      this.player.setInputRate(192_000);
+      this.refresh();
+      const spyClient = new SpyServerClient(
+        { url, centerHz: Math.round(this.freqKHz * 1000) },
+        {
+          onMessage: (kv) => {
+            // Update the player input rate when the bridge's hello
+            // reports the actual srOut.
+            if (kv.sample_rate) {
+              const sr = parseInt(kv.sample_rate, 10);
+              if (Number.isFinite(sr) && sr > 0) this.player.setInputRate(sr);
+            }
+            handlers.onMessage?.(kv);
+          },
+          onError:   handlers.onError,
+          onClose:   handlers.onClose,
+          onStatus:  (s) => {
+            const sr = spyClient?.getOutputRate?.() || 192_000;
+            handlers.onStatus?.({
+              connected: s.connected, sampleRate: sr,
+              centerFreq: Math.round(this.freqKHz * 1000), bandwidth: sr,
+            } as KiwiStatus);
+          },
+          // Fan IQ bytes out to every onIq* channel the player exposes
+          // — matching what Kiwi's IQ-mode does in pushAudio. Without
+          // this fan-out only the decoder hook (onIq) gets data; the
+          // viewers (Constellation, Eye, sferic, doppler, OTHR, RFI,
+          // …) and the recorder all stay blank.
+          //
+          // Also update lastFrameTs — the no-data watchdog kills the
+          // connection after 12 s of no audio/wf frames. For pure-IQ
+          // sources like SpyServer or rtl_tcp, IQ IS the data; without
+          // this update the watchdog tears down a perfectly healthy
+          // session in 12-15 seconds.
+          onIq: (iq) => {
+            this.lastFrameTs = Date.now();
+            this.player.onIq?.(iq);
+            this.player.onIqView?.(iq);
+            this.player.onIqEye?.(iq);
+            this.player.onIq5?.(iq);
+            this.player.onIqRecord?.(iq);
+          },
+        },
+      );
+      this.client = spyClient;
+      originLabel = `Airspy ${url}`;
     } else {
       const raw = (this.$('server') as HTMLInputElement).value.trim();
       const [host, portStr] = raw.split(':');

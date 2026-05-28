@@ -44,6 +44,7 @@ import { AcarsDecoder } from './decoder/acars.mjs';
 import { Op25Decoder } from './decoder/op25.mjs';
 import { LrptDecoder } from './decoder/lrpt.mjs';
 import { RtlTcpBridge } from './decoder/rtltcp.mjs';
+import { SpyServerBridge } from './decoder/spyserver.mjs';
 import { AdsbDecoder } from './decoder/adsb.mjs';
 import { Vdl2Decoder } from './decoder/vdl2.mjs';
 import { UatDecoder } from './decoder/uat.mjs';
@@ -859,6 +860,85 @@ async function sendDxwatch(req, res) {
   }
 }
 
+/* ───── Airspy SpyServer directory proxy
+ *  Public list of registered Airspy SpyServers lives at
+ *    https://airspy.com/directory/status.json
+ *  The page itself is JS-rendered; the JSON endpoint is the same data
+ *  source the airspy.com/directory map uses. We proxy it here so the
+ *  browser doesn't need to deal with CORS, and we trim each entry to
+ *  just what the picker needs.
+ *
+ *  Cached 5 min — the directory updates every few minutes upstream so
+ *  there's no value in fetching more often, and aggressive caching
+ *  insulates the picker from the upstream being momentarily slow.   */
+const AIRSPY_CACHE_TTL_MS = 5 * 60_000;
+let airspyCache = { ts: 0, body: '' };
+async function sendAirspyList(req, res) {
+  void req;
+  try {
+    if (airspyCache.body && Date.now() - airspyCache.ts < AIRSPY_CACHE_TTL_MS) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' });
+      return res.end(airspyCache.body);
+    }
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), 15_000);
+    let upstream;
+    try {
+      upstream = await fetch('https://airspy.com/directory/status.json', {
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept': 'application/json, text/javascript, */*; q=0.01',
+          'Referer': 'https://airspy.com/directory/',
+        },
+        signal: ctl.signal,
+      });
+    } finally { clearTimeout(tm); }
+    if (!upstream.ok) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: `airspy HTTP ${upstream.status}` }));
+    }
+    const raw = await upstream.text();
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch (_) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'airspy returned non-JSON' }));
+    }
+    const servers = Array.isArray(parsed?.servers) ? parsed.servers : [];
+    // Trim each entry to the fields the picker actually needs. Drop
+    // offline entries (online === false) — they're useless to connect
+    // to. Anonymous-unregistered servers are kept (the picker shows a
+    // muted style for them) but flagged.
+    const trimmed = servers
+      .filter((s) => s && s.online !== false && s.streamingHost && Number.isFinite(s.streamingPort))
+      .map((s) => ({
+        host:        String(s.streamingHost),
+        port:        s.streamingPort | 0,
+        owner:       (s.ownerName || '').slice(0, 80),
+        deviceType:  s.deviceType || 'unknown',
+        description: (s.generalDescription || '').slice(0, 100),
+        antenna:     (s.antennaType || '').slice(0, 80),
+        lat:         s.antennaLocation?.lat,
+        lon:         s.antennaLocation?.long,
+        minHz:       s.minimumFrequency | 0,
+        maxHz:       s.maximumFrequency | 0,
+        maxClients:  s.maxClients | 0,
+        clients:     s.currentClientCount | 0,
+        registered:  !!s.registered,
+        maxSession:  s.maxSessionDuration | 0,
+        // Sample-rate cap is sometimes useful in the picker label.
+        maxIqSr:     s.maximumIQSampleRate | 0,
+      }));
+    const body = JSON.stringify({ count: trimmed.length, servers: trimmed });
+    airspyCache = { ts: Date.now(), body };
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' });
+    res.end(body);
+  } catch (e) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'airspy fetch failed: ' + e.message }));
+  }
+}
+
 /* ─────────  WSPRnet — via wspr.live public ClickHouse DB  ────────
  *  WSPRnet itself has no callsign-free machine-readable API for
  *  recent spots, but the community runs db1.wspr.live (a public
@@ -1376,6 +1456,7 @@ const server = http.createServer((req, res) => {
   if (url.startsWith('/api/nets')) return sendNets(req, res);
   if (url.startsWith('/api/dxspots')) return sendDxSpots(req, res);
   if (url.startsWith('/api/dxwatch')) return sendDxwatch(req, res);
+  if (url.startsWith('/api/airspy-list')) return sendAirspyList(req, res);
   if (url.startsWith('/api/wsprnet')) return sendWspr(req, res);
   if (url.startsWith('/api/kiwi-status')) return sendKiwiStatus(req, res);
   if (url.startsWith('/api/kiwi-touch')) return sendKiwiTouch(req, res);
@@ -2661,6 +2742,61 @@ function attachRtlTcpBridge(ws, host, port) {
   ws.on('close', () => { try { bridge?.close(); } catch {} });
 }
 
+// ── /ws/spyserver/<host>:<port> — proxy to a remote Airspy spyserver.
+// Same shape as the rtl_tcp bridge above: browser sees a JSON hello +
+// status messages and a binary int16-LE IQ stream at the bridge's
+// chosen `srOut` rate.
+const spyserverWss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+function attachSpyServerBridge(ws, host, port) {
+  let bridge = null;
+  let iqBytesForwarded = 0;
+  const tag = `${host}:${port}`;
+  const send = (obj) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify(obj)); };
+  try {
+    bridge = new SpyServerBridge({
+      host, port,
+      onIq: (buf) => {
+        if (ws.readyState === WS.OPEN) ws.send(buf, { binary: true });
+        iqBytesForwarded += buf.length;
+      },
+      onHello: (info) => {
+        console.log(`[spyserver] ${tag} hello device=${info.device} srOut=${info.srOut} range=${info.minHz}..${info.maxHz} maxGain=${info.maxGain} decim=${info.decimStage}`);
+        send({ t: 'hello', ...info });
+      },
+      onStatus: (msg) => {
+        console.log(`[spyserver] ${tag} ${msg}`);
+        send({ t: 'status', msg });
+      },
+    });
+  } catch (e) {
+    console.log(`[spyserver] ${tag} bridge ctor failed: ${e.message}`);
+    send({ t: 'status', msg: `bridge failed: ${e.message}` });
+    try { ws.close(); } catch {}
+    return;
+  }
+  console.log(`[spyserver] ${tag} session opened`);
+  // Periodic heartbeat — useful to see whether IQ is flowing at all
+  // and confirm the bridge isn't sitting silent post-handshake.
+  const hb = setInterval(() => {
+    console.log(`[spyserver] ${tag} hb iqBytes=${iqBytesForwarded}`);
+  }, 30_000);
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) return;
+    try {
+      const m = JSON.parse(data.toString());
+      switch (m.t) {
+        case 'freq': if (Number.isFinite(m.hz))  bridge.setFreq(m.hz); break;
+        case 'gain': if (Number.isFinite(m.idx)) bridge.setGainIndex(m.idx); break;
+      }
+    } catch { /* malformed JSON */ }
+  });
+  ws.on('close', () => {
+    clearInterval(hb);
+    console.log(`[spyserver] ${tag} session closed iqBytes=${iqBytesForwarded}`);
+    try { bridge?.close(); } catch { /* already gone */ }
+  });
+}
+
 // ── /ws/decode/msk144 — wsjt-x MSK144 (meteor scatter). Batch decode
 // on 15 s UTC slots; emits one JSON spot per decoded message.
 const msk144Wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
@@ -3075,6 +3211,14 @@ server.on('upgrade', (req, socket, head) => {
     if (!m) { socket.destroy(); return; }
     const host = m[1], port = parseInt(m[2], 10);
     rtltcpWss.handleUpgrade(req, socket, head, (clientWs) => attachRtlTcpBridge(clientWs, host, port));
+    return;
+  }
+  if (req.url && req.url.startsWith('/ws/spyserver/')) {
+    const rest = req.url.slice('/ws/spyserver/'.length).split('?')[0];
+    const m = rest.match(/^([\w.-]+):(\d+)\/?$/);
+    if (!m) { socket.destroy(); return; }
+    const host = m[1], port = parseInt(m[2], 10);
+    spyserverWss.handleUpgrade(req, socket, head, (clientWs) => attachSpyServerBridge(clientWs, host, port));
     return;
   }
   if (req.url && req.url.startsWith('/ws/decode/msk144')) {

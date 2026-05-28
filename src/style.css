@@ -1539,6 +1539,40 @@ body.panel-ext .ft8-panel {
 }
 .srv-empty { color: var(--muted); padding: 16px; text-align: center; }
 
+/* Airspy directory pills (device type / anonymous flag) shown inline
+ * in the .srv-title — small chips next to the server name. */
+.srv-pill {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 6px; font-size: 10px; line-height: 1.4;
+  border-radius: 6px;
+  background: rgba(207, 255, 163, 0.12);
+  color: var(--led-bg, #cfffa3);
+  border: 1px solid rgba(207, 255, 163, 0.35);
+  text-transform: lowercase; letter-spacing: 0.4px;
+}
+.srv-pill-anon {
+  background: rgba(180, 180, 180, 0.10);
+  color: var(--muted);
+  border-color: rgba(180, 180, 180, 0.25);
+}
+
+/* Status banner above the Airspy server list — "fetching live
+ * directory…", "live directory unavailable, showing cache", etc. */
+.srv-status {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.btn-refresh {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--fg); border-radius: 6px;
+  padding: 4px 10px; font-size: 14px;
+  cursor: pointer;
+}
+.btn-refresh:hover { background: var(--panel); }
+
 /* ─── Settings page (full-screen modal) ─── */
 .settings-modal {
   position: fixed; inset: 0;
