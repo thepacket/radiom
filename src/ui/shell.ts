@@ -1830,7 +1830,7 @@ export class Shell {
           <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
           <button class="fnbtn" id="btnPshift" style="display:none" title="PS — Pitch shifter (DSP picker). Cycles off → −6 semitones → −12 semitones → +6 → +12 → off on each tap. Negative = lower pitch (good for fast CW), positive = higher pitch.">PS</button>
           <button class="fnbtn" id="btnVad" style="display:none" title="VAD — Voice Activity Detection. Gates audio open when voice-like energy is detected, closed otherwise. Smarter than RSSI squelch: requires both energy (above adaptive noise floor) AND voice-characteristic zero-crossing rate. Cycles off → 6 dB (aggressive) → 12 dB (balanced) → 18 dB (strict) → off.">VAD</button>
-          <button class="fnbtn" id="btnExp" style="display:none" title="EXP — Downward audio expander / soft gate. Smoothly attenuates audio below an adaptive threshold instead of fully gating like VAD. Quiet bits get quieter; loud bits stay loud. Voice-agnostic — works equally well on music / broadcast / CW. Cycles off → gentle (6 dB / 1.5:1) → medium (12 dB / 2:1) → strong (18 dB / 3:1) → off.">EXP</button>
+          <button class="fnbtn" id="btnExp" style="display:none" title="EXP — Downward audio expander / soft gate. Smoothly attenuates audio below an adaptive (valley-follower) threshold instead of fully gating like VAD. Quiet bits get quieter; loud bits stay loud. Voice-agnostic — works equally well on music / broadcast / CW. Cycles off → gentle (8 dB / 2.5:1) → medium (14 dB / 4:1) → strong (20 dB / 6:1, hits −40 dB floor cap) → off.">EXP</button>
           <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
           <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
           <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
@@ -2805,10 +2805,16 @@ export class Shell {
     // EXP — downward audio expander / soft gate. Cycles three presets:
     // gentle (6 dB, 1.5:1) → medium (12 dB, 2:1) → strong (18 dB, 3:1).
     // Reached via the DSP picker.
+    // EXP presets — chosen so even the gentlest setting is audibly
+    // distinguishable. With a valley-follower noise floor that locks
+    // onto the actual background level, ratio 1.5:1 produced only ~3 dB
+    // of attenuation between voice and pause — inaudible. These steps
+    // hit the −40 dB floor cap on the strong setting during real
+    // pauses, and ~−12 dB at gentle.
     const expPresets: Array<{ db: number; ratio: number; label: string }> = [
-      { db: 6,  ratio: 1.5, label: 'gentle'   },
-      { db: 12, ratio: 2.0, label: 'medium'   },
-      { db: 18, ratio: 3.0, label: 'strong'   },
+      { db: 8,  ratio: 2.5, label: 'gentle'   },
+      { db: 14, ratio: 4.0, label: 'medium'   },
+      { db: 20, ratio: 6.0, label: 'strong'   },
     ];
     const btnExp = this.$('btnExp') as HTMLButtonElement;
     const updateExpBtn = () => {

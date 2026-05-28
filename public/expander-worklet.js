@@ -37,8 +37,15 @@
 
 const ATTACK_MS    = 3;
 const RELEASE_MS   = 80;
-const ALPHA_NOISE  = 0.005;     // slow noise-floor EMA when below threshold
-const FLOOR_INIT   = 1e-4;
+const FLOOR_INIT   = 1e-3;
+// Valley follower — chases envelope minimum quickly, rises slowly.
+// This makes the noise floor track the actual noise level instead of
+// the previous, broken "update only when below threshold" scheme,
+// which suffered a chicken-and-egg problem (env always above threshold
+// → floor never adapts → threshold stays absurdly low → expander does
+// nothing in practice).
+const FLOOR_DOWN_MS = 60;       // chase envelope down (true noise hugs the floor)
+const FLOOR_UP_MS   = 4000;     // rise slowly when env is above floor
 const GAIN_ATTACK_MS  = 5;
 const GAIN_RELEASE_MS = 60;
 
@@ -49,11 +56,13 @@ class ExpanderProcessor extends AudioWorkletProcessor {
     this.enabled    = !!p.enabled;
     this.thresholdDb = typeof p.thresholdDb === 'number' ? p.thresholdDb : 12;
     this.ratio      = typeof p.ratio       === 'number' ? p.ratio       : 2;
-    this.floorDb    = typeof p.floorDb     === 'number' ? p.floorDb     : -24;
+    this.floorDb    = typeof p.floorDb     === 'number' ? p.floorDb     : -40;
 
     const fs = sampleRate;
-    this.envAttack  = 1 - Math.exp(-1 / (fs * ATTACK_MS    / 1000));
-    this.envRelease = 1 - Math.exp(-1 / (fs * RELEASE_MS   / 1000));
+    this.envAttack  = 1 - Math.exp(-1 / (fs * ATTACK_MS       / 1000));
+    this.envRelease = 1 - Math.exp(-1 / (fs * RELEASE_MS      / 1000));
+    this.floorDown  = 1 - Math.exp(-1 / (fs * FLOOR_DOWN_MS   / 1000));
+    this.floorUp    = 1 - Math.exp(-1 / (fs * FLOOR_UP_MS     / 1000));
     this.gainAttack = 1 - Math.exp(-1 / (fs * GAIN_ATTACK_MS  / 1000));
     this.gainRel    = 1 - Math.exp(-1 / (fs * GAIN_RELEASE_MS / 1000));
 
@@ -119,12 +128,15 @@ class ExpanderProcessor extends AudioWorkletProcessor {
       if (gTarget > this.gain) this.gain += gA * (gTarget - this.gain);
       else                     this.gain += gR * (gTarget - this.gain);
 
-      // Adapt noise floor only when below threshold (gate "closed-ish")
-      // so a passing signal doesn't inflate the floor.
-      if (this.env < threshold) {
-        this.noiseFloor = (1 - ALPHA_NOISE) * this.noiseFloor + ALPHA_NOISE * this.env;
-        if (this.noiseFloor < FLOOR_INIT) this.noiseFloor = FLOOR_INIT;
+      // Valley follower — floor tracks envelope minimums fast, rises
+      // slowly. Locks onto the actual noise level regardless of whether
+      // env is above or below threshold.
+      if (this.env < this.noiseFloor) {
+        this.noiseFloor += this.floorDown * (this.env - this.noiseFloor);
+      } else {
+        this.noiseFloor += this.floorUp * (this.env - this.noiseFloor);
       }
+      if (this.noiseFloor < FLOOR_INIT) this.noiseFloor = FLOOR_INIT;
 
       out[i] = x * this.gain;
     }
