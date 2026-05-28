@@ -150,40 +150,73 @@ Additional cross-cutting tooling:
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) lists the upstream
 project each decoder is vendored from.
 
-### Viewer library (27 panels)
+### Viewer library (60 panels)
 
 Real-time analysis views reachable from the **VIEW** picker. Tap a row
 to open the panel; long-press a row to read its detailed help overlay.
 
 | View                            | Input | What it shows |
 |---------------------------------|-------|---------------|
+| A/B Spectrum Compare            | audio | Tap "A" to lock current Welch PSD as reference; display shows current (green), reference (orange), and difference in dB (white) |
 | Allan Deviation Plot            | IQ    | σ_y(τ) of a PLL-tracked carrier on log-log axes (0.1–100 s) — receiver / source stability metric |
+| Ambiguity Function              | IQ    | Full 2D \|χ(τ, ν)\| of the captured first-second reference waveform against itself; range-Doppler resolution map |
 | Anti-Carrier                    | IQ    | Adaptive null on the dominant carrier so weaker signals nearby become audible |
 | Audio Constellation             | audio | Quadrature-mixed demod audio plotted as a constellation; optional Costas lock (BPSK / QPSK / 8PSK) |
 | Audio FFT                       | audio | 16384-pt high-resolution audio spectrum 0–6 kHz with running average + hover cursor |
 | Audio Scope                     | audio | Triggered oscilloscope on the demod audio, with auto / shot modes and adjustable trigger level / polarity |
 | Audio Spectrogram               | audio | Rolling waterfall of the demod audio with auto-stretch and contrast controls |
+| Autocorrelation Function        | audio | Real-time R(τ) over 0–50 ms lag; first peak gives the dominant period in ms / Hz |
+| Bispectrum / Bicoherence        | IQ    | Third-order spectrum \|B(f₁, f₂)\| revealing quadratic phase coupling — nonlinear distortion, mechanical faults |
 | Carrier Zoom                    | IQ    | 32k-sample long-FFT for sub-Hz resolution around the dial — read frequency drift to fractions of a Hz |
 | Cepstrum / Pitch Contour        | audio | Real cepstrum + scrolling pitch trace; voice F₀, MFSK tone spacing, echo delays |
 | Channel-Sounder Echo Profile    | IQ    | Autocorrelation of \|z(t)\|² envelope vs lag τ (ms); multipath / skywave hop delays as peaks |
+| Chromagram                      | audio | 12-bin pitch-class profile (C, C#, …, B) folded across octaves; tonal-centre / chord tracking |
+| CI Periodogram                  | audio | Welch PSD with 95% χ² confidence-interval band; identifies which spectral peaks are statistically significant |
 | Clock Drift                     | IQ    | Parts-per-million offset of the receiver clock vs a stable reference carrier, with strip chart |
-| Cyclostationary CAF Heatmap     | IQ    | \|R(α,τ)\| over τ ∈ {4…512} samples; symbol rates of digital modes (PSK31, RTTY, FT8, MT63…) appear as bright stripes at α = baud |
+| Constellation Density Heatmap   | IQ    | 2D log-scaled histogram of IQ samples; high-SNR clusters bright, noise diffuse |
+| Crest Factor / PAPR             | audio | Peak/RMS ratio in dB strip-chart — ~3 dB sinusoid, ~10 dB noise, ≥15 dB impulsive interference |
+| Cyclic Spectrum SCF             | IQ    | \|S(f, α)\| in spectral frequency × cycle frequency plane; reveals symbol-rate fingerprints |
+| Cyclostationary CAF Heatmap     | IQ    | \|R(α, τ)\| over τ ∈ {4…512} samples; symbol rates of digital modes (PSK31, RTTY, FT8, MT63…) appear as bright stripes at α = baud |
 | Delay-Doppler Scattering        | IQ    | 2D channel scattering map (delay × Doppler) for ionospheric / multipath diagnosis |
 | Doppler Tracker                 | IQ    | PLL-locked Δf of the strongest in-band carrier vs time, 30-min strip |
 | Envelope PDF                    | audio | Probability density of the analytic envelope \|x + jH{x}\|; Rayleigh / Rician / bimodal / speech shape with heuristic classifier |
+| EVM / MER vs Time               | IQ    | Costas-locked QPSK constellation; Error Vector Magnitude % + Modulation Error Ratio in dB strip with link-quality reference lines |
 | Eye Diagram                     | IQ    | Symbol-period folded IQ trace — eye open = clean digital reception, eye closed = noise / clock mismatch |
+| GPSDO Lock / Holdover           | IQ    | Cumulative phase of PLL'd carrier over panel session; slope = drift in Hz/s, jumps = unlock events |
+| Group Delay vs Frequency        | audio | τ_g(f) = −dφ/dω of the receive chain; measures filter ringing and all-pass equalisation |
+| Higher-Order Cumulants          | IQ    | Live \|C₂₀\|, \|C₂₁\|, \|C₄₀\|, \|C₄₂\|, μ₄₂ traces with auto-classifier (noise / BPSK / QPSK / 16-QAM / FM) |
+| Hilbert-Huang Transform         | audio | EMD-extracted IMF1/2/3 instantaneous-frequency strip charts; adaptive multi-component time-frequency analysis |
 | Instantaneous Frequency Trace   | IQ    | d/dt(arg z) on raw IQ as a 4-s scrolling trace; FM voice, chirped radar, drift slope all visible |
+| I/Q Imbalance Monitor           | IQ    | Amplitude imbalance (dB) / phase imbalance (°) / DC_I / DC_Q time series — SDR front-end diagnostic |
 | IQ Constellation                | IQ    | Raw I-vs-Q scatter of complex baseband |
 | Kurtosis vs Time                | IQ    | 4th-order moment of IQ amplitude — Gaussian noise sits at 3, sub-Gaussian (carrier) below, super-Gaussian (bursts) above |
+| LPC Spectral Envelope           | audio | Levinson-Durbin order-12 all-pole envelope with formant markers (F1 / F2 / F3 / F4) |
 | Mains-Hum Tracker               | audio | Narrow-band FFT + scrolling waterfall over 0–250 Hz with reference lines at 50 / 60 / 100 / 120 / 150 / 180 / 200 / 240 Hz |
+| Mel Spectrogram                 | audio | 64 Mel-spaced filter banks 100 Hz–6 kHz; auditory-perceptual time-frequency map |
+| Mirror-Image Rejection          | IQ    | Positive-band vs negative-band power ratio (dB) over time; image-suppression metric |
+| Modified Allan / TDEV           | IQ    | MDEV + HDEV + TDEV + ADEV on log-log axes; the full Allan-variance family |
+| Modulation Spectrum             | audio | STFT-of-STFT — modulation-rate × acoustic-frequency heatmap; reveals AM/FM rate, speech syllable rate (3–8 Hz) |
 | Over-The-Horizon Radar          | IQ    | Slow waterfall + FMCW / pulsed-sweep classifier for OTH radars (Container / ROTHR / JORN / …) |
+| Phase Noise Spectrum L(f)       | IQ    | Single-sideband phase-noise PSD in dBc/Hz vs offset frequency from PLL'd carrier; standard oscillator metric |
+| Phase Portrait                  | audio | Trajectory in (x(t), x(t+τ)) embedding space with adjustable τ slider; nonlinear-dynamics classic |
+| Q-Q Plot                        | audio | Quantile-quantile envelope vs Rayleigh / Gaussian / Rician theoretical distribution; goodness-of-fit |
+| Range-Doppler Map               | IQ    | Radar-style 2D detection plot — range (delay) × Doppler (velocity proxy); first-second reference + cross-correlation |
+| Reassigned Spectrogram          | audio | STFT with bin-by-bin time-frequency reassignment via phase-derivative window operators; sharper than ordinary spectrogram |
 | RFI Visualizer                  | IQ    | Catalogues narrow tones detected in the IQ window over time — freq, magnitude, last-seen |
 | Sferic Lightning Visualizer     | IQ    | Counts wideband impulse spikes per second; rolling 60-s bar chart with peak / floor readout |
 | Signal Meter                    | RSSI  | Analog-style S-meter dial (dBm and S-units) |
 | Signal over Time Plot           | RSSI  | RSSI strip chart, last 60 s + full-session capture/export |
+| Spectral Coherence γ²(f)        | IQ    | Magnitude-squared coherence between two consecutive IQ time windows; γ²≈1 = stationary, γ²≈0 = transient |
+| Spectral Entropy                | audio | Shannon entropy of normalised PSD strip chart; 0 = pure tone, 1 = white noise; classifier with class labels |
+| Spectral Flatness               | audio | Wiener entropy (geometric/arithmetic mean ratio of PSD); standard tonal-vs-noise discriminator |
+| Spectral Mask Overlay           | audio | Welch PSD with cycleable regulatory transmit mask (SSB 2.7 / AM 6 / NBFM 12.5 kHz / Flat) |
+| Stockwell S-Transform           | IQ    | Multi-resolution time-frequency map with σ ∝ 1/f Gaussian window — wavelet resolution + STFT phase reference |
 | Symbol Clock Recovery Scope     | IQ    | PLL on the symbol-clock spectral line; plots tracked baud + phase error and reports lock state |
 | Vector / Lissajous Plot         | audio | x(t) vs x(t−τ) on demod audio with adjustable τ (1–3000 samples); reveals modulation symmetry / harmonics |
 | Voice Formant Tracker (exp)     | audio | Tracks the first three vocal-tract resonances (F1 / F2 / F3) on speech audio |
+| Wavelet Scalogram               | audio | Morlet continuous wavelet transform at 64 log-spaced scales (30 Hz – 4 kHz); constant-Q resolution |
+| Welch PSD                       | audio | Averaged-periodogram PSD with persistent min-hold floor trace; cleaner noise-floor measurement than Audio FFT |
+| Wigner-Ville (SP-WVD)           | IQ    | Smoothed-Pseudo Wigner-Ville Distribution; quadratic time-frequency with cross-term suppression |
 
 ### Integrated signal generator (GEN button)
 
