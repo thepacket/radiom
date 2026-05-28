@@ -90,6 +90,12 @@ export class AudioPlayer {
   private nb2Loading: Promise<void> | null = null;
   private nb2Enabled = false;
   private nb2K = 5.0;
+  /** PS — Pitch shifter (two-pointer crossfade). Last in the dhisOut
+   *  insert chain so pitch shifting happens after every other DSP. */
+  private pshiftNode: AudioWorkletNode | null = null;
+  private pshiftLoading: Promise<void> | null = null;
+  private pshiftEnabled = false;
+  private pshiftSemitones = 0;
   private vTrackEnabled = false;
   private vTrackTimer: number | null = null;
   private vTrackCenter = 1500;
@@ -802,18 +808,21 @@ export class AudioPlayer {
     return this.dckLoading;
   }
 
-  /** Rebuild the chain segment vAnt23 → (dckNode →)? (rfwNode →)? dhisOut.
-   *  Called whenever dckNode or rfwNode loads so the new insert is spliced in. */
+  /** Rebuild the chain segment vAnt23 → (dckNode →)? (rfwNode →)?
+   *  (nb2Node →)? (pshiftNode →)? dhisOut. Called whenever any of the
+   *  insertable worklets loads so the new node is spliced in. */
   private rewireDhisChain(): void {
     if (!this.vAnt23 || !this.dhisOut) return;
     try { this.vAnt23.disconnect(); } catch {}
     try { this.dckNode?.disconnect(); } catch {}
     try { this.rfwNode?.disconnect(); } catch {}
     try { this.nb2Node?.disconnect(); } catch {}
+    try { this.pshiftNode?.disconnect(); } catch {}
     let prev: AudioNode = this.vAnt23;
-    if (this.dckNode) { prev.connect(this.dckNode); prev = this.dckNode; }
-    if (this.rfwNode) { prev.connect(this.rfwNode); prev = this.rfwNode; }
-    if (this.nb2Node) { prev.connect(this.nb2Node); prev = this.nb2Node; }
+    if (this.dckNode)   { prev.connect(this.dckNode);   prev = this.dckNode; }
+    if (this.rfwNode)   { prev.connect(this.rfwNode);   prev = this.rfwNode; }
+    if (this.nb2Node)   { prev.connect(this.nb2Node);   prev = this.nb2Node; }
+    if (this.pshiftNode){ prev.connect(this.pshiftNode); prev = this.pshiftNode; }
     prev.connect(this.dhisOut);
   }
 
@@ -883,6 +892,55 @@ export class AudioPlayer {
     this.nb2Node?.port.postMessage({ k: this.nb2K });
   }
   getNb2Strength(): number { return this.nb2K; }
+
+  /** Lazy-load the Pitch Shifter worklet. Spliced into the dhisOut
+   *  chain after rfwNode / nb2Node so pitch shifting is the last
+   *  audio-domain transform before the output mixer. */
+  ensurePitchShifterWorklet(log: LogFn = () => {}): Promise<void> {
+    if (this.pshiftNode) return Promise.resolve();
+    if (this.pshiftLoading) return this.pshiftLoading;
+    const ctx = this.ensureGraph();
+    if (!ctx || !ctx.audioWorklet || !this.vAnt23 || !this.dhisOut) {
+      return Promise.resolve();
+    }
+    this.pshiftLoading = (async () => {
+      try {
+        await ctx.audioWorklet.addModule('/pitch-shift-worklet.js');
+        const node = new AudioWorkletNode(ctx, 'pitch-shift', {
+          numberOfInputs: 1, numberOfOutputs: 1,
+          channelCount: 1, channelCountMode: 'explicit',
+          channelInterpretation: 'speakers',
+          processorOptions: { enabled: this.pshiftEnabled, semitones: this.pshiftSemitones },
+        });
+        this.pshiftNode = node;
+        this.rewireDhisChain();
+        node.port.postMessage({ enabled: this.pshiftEnabled, semitones: this.pshiftSemitones });
+        log('audio: pitch-shifter worklet loaded');
+      } catch (e) {
+        log('audio: pitch-shifter worklet load failed — ' + (e as Error).message);
+      }
+    })();
+    return this.pshiftLoading;
+  }
+
+  setPitchShifterEnabled(on: boolean): void {
+    this.pshiftEnabled = !!on;
+    if (this.pshiftNode) {
+      this.pshiftNode.port.postMessage({ enabled: this.pshiftEnabled });
+    } else {
+      this.ensurePitchShifterWorklet();
+    }
+  }
+  isPitchShifterEnabled(): boolean { return this.pshiftEnabled; }
+
+  /** Pitch offset in semitones; -12 ... +12 (one octave each way).
+   *  Negative = lower pitch, positive = higher pitch. 0 is bypass. */
+  setPitchShifterSemitones(s: number): void {
+    if (!Number.isFinite(s)) return;
+    this.pshiftSemitones = Math.max(-12, Math.min(12, Math.round(s)));
+    this.pshiftNode?.port.postMessage({ semitones: this.pshiftSemitones });
+  }
+  getPitchShifterSemitones(): number { return this.pshiftSemitones; }
 
   /** Begin async-loading the RFWhisper (RNNoise) worklet. Idempotent.
    *  Fetches /rnnoise.wasm on the main thread (AudioWorklet context can't

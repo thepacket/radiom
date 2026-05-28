@@ -1828,6 +1828,7 @@ export class Shell {
           <button class="fnbtn" id="btnNb2" style="display:none" title="NB2 — moved to DSP panel">NB2</button>
           <button class="fnbtn" id="btnAmnotch" style="display:none" title="NT2 — moved to DSP panel">NT2</button>
           <button class="fnbtn" id="btnRfw" style="display:none" title="NR2 — moved to DSP panel">NR2</button>
+          <button class="fnbtn" id="btnPshift" style="display:none" title="PS — Pitch shifter (DSP picker). Cycles off → −6 semitones → −12 semitones → +6 → +12 → off on each tap. Negative = lower pitch (good for fast CW), positive = higher pitch.">PS</button>
           <button class="fnbtn" id="btnVtrk3" style="display:none" title="VT — moved to DSP panel">VT</button>
           <button class="fnbtn" id="btnAfrm" style="display:none" title="AFF — moved to DSP panel">AFF</button>
           <button class="fnbtn" id="btnEq" style="display:none" title="EQ — moved to DSP panel">EQ</button>
@@ -2710,6 +2711,50 @@ export class Shell {
       updateRfwBtn();
     });
     updateRfwBtn();
+    // PS — pitch shifter. Cycles through useful semitone presets on
+    // each tap (off → -6 → -12 → +6 → +12 → off). Reached via the DSP
+    // picker; this is just the underlying button the picker delegates to.
+    const psSteps = [-6, -12, 6, 12];
+    const btnPshift = this.$('btnPshift') as HTMLButtonElement;
+    const updatePshiftBtn = () => {
+      const on = this.player.isPitchShifterEnabled();
+      const s = this.player.getPitchShifterSemitones();
+      btnPshift.classList.toggle('active', on);
+      btnPshift.textContent = on && s !== 0 ? `PS ${s > 0 ? '+' : ''}${s}` : 'PS';
+    };
+    btnPshift.addEventListener('click', () => {
+      const on = this.player.isPitchShifterEnabled();
+      const cur = this.player.getPitchShifterSemitones();
+      if (!on) {
+        this.player.setPitchShifterSemitones(psSteps[0]);
+        this.player.setPitchShifterEnabled(true);
+        this.banner(`PS ${psSteps[0]} semitones`, 1200);
+        try { localStorage.setItem('radiom.psOn', 'true');
+              localStorage.setItem('radiom.psSemi', String(psSteps[0])); } catch {}
+      } else {
+        const idx = psSteps.findIndex(s => s === cur);
+        const next = idx >= 0 && idx < psSteps.length - 1 ? idx + 1 : -1;
+        if (next < 0) {
+          this.player.setPitchShifterEnabled(false);
+          this.banner('PS OFF', 1000);
+          try { localStorage.setItem('radiom.psOn', 'false'); } catch {}
+        } else {
+          this.player.setPitchShifterSemitones(psSteps[next]);
+          this.banner(`PS ${psSteps[next] > 0 ? '+' : ''}${psSteps[next]} semitones`, 1200);
+          try { localStorage.setItem('radiom.psSemi', String(psSteps[next])); } catch {}
+        }
+      }
+      updatePshiftBtn();
+    });
+    updatePshiftBtn();
+    // Restore last PS state on load.
+    try {
+      const wasOn = localStorage.getItem('radiom.psOn') === 'true';
+      const s = parseFloat(localStorage.getItem('radiom.psSemi') || '');
+      if (Number.isFinite(s)) this.player.setPitchShifterSemitones(s);
+      if (wasOn) this.player.setPitchShifterEnabled(true);
+      updatePshiftBtn();
+    } catch { /* ignored */ }
     // WF row-duplication cycle button (1 → 2 → 3 → 4 → 1).
     const btnWfDup = this.$('btnWfDup') as HTMLButtonElement;
     btnWfDup.textContent = `x ${this.wfDup}`;
@@ -4994,6 +5039,7 @@ export class Shell {
       { label: 'VT',  selector: '#btnVtrk3' },
       { label: 'AFF', selector: '#btnAfrm' },
       { label: 'EQ',  selector: '#btnEq' },
+      { label: 'PS',  selector: '#btnPshift' },
       { label: 'GEN', selector: '#btnModes' },
     ];
 
