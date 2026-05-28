@@ -36,7 +36,9 @@
  */
 
 const ATTACK_MS    = 3;
-const RELEASE_MS   = 80;
+const RELEASE_MS   = 250;       // envelope release — slow so SSB syllable
+                                // gaps (50–300 ms) don't drop env below
+                                // threshold mid-word
 const FLOOR_INIT   = 1e-3;
 // Valley follower — chases envelope minimum quickly, rises slowly.
 // This makes the noise floor track the actual noise level instead of
@@ -46,8 +48,13 @@ const FLOOR_INIT   = 1e-3;
 // nothing in practice).
 const FLOOR_DOWN_MS = 60;       // chase envelope down (true noise hugs the floor)
 const FLOOR_UP_MS   = 4000;     // rise slowly when env is above floor
-const GAIN_ATTACK_MS  = 5;
-const GAIN_RELEASE_MS = 60;
+const GAIN_ATTACK_MS  = 5;      // gate opens fast
+const GAIN_RELEASE_MS = 350;    // gate closes slowly — covers up to ~0.5 s
+                                // of silence between voice bursts before
+                                // attenuation is fully audible
+const HOLD_MS         = 200;    // after env drops below threshold, gain
+                                // target stays at 1 for HOLD_MS to bridge
+                                // SSB inter-syllable gaps
 
 class ExpanderProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -65,10 +72,12 @@ class ExpanderProcessor extends AudioWorkletProcessor {
     this.floorUp    = 1 - Math.exp(-1 / (fs * FLOOR_UP_MS     / 1000));
     this.gainAttack = 1 - Math.exp(-1 / (fs * GAIN_ATTACK_MS  / 1000));
     this.gainRel    = 1 - Math.exp(-1 / (fs * GAIN_RELEASE_MS / 1000));
+    this.holdSamples = Math.max(1, Math.round(fs * HOLD_MS / 1000));
 
-    this.env        = 0;        // amplitude envelope
-    this.gain       = 1;        // smoothed gain (audible)
-    this.noiseFloor = FLOOR_INIT;
+    this.env         = 0;        // amplitude envelope
+    this.gain        = 1;        // smoothed gain (audible)
+    this.noiseFloor  = FLOOR_INIT;
+    this.holdCounter = 0;        // samples remaining of "hold open" hang
 
     this.port.onmessage = (e) => {
       const m = e.data || {};
@@ -85,6 +94,7 @@ class ExpanderProcessor extends AudioWorkletProcessor {
       if (m.type === 'reset') {
         this.env = 0; this.gain = 1;
         this.noiseFloor = FLOOR_INIT;
+        this.holdCounter = 0;
       }
     };
   }
@@ -117,7 +127,16 @@ class ExpanderProcessor extends AudioWorkletProcessor {
       const threshold = threshLin * this.noiseFloor;
       let gTarget;
       if (this.env >= threshold) {
+        // Above threshold → gate fully open, reset the hold timer so
+        // we'll wait HOLD_MS after the next drop before attenuating.
         gTarget = 1;
+        this.holdCounter = this.holdSamples;
+      } else if (this.holdCounter > 0) {
+        // Hold-open phase: gate stays fully open for HOLD_MS even though
+        // env has dropped below threshold. Bridges SSB inter-syllable
+        // gaps so we don't chop into words.
+        gTarget = 1;
+        this.holdCounter--;
       } else {
         // Smooth attenuation below threshold.
         const ratio = this.env / Math.max(1e-12, threshold);     // 0..1
