@@ -147,14 +147,25 @@ class ExpanderProcessor extends AudioWorkletProcessor {
       if (gTarget > this.gain) this.gain += gA * (gTarget - this.gain);
       else                     this.gain += gR * (gTarget - this.gain);
 
-      // Valley follower — floor tracks envelope minimums fast, rises
-      // slowly. Locks onto the actual noise level regardless of whether
-      // env is above or below threshold.
+      // Valley follower with signal-aware upward freeze.
+      //
+      //  - env < floor      → chase down fast (valley capture)
+      //  - env ≈ floor      → rise slowly (track real noise growth)
+      //  - env >> floor     → FREEZE (definitely a signal, not noise)
+      //
+      // Without the freeze, a sustained signal (FT8, CW, AM tone) lets
+      // the slow upward EMA converge the floor onto the signal level
+      // itself, lifting the threshold above the signal and causing
+      // the expander to attenuate the very thing it should be passing
+      // through. The 10-dB ceiling on upward drift keeps the floor
+      // honest about background noise.
+      const RISE_RATIO_LIMIT = 3.16;     // 10 dB
       if (this.env < this.noiseFloor) {
         this.noiseFloor += this.floorDown * (this.env - this.noiseFloor);
-      } else {
+      } else if (this.env < this.noiseFloor * RISE_RATIO_LIMIT) {
         this.noiseFloor += this.floorUp * (this.env - this.noiseFloor);
       }
+      // else: env > 10 dB above floor → signal, not noise. Freeze.
       if (this.noiseFloor < FLOOR_INIT) this.noiseFloor = FLOOR_INIT;
 
       out[i] = x * this.gain;
