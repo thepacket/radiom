@@ -21,6 +21,15 @@ of decoder bridges running on a small Node backend:
   via a remote RTL-SDR USB receiver exposed over TCP). Required for
   the IQ-baseband decoders that need ≥1 MS/s (ADS-B at 1090 MHz, UAT
   at 978 MHz, AERO / STD-C at L-band, LRPT / HRPT, OP25 trunking, etc.).
+  **rtl_tcp support is work-in-progress** — known issues with
+  audio/control coupling and tuning latency are being iterated on.
+- **Airspy SpyServer** — fourth source, public Airspy R2/Mini/HF+
+  servers via the SpyServer binary protocol, with server-side csdr
+  audio demod + waterfall synthesis on the radiom backend.
+  **SpyServer support is work-in-progress** — audio quality varies
+  with the upstream server's RF chain, the AGC chain still has
+  artifact issues on some signals, and cursor/click-tune ergonomics
+  are still being refined.
 
 The active source is selected from the top bar; each decoder
 indicates in its tooltip whether it requires an IQ-capable source

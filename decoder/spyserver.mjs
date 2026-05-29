@@ -58,6 +58,7 @@
 // `srOut` Hz.
 
 import net from 'node:net';
+import { CsdrPipeline } from './csdr-pipeline.mjs';
 
 // ── Protocol constants ─────────────────────────────────────────────
 
@@ -97,13 +98,54 @@ const SETTING_IQ_FORMAT          = 100;
 const SETTING_IQ_FREQUENCY       = 101;
 const SETTING_IQ_DECIMATION      = 102;
 const SETTING_IQ_DIGITAL_GAIN    = 103;
+const SETTING_FFT_FORMAT         = 200;
+const SETTING_FFT_FREQUENCY      = 201;
+const SETTING_FFT_DECIMATION     = 202;
+const SETTING_FFT_DB_OFFSET      = 203;
+const SETTING_FFT_DB_RANGE       = 204;
+const SETTING_FFT_DISPLAY_PIXELS = 205;
+const SETTING_AUDIO_FORMAT       = 300;
+const SETTING_AUDIO_FREQUENCY    = 301;
+const SETTING_AUDIO_DECIMATION   = 302;
+const SETTING_AUDIO_DIGITAL_GAIN = 303;
+const SETTING_AUDIO_DEMOD_MODE   = 304;
+const SETTING_AUDIO_BANDWIDTH    = 305;
+const SETTING_AUDIO_OUTPUT_RATE  = 306;
 
-// Streaming modes (bitfield)
-const STREAM_MODE_IQ_ONLY        = 0x01;
-// (AUDIO_ONLY = 0x02, FFT_ONLY = 0x04 — not used in first-cut)
+// Streaming modes (bitfield combinable)
+const STREAM_MODE_IQ             = 0x01;
+const STREAM_MODE_AUDIO          = 0x02;
+const STREAM_MODE_FFT            = 0x04;
 
-// IQ format IDs
+// Format IDs
+const FORMAT_UINT8 = 1;
 const FORMAT_INT16 = 2;
+
+// Demodulator modes — SpyServer's enum
+const DEMOD_AM    = 1;
+const DEMOD_NBFM  = 2;
+const DEMOD_WBFM  = 3;
+const DEMOD_USB   = 4;
+const DEMOD_LSB   = 5;
+const DEMOD_CW    = 6;
+const DEMOD_RAW   = 7;
+
+// Map radiom mode strings → SpyServer demod constants.
+const MODE_TO_DEMOD = {
+  am: DEMOD_AM, sam: DEMOD_AM, sal: DEMOD_AM, sau: DEMOD_AM,
+  nbfm: DEMOD_NBFM, nfm: DEMOD_NBFM,
+  wfm: DEMOD_WBFM,
+  usb: DEMOD_USB,
+  lsb: DEMOD_LSB,
+  cw:  DEMOD_CW,
+  iq:  DEMOD_RAW,
+};
+
+// Binary WS frame tag bytes — each binary frame the bridge forwards to
+// the browser is prefixed with one of these so the client can demux.
+const TAG_IQ    = 0x00;
+const TAG_AUDIO = 0x01;
+const TAG_FFT   = 0x02;
 
 // Device-type IDs (mapped to a human label only; correctness optional)
 const DEVICE_LABELS = {
@@ -139,9 +181,14 @@ export class SpyServerBridge {
    * @param {object} opts
    * @param {string} opts.host
    * @param {number} opts.port
-   * @param {(buf: Buffer) => void}  opts.onIq      — int16 LE IQ
+   * @param {(buf: Buffer) => void}  opts.onIq      — int16 BE IQ
+   * @param {(buf: Buffer) => void}  [opts.onAudio] — int16 BE audio PCM
+   * @param {(buf: Buffer) => void}  [opts.onFft]   — uint8 FFT bins
    * @param {(info: object) => void} [opts.onHello]
    * @param {(msg: string) => void}  [opts.onStatus]
+   * @param {number}                 [opts.demodMode]   — SpyServer demod ID
+   * @param {number}                 [opts.audioBwHz]   — audio passband width Hz
+   * @param {number}                 [opts.streamMode]  — bitfield of STREAM_MODE_*
    */
   constructor(opts) {
     this.opts = opts;
@@ -161,7 +208,77 @@ export class SpyServerBridge {
     this.pendingFreqHz = null;
     this.pendingGain = null;
     this.pingTimer = null;
+    // Current demod settings — populated by setMode / setPassband
+    // from the browser and re-applied to the server on reconnect.
+    this.demodMode  = opts.demodMode  ?? DEMOD_USB;     // 4 (USB) — safe default
+    this.audioBwHz  = opts.audioBwHz  ?? 3000;          // 3 kHz default
+    // Default to AUDIO_ONLY. Combined AUDIO|FFT (0x06) is the natural
+    // wish but many SpyServer implementations either ignore one of the
+    // two modes or refuse to stream at all when given a multi-bit value
+    // (observed: R2 + RTL servers send DEVICE_INFO and CLIENT_SYNC
+    // then sit silent with mode=0x6, watchdog tears down). Single-mode
+    // requests are what SDR++ / SDR# use in the wild.
+    this.streamMode = opts.streamMode ?? STREAM_MODE_AUDIO;
+    // Server-side DSP pipeline (csdr). Lazily constructed in
+    // feedCsdr once we know srOut + a demod mode.
+    this.csdr = null;
+    // Phase accumulator for the JS-side IQ frequency shift. Persists
+    // across feedCsdr calls and across shiftHz changes so transitions
+    // are clickless (no phase reset at the boundary).
+    this.shiftPhase = 0;
     this.connect();
+  }
+
+  /** Bridge between SpyServer IQ and the csdr demod/FFT chains. */
+  feedCsdr(le16IqBuf) {
+    if (!this.srOut || !le16IqBuf || !le16IqBuf.length) return;
+    if (!this.csdr) {
+      const modeStr = Object.keys(MODE_TO_DEMOD).find(
+        (k) => MODE_TO_DEMOD[k] === this.demodMode,
+      ) || 'usb';
+      this.csdr = new CsdrPipeline({
+        inputRate: this.srOut,
+        mode: modeStr,
+        passLoHz: this.passLoHz ?? null,
+        passHiHz: this.passHiHz ?? null,
+        bandpassTaps: this.bandpassTaps ?? null,
+        agcProfile: this.agcProfile ?? 'off',
+        fixedGain:  this.fixedGain  ?? 8,
+        onAudio: (buf) => this.opts.onAudio?.(buf),
+        onFft:   (buf) => this.opts.onFft?.(buf),
+        onStatus: (m) => this.opts.onStatus?.(m),
+      });
+      this.announceCsdrRate();
+    } else if (this.csdr.inputRate !== this.srOut) {
+      this.csdr.setInputRate(this.srOut);
+      this.announceCsdrRate();
+    }
+    this.csdr.feedIq(le16IqBuf);
+  }
+
+  /** Notify the WS client of the current csdr audio output rate so the
+   *  browser player can sync its input rate. Fires every time the
+   *  pipeline (re)builds — initial spawn, mode change, BW change. */
+  announceCsdrRate() {
+    const rate = this.csdr?.getAudioRate();
+    if (!rate) return;
+    if (rate === this._lastAnnouncedAudioRate) return;
+    this._lastAnnouncedAudioRate = rate;
+    this.opts.onHello?.({
+      device: DEVICE_LABELS[this.deviceType] || `unknown(${this.deviceType})`,
+      deviceType: this.deviceType,
+      srOut: this.srOut,
+      maxSr: this.maxSr,
+      minHz: this.minHz,
+      maxHz: this.maxHz,
+      maxGain: this.maxGain,
+      decimStage: this.decimStage,
+      tunedHz: this.pendingFreqHz ?? 0,
+      streamMode: this.streamMode,
+      demodMode: this.demodMode,
+      audioBwHz: this.audioBwHz,
+      audioRate: rate,
+    });
   }
 
   connect() {
@@ -221,19 +338,57 @@ export class SpyServerBridge {
   }
 
   /** Apply the standard IQ streaming setup once we know the device. */
-  configureIqStream(freqHz, gainIdx) {
+  /** Send the full stack of stream settings (format, decim, freq,
+   *  gain, mode, then ENABLED). Called once we have DEVICE_INFO +
+   *  CLIENT_SYNC and again on every external setMode / setStreamMode
+   *  / setPassband. The order matches SDR++. */
+  configureStream(freqHz, gainIdx) {
     if (!this.gotDeviceInfo) return;
-    this.decimStage = pickDecimationStage(this.maxSr, 250_000);
-    this.srOut = Math.max(1, Math.round(this.maxSr / (1 << this.decimStage)));
+    const wantIq    = !!(this.streamMode & STREAM_MODE_IQ);
+    const wantAudio = !!(this.streamMode & STREAM_MODE_AUDIO);
+    const wantFft   = !!(this.streamMode & STREAM_MODE_FFT);
     const clampedHz = Math.max(this.minHz || 0, Math.min(this.maxHz || 0xffffffff, freqHz | 0));
-    // Send in the order SDR++ uses — format/freq/decim/gain first, then
-    // STREAMING_MODE, then STREAMING_ENABLED.
+    // Pick decim stage based on what we're actually streaming. For IQ
+    // we target ~250 kS/s; for audio-only/FFT-only the server handles
+    // its own internal decim chain so we just need any sane stage.
+    if (wantIq) {
+      this.decimStage = pickDecimationStage(this.maxSr, 250_000);
+    } else {
+      // Audio-mode: prefer a higher stage to keep server-side CPU low.
+      this.decimStage = pickDecimationStage(this.maxSr, 48_000);
+    }
+    this.srOut = Math.max(1, Math.round(this.maxSr / (1 << this.decimStage)));
+
+    // Back to IQ-only — server-side audio mode wasn't working on any
+    // tested server (R2, RTL-SDR, HF+). All accepted settings, replied
+    // to PINGs, but never sent audio. Going back to the v0.4.44 IQ
+    // path that DID work, just at much lower rate.
+    //
+    // Bandwidth-driven decimation: target IQ rate = audioBwHz × 3.
+    // The × 3 gives margin for SSB asymmetric demod (lowCut..highCut
+    // is not symmetric around DC) and a touch of anti-alias slack.
+    // Clamped to 6-48 kHz: tighter than 6 kHz would clip even narrow
+    // SSB; wider than 48 kHz is pointless for any voice mode and just
+    // burns fly bandwidth. Narrower BW → narrower IQ → less integrated
+    // noise → better SNR for that mode, and proportionally less data
+    // through the proxy (a 2.7 kHz SSB session runs at ~8 kS/s IQ ≈
+    // 32 KB/s; a 12 kHz NBFM session at ~36 kS/s IQ ≈ 144 KB/s).
+    this.streamMode = STREAM_MODE_IQ;
+    // Floor the IQ rate at 12 kHz. The downstream csdr pipeline
+    // guarantees a fixed 12 kHz audio output via fractional_decimator_ff
+    // — but that can only DECIMATE, not interpolate, so we need IQ
+    // rate >= 12 kHz at all times. 12 kHz IQ × 4 bytes/sample = 48 KB/s
+    // which is fine for fly.io egress.
+    const target = Math.max(12_000, Math.min(48_000, (this.audioBwHz | 0) * 3));
+    this.decimStage = pickDecimationStage(this.maxSr, target);
+    this.srOut = Math.max(1, Math.round(this.maxSr / (1 << this.decimStage)));
     this.setSettingU32(SETTING_IQ_FORMAT,       FORMAT_INT16);
     this.setSettingU32(SETTING_IQ_FREQUENCY,    clampedHz);
     this.setSettingU32(SETTING_IQ_DECIMATION,   this.decimStage);
     if (gainIdx != null) this.setSettingU32(SETTING_GAIN, Math.max(0, gainIdx | 0));
-    this.setSettingU32(SETTING_STREAMING_MODE,    STREAM_MODE_IQ_ONLY);
+    this.setSettingU32(SETTING_STREAMING_MODE,    STREAM_MODE_IQ);
     this.setSettingU32(SETTING_STREAMING_ENABLED, 1);
+    void wantIq; void wantAudio; void wantFft;
     this.opts.onHello?.({
       device: DEVICE_LABELS[this.deviceType] || `unknown(${this.deviceType})`,
       deviceType: this.deviceType,
@@ -244,6 +399,17 @@ export class SpyServerBridge {
       maxGain: this.maxGain,
       decimStage: this.decimStage,
       tunedHz: clampedHz,
+      streamMode: this.streamMode,
+      demodMode: this.demodMode,
+      audioBwHz: this.audioBwHz,
+      // Pull the audio rate from the live csdr pipeline if it exists.
+      // Otherwise leave null — the bridge will emit a follow-up hello
+      // via announceCsdrRate() once the first IQ frame at the new rate
+      // arrives and the pipeline (re)builds. Emitting a guess here
+      // (e.g. 12000) and having the client fall back to srOut for a
+      // missing value caused the pitch-shift + on/off audio behaviour
+      // on every BW change.
+      audioRate: this.csdr?.getAudioRate() ?? null,
     });
   }
 
@@ -286,14 +452,13 @@ export class SpyServerBridge {
       // Both paths emit int16 BE (Kiwi convention) to the WS.
       case SRV_MSG_UINT8_IQ:     return this.onUint8Iq(body);
       case SRV_MSG_INT16_IQ:     return this.onInt16Iq(body);
-      // Higher-bit IQ + FFT/audio formats we don't request — log if
-      // they ever appear so the wiring is debuggable.
+      case SRV_MSG_INT16_AUDIO:  return this.onInt16Audio(body);
+      case SRV_MSG_UINT8_FFT:    return this.onUint8Fft(body);
+      // Higher-bit / unused formats — log if seen.
       case SRV_MSG_INT24_IQ:
       case SRV_MSG_FLOAT_IQ:
-      case SRV_MSG_UINT8_FFT:
       case SRV_MSG_INT16_FFT:
       case SRV_MSG_UINT8_AUDIO:
-      case SRV_MSG_INT16_AUDIO:
         this.opts.onStatus?.(`unexpected stream type ${messageType} body=${body.length}`);
         return;
       default:
@@ -308,13 +473,20 @@ export class SpyServerBridge {
    *  IQ-side viewer expects. */
   onUint8Iq(body) {
     if (body.length < 2) return;
-    const out = Buffer.allocUnsafe(body.length * 2);
+    // Build LE int16 first (for csdr) and BE int16 (for the IQ viewers).
+    const leOut = Buffer.allocUnsafe(body.length * 2);
+    const beOut = Buffer.allocUnsafe(body.length * 2);
     for (let i = 0; i < body.length; i++) {
       const v = (body[i] - 128) * 256;
-      out[i * 2]     = (v >> 8) & 0xff;       // high byte first (BE)
-      out[i * 2 + 1] = v        & 0xff;
+      // LE
+      leOut[i * 2]     = v        & 0xff;
+      leOut[i * 2 + 1] = (v >> 8) & 0xff;
+      // BE
+      beOut[i * 2]     = (v >> 8) & 0xff;
+      beOut[i * 2 + 1] = v        & 0xff;
     }
-    this.opts.onIq?.(out);
+    this.feedCsdr(leOut);
+    this.opts.onIq?.(beOut);
   }
 
   onDeviceInfo(body) {
@@ -350,7 +522,7 @@ export class SpyServerBridge {
     void body;
     this.gotSync = true;
     if (this.gotDeviceInfo) {
-      this.configureIqStream(
+      this.configureStream(
         this.pendingFreqHz ?? Math.max(0, Math.min(this.maxHz, this.minHz + 1_000_000)),
         this.pendingGain ?? Math.floor(this.maxGain * 0.6),
       );
@@ -359,6 +531,11 @@ export class SpyServerBridge {
 
   onInt16Iq(body) {
     if (body.length < 4) return;
+    // Feed csdr (LE in / LE out) BEFORE the byte-swap that the IQ
+    // viewers downstream expect. csdr reads native-endian int16 floats
+    // and the spyserver wire format is already LE, so this is a direct
+    // pass-through into the demod + FFT pipelines.
+    this.feedCsdr(body);
     // The body is already int16 LE I/Q interleaved at `srOut`. Browser
     // pipeline expects BIG-endian int16 (Kiwi convention reused by rtl_tcp
     // bridge — see Kiwi IQ-mode), so byte-swap each sample pair.
@@ -370,6 +547,29 @@ export class SpyServerBridge {
     this.opts.onIq?.(out);
   }
 
+  /** Server-side-demodulated PCM audio. Bytes are int16 LE; the Kiwi
+   *  audio path wants int16 BE, so byte-swap each pair the same way
+   *  we do for IQ. Output is mono PCM at 12 kHz (we requested
+   *  AUDIO_OUTPUT_RATE = 12000). */
+  onInt16Audio(body) {
+    if (body.length < 2) return;
+    const out = Buffer.allocUnsafe(body.length);
+    for (let i = 0; i + 1 < body.length; i += 2) {
+      out[i]     = body[i + 1];
+      out[i + 1] = body[i];
+    }
+    this.opts.onAudio?.(out);
+  }
+
+  /** Server-side FFT — uint8 dB-scaled bin values. We requested
+   *  1024 bins (SETTING_FFT_DISPLAY_PIXELS) and UINT8 format. Forward
+   *  verbatim; client wraps as a WaterfallFrame and pushes to the
+   *  spectrum view. */
+  onUint8Fft(body) {
+    if (body.length < 1) return;
+    this.opts.onFft?.(body);
+  }
+
   // ── External control ──────────────────────────────────────────────
 
   setFreq(hz) {
@@ -378,12 +578,113 @@ export class SpyServerBridge {
   }
   setGainIndex(idx) {
     this.pendingGain = Math.max(0, idx | 0);
+    this.opts.onStatus?.(`setGainIndex idx=${this.pendingGain} sync=${this.gotSync}`);
     if (this.gotSync) this.setSettingU32(SETTING_GAIN, this.pendingGain);
+  }
+
+  /** Set audio passband cutoffs in Hz (signed, relative to dial).
+   *  For LSB: lo=-2700, hi=-300. For USB: lo=300, hi=2700. For AM:
+   *  lo=-bw/2, hi=+bw/2. The csdr pipeline uses these to drive its
+   *  bandpass filter (and the SSB shift). Without this the audio
+   *  filter would stay locked at the hardcoded mode default and the
+   *  BW knob would be silent. */
+  setPassband(loHz, hiHz) {
+    this.passLoHz = Math.round(loHz);
+    this.passHiHz = Math.round(hiHz);
+    this.opts.onStatus?.(`setPassband lo=${this.passLoHz} hi=${this.passHiHz} csdr=${this.csdr ? 'live' : 'null'}`);
+    if (this.csdr) this.csdr.setPassband(this.passLoHz, this.passHiHz);
+  }
+
+  /** Number of FIR taps in the csdr bandpass channel filter. */
+  setBandpassTaps(n) {
+    if (!Number.isFinite(n) || n < 50) return;
+    this.bandpassTaps = Math.round(n);
+    this.opts.onStatus?.(`setBandpassTaps n=${this.bandpassTaps} csdr=${this.csdr ? 'live' : 'null'}`);
+    if (this.csdr) this.csdr.setBandpassTaps(this.bandpassTaps);
+  }
+
+  // setShiftHz removed — every dial change now re-tunes the SpyServer
+  // (simple, reliable model). See SpyServerClient.setFreqKHz.
+
+  /** Set fixed post-demod gain (applied when AGC is 'off'). */
+  setFixedGain(g) {
+    if (!Number.isFinite(g) || g <= 0) return;
+    this.fixedGain = g;
+    this.opts.onStatus?.(`setFixedGain g=${this.fixedGain} csdr=${this.csdr ? 'live' : 'null'}`);
+    if (this.csdr) this.csdr.setFixedGain(this.fixedGain);
+  }
+
+  /** Set csdr's audio AGC profile. 'off' drops the agc_ff stage. */
+  setAgcProfile(profile) {
+    const allowed = new Set(['off', 'fast', 'med', 'slow']);
+    const p = String(profile || '').toLowerCase();
+    if (!allowed.has(p)) return;
+    this.agcProfile = p;
+    this.opts.onStatus?.(`setAgcProfile profile=${this.agcProfile} csdr=${this.csdr ? 'live' : 'null'}`);
+    if (this.csdr) this.csdr.setAgcProfile(this.agcProfile);
+  }
+
+  /** Switch demod mode at runtime — sends SETTING_AUDIO_DEMOD_MODE.
+   *  `mode` is a radiom mode string ('am' / 'usb' / 'lsb' / 'cw' /
+   *  'nbfm' / 'wfm'); we map to the SpyServer enum here. */
+  setMode(mode) {
+    const m = String(mode || '').toLowerCase();
+    const demod = MODE_TO_DEMOD[m];
+    if (demod == null) return;
+    this.demodMode = demod;
+    if (this.gotSync) this.setSettingU32(SETTING_AUDIO_DEMOD_MODE, this.demodMode);
+    // Tell the csdr pipeline to rebuild with the new demod chain.
+    if (this.csdr) this.csdr.setMode(m);
+  }
+
+  /** Audio bandwidth in Hz — drives the IQ decimation stage so the
+   *  upstream IQ rate scales with the user's chosen BW. Narrower BW
+   *  → narrower IQ rate → less noise + less proxy bandwidth.
+   *
+   *  Re-runs configureStream which pauses STREAMING_ENABLED, reapplies
+   *  IQ_DECIMATION, and resumes. Emits a fresh hello so the client can
+   *  update its IqListenDemod input rate. */
+  setBandwidthHz(hz) {
+    if (!Number.isFinite(hz) || hz <= 0) return;
+    const next = Math.round(hz);
+    if (next === this.audioBwHz) return;
+    this.audioBwHz = next;
+    if (this.gotSync) {
+      // Keep the AUDIO_BANDWIDTH setting too — harmless even though
+      // server-side audio mode isn't what we use.
+      this.setSettingU32(SETTING_AUDIO_BANDWIDTH, this.audioBwHz);
+      // Pause streaming, reapply settings (which picks a new decim
+      // stage based on the new BW), resume.
+      this.setSettingU32(SETTING_STREAMING_ENABLED, 0);
+      this.configureStream(
+        this.pendingFreqHz ?? Math.max(0, Math.min(this.maxHz, this.minHz + 1_000_000)),
+        this.pendingGain ?? null,
+      );
+    }
+  }
+
+  /** Switch stream mode (AUDIO / IQ / FFT bitfield). Re-applies all
+   *  settings the new mode needs and enables streaming.
+   *  Note: SpyServer needs STREAMING_ENABLED toggled when mode changes
+   *  on some implementations — we do it inside configureStream. */
+  setStreamMode(streamMode) {
+    if (!Number.isFinite(streamMode)) return;
+    this.streamMode = streamMode | 0;
+    if (this.gotSync) {
+      // Pause briefly, reconfigure, resume.
+      this.setSettingU32(SETTING_STREAMING_ENABLED, 0);
+      this.configureStream(
+        this.pendingFreqHz ?? Math.max(0, Math.min(this.maxHz, this.minHz + 1_000_000)),
+        this.pendingGain ?? null,
+      );
+    }
   }
 
   close() {
     this.closed = true;
     if (this.pingTimer != null) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    try { this.csdr?.stop(); } catch {}
+    this.csdr = null;
     try { this.setSettingU32(SETTING_STREAMING_ENABLED, 0); } catch {}
     try { this.sock?.end(); } catch {}
     this.sock = null;

@@ -372,37 +372,33 @@ RUN mkdir -p /out && \
               -name "*op25*" 2>/dev/null | sed 's|^/||') \
         2>/dev/null || true
 
-# ---- LRPT / satdump (SatDump/SatDump headless CLI) ----
-# satdump.org's official Linux build dep list (CLI only; GUI/OpenCL
-# off). We skip SDR backend libs since the bridge feeds baseband over
-# a file/fifo — live SDR plugins aren't needed.
-FROM debian:bookworm-slim AS lrpt-build
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ libc6-dev make git ca-certificates cmake pkgconf \
-        libfftw3-dev libpng-dev libjpeg-dev libtiff-dev \
-        libsqlite3-dev libvolk2-dev libnng-dev libjemalloc-dev \
-        zlib1g-dev libcurl4-openssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /src
-COPY decoders/lrpt ./decoders/lrpt
-RUN mkdir -p /out && \
-    bash decoders/lrpt/build.sh && \
-    cp decoders/lrpt/bin/satdump-install.tar.gz /out/satdump-install.tar.gz && \
-    { /usr/local/bin/satdump --help 2>&1 | head -5 || true; }
-
-# Pre-seed TLEs at build time. celestrak.org rate-limits / IP-blocks
-# fly.io's runtime egress so satdump's startup fetch always fails on
-# the live VM. The BuildKit VM has different egress (and we send a
-# regular-browser UA), so the download here usually succeeds. We then
-# expose the file at /usr/local/share/satdump/initial_tles.tle and
-# rewrite satdump's TLE URLs to read it locally via file://.
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
-    mkdir -p /out/tle-seed/usr/local/share/satdump && \
-    curl -fsSL -A 'Mozilla/5.0 (X11; Linux x86_64)' \
-         'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle' \
-         -o /out/tle-seed/usr/local/share/satdump/initial_tles.tle \
-      || (echo "WARN: TLE pre-seed download failed; runtime will retry against celestrak" >&2 && \
-          : > /out/tle-seed/usr/local/share/satdump/initial_tles.tle)
+# ---- LRPT / satdump — DISABLED for faster deploys ----
+# The satdump build is the slowest stage (~5–10 min): full upstream
+# clone + cmake build of every plugin + a TLE pre-seed RUN. To re-
+# enable, uncomment the block below AND the matching COPY/RUN block
+# under the runtime stage further down. The LRPT decoder button in
+# the UI will fail silently (no satdump binary on PATH) until then.
+#
+# FROM debian:bookworm-slim AS lrpt-build
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#         gcc g++ libc6-dev make git ca-certificates cmake pkgconf \
+#         libfftw3-dev libpng-dev libjpeg-dev libtiff-dev \
+#         libsqlite3-dev libvolk2-dev libnng-dev libjemalloc-dev \
+#         zlib1g-dev libcurl4-openssl-dev \
+#     && rm -rf /var/lib/apt/lists/*
+# WORKDIR /src
+# COPY decoders/lrpt ./decoders/lrpt
+# RUN mkdir -p /out && \
+#     bash decoders/lrpt/build.sh && \
+#     cp decoders/lrpt/bin/satdump-install.tar.gz /out/satdump-install.tar.gz && \
+#     { /usr/local/bin/satdump --help 2>&1 | head -5 || true; }
+# RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+#     mkdir -p /out/tle-seed/usr/local/share/satdump && \
+#     curl -fsSL -A 'Mozilla/5.0 (X11; Linux x86_64)' \
+#          'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle' \
+#          -o /out/tle-seed/usr/local/share/satdump/initial_tles.tle \
+#       || (echo "WARN: TLE pre-seed download failed; runtime will retry against celestrak" >&2 && \
+#           : > /out/tle-seed/usr/local/share/satdump/initial_tles.tle)
 
 # ---- ADS-B (flightaware/dump1090) ----
 # Active fork (formerly mutability/dump1090, last touched 2017).
@@ -618,6 +614,26 @@ RUN mkdir -p /out && \
     cp decoders/throb-fldigi/bin/throb-fldigi-decoder /out/throb-fldigi-decoder && \
     { /out/throb-fldigi-decoder --help 2>&1 | head -3 || true; }
 
+# ---- csdr (jketterl/csdr) — OpenWebRX DSP toolkit ----
+# Used by the SpyServer bridge for server-side IQ→audio demod and
+# server-side FFT/waterfall generation. Single binary with stdin/
+# stdout subcommands (fmdemod_quadri_cf, amdemod_cf, bandpass_fir_fft_cc,
+# fft_cc, logpower_cf, convert_f_s16, ...). Same DSP code OpenWebRX
+# ships in production.
+FROM debian:bookworm-slim AS csdr-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc g++ libc6-dev make cmake git ca-certificates pkg-config \
+        binutils \
+        libfftw3-dev libsamplerate0-dev libcodec2-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY decoders/csdr ./decoders/csdr
+RUN mkdir -p /out && \
+    bash decoders/csdr/build.sh && \
+    cp decoders/csdr/bin/csdr /out/csdr && \
+    cp decoders/csdr/bin/csdr-install.tar.gz /out/csdr-install.tar.gz && \
+    { /out/csdr 2>&1 | head -10 || true; }
+
 # ---- direwolf — HF AX.25/APRS packet decoder ----
 # Built with ALSA only (no portaudio/hamlib/gpsd/cm108) so the binary's
 # runtime deps stay tiny. direwolf reads raw 12 kHz int16 PCM from stdin
@@ -724,29 +740,23 @@ RUN mkdir -p /usr/local/share/op25 && \
     tar xzf /tmp/op25-apps.tar.gz -C /usr/local/share/op25/ && \
     rm /tmp/op25-apps.tar.gz /tmp/op25-install.tar.gz && \
     ldconfig
-# satdump installs into /usr/local with its core lib, plugins, and
-# resources tree. Ship the install tarball and unpack it system-wide
-# so ld.so finds libsatdump_core.so and satdump's runtime loaders
-# resolve /usr/local/share/satdump for pipelines / frequencies.
-COPY --from=lrpt-build /out/satdump-install.tar.gz /tmp/
-COPY --from=lrpt-build /out/tle-seed/usr/local/share/satdump/initial_tles.tle /usr/local/share/satdump/initial_tles.tle
-RUN tar xzf /tmp/satdump-install.tar.gz -C / && rm /tmp/satdump-install.tar.gz && ldconfig && \
-    mkdir -p ./decoders/lrpt/bin /root/.config/satdump && \
-    ln -sf /usr/local/bin/satdump ./decoders/lrpt/bin/satdump && \
-    # User override goes in settings.json (NOT satdump_cfg.json —
-    # that's the name of the built-in defaults template). satdump's
-    # loadUser() reads $HOME/.config/satdump/settings.json and merges
-    # it over the defaults via perform_json_diff/merge_json_diffs, so
-    # untouched keys keep upstream behavior.
-    printf '%s\n' \
-      '{' \
-      '  "tle_settings": {' \
-      '    "urls_to_fetch": [' \
-      '      "file:///usr/local/share/satdump/initial_tles.tle"' \
-      '    ],' \
-      '    "tles_to_fetch": []' \
-      '  }' \
-      '}' > /root/.config/satdump/settings.json
+# satdump (LRPT) — DISABLED. Re-enable along with the lrpt-build
+# stage above. Commented as a single block so it's trivial to flip
+# back on when needed.
+# COPY --from=lrpt-build /out/satdump-install.tar.gz /tmp/
+# COPY --from=lrpt-build /out/tle-seed/usr/local/share/satdump/initial_tles.tle /usr/local/share/satdump/initial_tles.tle
+# RUN tar xzf /tmp/satdump-install.tar.gz -C / && rm /tmp/satdump-install.tar.gz && ldconfig && \
+#     mkdir -p ./decoders/lrpt/bin /root/.config/satdump && \
+#     ln -sf /usr/local/bin/satdump ./decoders/lrpt/bin/satdump && \
+#     printf '%s\n' \
+#       '{' \
+#       '  "tle_settings": {' \
+#       '    "urls_to_fetch": [' \
+#       '      "file:///usr/local/share/satdump/initial_tles.tle"' \
+#       '    ],' \
+#       '    "tles_to_fetch": []' \
+#       '  }' \
+#       '}' > /root/.config/satdump/settings.json
 COPY --from=adsb-build /out/dump1090 ./decoders/adsb/bin/dump1090
 COPY --from=vdl2-build /out/dumpvdl2 ./decoders/vdl2/bin/dumpvdl2
 COPY --from=uat-build /out/dump978 ./decoders/uat/bin/dump978
@@ -765,6 +775,18 @@ COPY --from=sstv-build /out/slowrxd ./decoders/sstv/bin/slowrxd
 COPY --from=freedv-build /out/freedv_rx ./decoders/freedv/bin/freedv_rx
 COPY --from=freedv-build /out/libcodec2.so* /usr/local/lib/
 COPY --from=throb-fldigi-build /out/throb-fldigi-decoder ./decoders/throb-fldigi/bin/throb-fldigi-decoder
+# csdr (single binary + libcsdr.so for OpenWebRX-style DSP pipelines —
+# used by the SpyServer bridge to demod IQ and synthesise FFT frames
+# server-side, so the browser never has to do real-time DSP).
+COPY --from=csdr-build /out/csdr ./decoders/csdr/bin/csdr
+COPY --from=csdr-build /out/csdr-install.tar.gz /tmp/csdr-install.tar.gz
+# Tarball contains usr/local/lib/libcsdr.so.<ver> + symlink. Unpack
+# at / so the layout lands under /usr/local/lib (already on the linker
+# search path) and refresh ld.so.cache.
+RUN tar xzf /tmp/csdr-install.tar.gz -C / && \
+    rm /tmp/csdr-install.tar.gz && \
+    ldconfig && \
+    ls -la /usr/local/lib/libcsdr* 2>&1 || true
 # Refresh the dynamic-linker cache so freedv_rx finds libcodec2.so at
 # runtime (the .so files live under /usr/local/lib which is on the
 # default search path but only if ldconfig has registered them).

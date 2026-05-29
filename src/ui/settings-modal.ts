@@ -107,6 +107,32 @@ export interface Settings {
   // ── NAVTEX / SITOR-B ────────────────────────────────────────────
   navtexCarrierHz: number;       // audio centre (1900 default)
   navtexMode: 'navtex' | 'sitorb';
+
+  // ── Airspy server-side csdr channel filter ────────────────────────
+  /** Number of FIR taps in the bandpass_fir_fft_cc channel filter the
+   *  bridge runs in csdr. More taps = sharper transitions (better
+   *  adjacent-station rejection, deeper stopband) but more CPU and
+   *  slightly more latency. Sensible range 200..4000. Default 801
+   *  matches OpenWebRX. */
+  airspyBandpassTaps: number;
+  /** csdr audio AGC profile. 'off' substitutes a fixed gain stage
+   *  (see airspyFixedGain) — best for clean SSB/CW since csdr's
+   *  agc_ff produces spikes on noise transients. */
+  airspyAgcProfile: 'off' | 'fast' | 'med' | 'slow';
+  /** Post-demod fixed gain applied when AGC is 'off'. Multiplies the
+   *  demod output before limit_ff. Typical SSB demod levels are
+   *  ~0.02; gain 8.0 brings them to ~0.16 (comfortable). */
+  airspyFixedGain: number;
+
+  // ── Audio FFT viewer (SPEC) ───────────────────────────────────────
+  /** FFT size for the audio analyser. Higher = finer Hz resolution,
+   *  more samples needed per frame. Power of 2 from 256 to 32768. */
+  audioFftSize: number;
+  /** Web Audio AnalyserNode smoothingTimeConstant — exponential
+   *  moving average factor over successive FFT frames. 0 = no
+   *  averaging (instant, jumpy), 0.95 = heavy averaging (smooth,
+   *  slow). Equivalent "samples averaged" ≈ 1/(1-α). */
+  audioFftSmoothing: number;
 }
 
 const KEY = 'radiom.settings.v1';
@@ -182,6 +208,12 @@ export const DEFAULT_SETTINGS: Settings = {
 
   navtexCarrierHz: 1900,
   navtexMode: 'navtex',
+
+  airspyBandpassTaps: 801,
+  airspyAgcProfile: 'off',
+  airspyFixedGain: 8,
+  audioFftSize: 16384,
+  audioFftSmoothing: 0.6,
 };
 
 export function loadSettings(): Settings {
@@ -424,6 +456,41 @@ export function openSettingsModal(opts: SettingsModalOpts): void {
         </div>
 
         <div class="settings-section">
+          <div class="settings-section-title">Audio FFT (SPEC viewer)</div>
+          <label class="settings-row"><span>FFT size</span>
+            <select id="audioFftSize">
+              ${[256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+                .map(n => `<option value="${n}" ${s.audioFftSize === n ? 'selected' : ''}>${n}</option>`).join('')}
+            </select></label>
+          <label class="settings-row"><span>Smoothing (0..0.95)</span>
+            <input type="number" id="audioFftSmoothing" min="0" max="0.95" step="0.05" value="${s.audioFftSmoothing}" /></label>
+          <div class="settings-row" style="opacity:0.7">
+            <span style="font-size:12px">Smoothing = exponential averaging across FFT frames. 0 = no averaging (responsive, jumpy); 0.6 = moderate (default); 0.95 = heavy averaging (smooth, slow). Equivalent samples averaged ≈ 1/(1−value).</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Airspy Channel Filter</div>
+          <label class="settings-row"><span>Bandpass FIR taps</span>
+            <input type="number" id="airspyTaps" min="200" max="4000" step="50" value="${s.airspyBandpassTaps}" /></label>
+          <div class="settings-row" style="opacity:0.7">
+            <span style="font-size:12px">FIR taps in the server-side csdr bandpass filter. More taps = sharper edges + deeper stopband; more CPU + slightly more latency. 801 default ≈ OpenWebRX. Try 1600 for sharper SSB, 400 for lower latency.</span>
+          </div>
+          <label class="settings-row"><span>AGC profile</span>
+            <select id="airspyAgcProfile">
+              <option value="off"  ${s.airspyAgcProfile === 'off'  ? 'selected' : ''}>off (fixed gain, no spikes)</option>
+              <option value="slow" ${s.airspyAgcProfile === 'slow' ? 'selected' : ''}>slow</option>
+              <option value="med"  ${s.airspyAgcProfile === 'med'  ? 'selected' : ''}>medium</option>
+              <option value="fast" ${s.airspyAgcProfile === 'fast' ? 'selected' : ''}>fast</option>
+            </select></label>
+          <label class="settings-row"><span>Fixed gain (when AGC off)</span>
+            <input type="number" id="airspyFixedGain" min="0.1" max="200" step="0.5" value="${s.airspyFixedGain}" /></label>
+          <div class="settings-row" style="opacity:0.7">
+            <span style="font-size:12px">'off' is the recommended default — csdr's agc_ff amplifies noise floor + clips transients, producing audible spikes. With AGC off, the demod output is multiplied by Fixed gain and clipped at full-scale by limit_ff. Typical SSB needs gain 4..16; AM 1..4.</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <div class="settings-section-title">NAVTEX / SITOR-B Decoder</div>
           <label class="settings-row"><span>Audio carrier (Hz)</span>
             <input type="number" id="navtexCarrier" min="500" max="3000" step="10" value="${s.navtexCarrierHz}" /></label>
@@ -554,6 +621,14 @@ export function openSettingsModal(opts: SettingsModalOpts): void {
       rttyBaud: Math.max(20, Math.min(200, +($('rttyBaud') as HTMLInputElement).value || 45.45)),
       navtexCarrierHz: clamp(+($('navtexCarrier') as HTMLInputElement).value, 500, 3000),
       navtexMode: (($('navtexMode') as HTMLSelectElement).value === 'sitorb' ? 'sitorb' : 'navtex'),
+      airspyBandpassTaps: clamp(+($('airspyTaps') as HTMLInputElement).value, 200, 4000),
+      airspyAgcProfile: (() => {
+        const v = ($('airspyAgcProfile') as HTMLSelectElement).value;
+        return (['off','fast','med','slow'].includes(v) ? v : 'off') as Settings['airspyAgcProfile'];
+      })(),
+      airspyFixedGain: Math.max(0.1, Math.min(200, +($('airspyFixedGain') as HTMLInputElement).value || 8)),
+      audioFftSize: clamp(+($('audioFftSize') as HTMLSelectElement).value, 256, 32768),
+      audioFftSmoothing: Math.max(0, Math.min(0.95, +($('audioFftSmoothing') as HTMLInputElement).value || 0.6)),
       // mfskMode is set by the long-press picker; mfskPitchHz fixed at
       // 1500 Hz (fldigi convention).
       mfskMode: opts.current?.mfskMode ?? 'mfsk16',

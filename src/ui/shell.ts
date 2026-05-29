@@ -9,6 +9,7 @@ import { openRtlList } from './rtl-list';
 import { RtlTcpClient } from '../rtltcp/client';
 import { openAirspyList } from './airspy-list';
 import { SpyServerClient } from '../spyserver/client';
+import { IqListenDemod, type ListenMode } from '../dsp/iq-listen';
 import { OpenWebRxClient } from '../openwebrx/client';
 import type { AudioFrame, KiwiStatus, WaterfallFrame } from '../kiwi/types';
 import { openPresetsModal } from './presets-modal';
@@ -4554,9 +4555,17 @@ export class Shell {
   isRtlSource(): boolean {
     return localStorage.getItem('radiom.activeSource') === 'rtl';
   }
-  /** Symmetric helper for Airspy SpyServer source. */
+  /** Symmetric helper for Airspy SpyServer source. Checks both the
+   *  persisted activeSource flag AND the live client identity so a
+   *  stale/missing localStorage entry doesn't make all the Airspy-
+   *  specific code paths quietly fall through to the Kiwi defaults
+   *  (which produces MHz-scale click-to-tune errors). */
   isAirspySource(): boolean {
-    return localStorage.getItem('radiom.activeSource') === 'airspy';
+    if (localStorage.getItem('radiom.activeSource') === 'airspy') return true;
+    // Duck-type the client — SpyServerClient is the only one with
+    // `getServerCenterHz`. If it's connected, we're on Airspy.
+    const c = this.client as unknown as { getServerCenterHz?: unknown } | null;
+    return c != null && typeof c.getServerCenterHz === 'function';
   }
 
   /** Source buttons are mutually exclusive — apply the `.active`
@@ -7549,7 +7558,15 @@ Lock state computed from the % of recent (last 50 samples) errors with
    *  already controls; here we only adjust the audio output. */
   private applyOutputGain(): void {
     let g = (this.vol / 100) * 2.5;
-    if (this.isOwrxSource()) g *= Math.max(0, this.rfGain) / 50;
+    // OWRX has server-side AGC + no front-end gain control. Airspy HF+
+    // is similar — SpyServer's SETTING_GAIN is a no-op there, since
+    // the device's internal AGC overrides it. Re-purpose the RF knob
+    // on both as a client-side preamp so the user always hears the
+    // knob have an effect (in addition to SETTING_GAIN on R2/Mini
+    // which still gets the value).
+    if (this.isOwrxSource() || this.isAirspySource()) {
+      g *= Math.max(0, this.rfGain) / 50;
+    }
     this.player.setGain(g);
   }
 
@@ -7573,6 +7590,17 @@ Lock state computed from the % of recent (last 50 samples) errors with
         const spanKHz = this.bandwidthHz / 1000;
         const centreKHz = this.owrxViewCenterKHz ?? this.freqKHz;
         const loKHz = centreKHz - spanKHz / 2;
+        f = Math.round((loKHz + frac * spanKHz) * 10) / 10;
+      } else if (this.isAirspySource()) {
+        // Airspy: visible span = SpyServer IQ rate centred on the dial
+        // (the SpyServer is always re-tuned to the dial). Click at
+        // fraction `frac` across the canvas maps to dial + (frac − 0.5)
+        // × spanKHz. Bail if the IQ rate isn't known yet — falling
+        // back to the 30 MHz `bandwidthHz` default would produce
+        // multi-MHz tune jumps.
+        if (this.airspyIqRate <= 0) return;
+        const spanKHz = this.airspyIqRate / 1000;
+        const loKHz = this.freqKHz - spanKHz / 2;
         f = Math.round((loKHz + frac * spanKHz) * 10) / 10;
       } else {
         const totalBins = 1024 * (1 << this.zoom);
@@ -7625,7 +7653,15 @@ Lock state computed from the % of recent (last 50 samples) errors with
     let tRaw: number;
     let loKHz: number;
     let hiKHz: number;
-    if (this.isOwrxSource()) {
+    if (this.isAirspySource()) {
+      // Airspy: every dial change re-tunes the SpyServer to that
+      // frequency, so the dial is always at bin 512 of the 1024-bin
+      // FFT (= centre of the waterfall). Span = SpyServer IQ rate.
+      const spanKHz = this.airspyIqRate > 0 ? this.airspyIqRate / 1000 : (this.bandwidthHz / 1000);
+      loKHz = this.freqKHz - spanKHz / 2;
+      hiKHz = this.freqKHz + spanKHz / 2;
+      tRaw = 0.5;
+    } else if (this.isOwrxSource()) {
       // OpenWebRX renders a window of `bandwidthHz` centred on
       // owrxViewCenterKHz. Cursor position is the dial freq's offset
       // within that window — moves as the dial moves, only snaps to
@@ -7767,10 +7803,27 @@ Lock state computed from the % of recent (last 50 samples) errors with
     } else if (id === 'rf') {
       this.rfGain = clamp(Math.round(v), 0, 120);
       localStorage.setItem('radiom.rfGain', String(this.rfGain));
+      this.log(`[rf-knob] rfGain=${this.rfGain} agcMode=${this.agcMode} airspy=${this.isAirspySource()} owrx=${this.isOwrxSource()}`);
       // Push the new gain immediately if AGC is currently OFF; in any
       // other AGC mode the value is held for the next time the user
       // cycles to OFF.
       if (this.agcMode === 'off') this.client?.setAgc(false, this.rfGain);
+      // For Airspy the RF gain controls the upstream SpyServer's
+      // SETTING_GAIN, which is entirely independent of the csdr
+      // audio AGC. Apply on every knob movement regardless of
+      // agcMode so users can ride the front-end gain.
+      if (this.isAirspySource()) {
+        // setAgc(false, manGain) on the SpyServerClient is now safe
+        // to call on every knob movement — it scales manGain through
+        // the device's reported maxGain (with a 30 fallback for HF+)
+        // and emits only the SETTING_GAIN message. It no longer
+        // touches the csdr AGC profile, so audio doesn't drop out.
+        this.client?.setAgc(false, this.rfGain);
+        // SETTING_GAIN is a no-op on HF+ (device handles its own gain
+        // internally). Apply the knob as a client-side preamp too so
+        // users always hear it move — same approach as OWRX.
+        this.applyOutputGain();
+      }
       // OpenWebRX has server-side AGC and no client RF gain control.
       // Repurpose the RF knob as a client-side preamp so the operator
       // can compensate for quiet receivers.
@@ -7802,6 +7855,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
 
   private applyPassband() {
     this.client?.setPassband(this.lowCut, this.highCut);
+    this.airspyListen?.setPassband(this.lowCut, this.highCut);
   }
 
   /** Accumulate a waterfall row's bytes into the rolling histogram. */
@@ -9187,45 +9241,73 @@ Lock state computed from the % of recent (last 50 samples) errors with
         this.log('no Airspy SpyServer picked (expecting host:port)');
         return;
       }
-      // SpyServer is pure IQ — same as rtl_tcp. The bridge picks a
-      // decimation stage that yields roughly 200..400 kS/s; the actual
-      // rate is reported in the hello message. We seed the input-rate
-      // hint with a typical Airspy HF+ value (192 kS/s after decim
-      // stage 2) and update once the hello arrives.
-      this.player.setInputRate(192_000);
+      // SpyServer audio + waterfall are now produced SERVER-SIDE by a
+      // csdr pipeline (decoder/csdr-pipeline.mjs): the bridge feeds IQ
+      // into csdr's amdemod_cf / fmdemod_quadri_cf / realpart_cf chains
+      // and forwards the resulting int16 LE PCM through the WS tagged
+      // as TAG_AUDIO. The browser does ZERO real-time demod — same
+      // architecture OpenWebRX uses. Effect: audio quality matches
+      // OpenWebRX, fly.io egress drops 3–4×.
+      const AUDIO_RATE = 12_000;
+      this.player.setInputRate(AUDIO_RATE);
+      // Critical: clear the Kiwi-IQ-mode flag. The player short-circuits
+      // pushAudio when iqMode is true (routes payload to onIq instead
+      // of the speakers).
+      this.player.setIqMode(false);
       this.refresh();
+      this.airspyListen = null;
+      let audioSeq = 0;
       const spyClient = new SpyServerClient(
-        { url, centerHz: Math.round(this.freqKHz * 1000) },
+        {
+          url,
+          centerHz: Math.round(this.freqKHz * 1000),
+          mode: this.mode,
+          bandwidthHz: Math.max(100, this.highCut - this.lowCut),
+          bandpassTaps: this.settings.airspyBandpassTaps,
+          agcProfile: this.settings.airspyAgcProfile,
+          fixedGain: this.settings.airspyFixedGain,
+        },
         {
           onMessage: (kv) => {
-            // Update the player input rate when the bridge's hello
-            // reports the actual srOut.
-            if (kv.sample_rate) {
-              const sr = parseInt(kv.sample_rate, 10);
-              if (Number.isFinite(sr) && sr > 0) this.player.setInputRate(sr);
-            }
             handlers.onMessage?.(kv);
           },
           onError:   handlers.onError,
           onClose:   handlers.onClose,
           onStatus:  (s) => {
-            const sr = spyClient?.getOutputRate?.() || 192_000;
             handlers.onStatus?.({
-              connected: s.connected, sampleRate: sr,
-              centerFreq: Math.round(this.freqKHz * 1000), bandwidth: sr,
+              connected: s.connected, sampleRate: AUDIO_RATE,
+              centerFreq: Math.round(this.freqKHz * 1000), bandwidth: AUDIO_RATE,
             } as KiwiStatus);
           },
-          // Fan IQ bytes out to every onIq* channel the player exposes
-          // — matching what Kiwi's IQ-mode does in pushAudio. Without
-          // this fan-out only the decoder hook (onIq) gets data; the
-          // viewers (Constellation, Eye, sferic, doppler, OTHR, RFI,
-          // …) and the recorder all stay blank.
-          //
-          // Also update lastFrameTs — the no-data watchdog kills the
-          // connection after 12 s of no audio/wf frames. For pure-IQ
-          // sources like SpyServer or rtl_tcp, IQ IS the data; without
-          // this update the watchdog tears down a perfectly healthy
-          // session in 12-15 seconds.
+          // Server-side csdr audio → straight into pushAudio. The full
+          // browser DSP chain (NB2 / NR2 / PS / SM / VAD / EQ / squelch
+          // / compressor) still applies because pushAudio is the same
+          // hook Kiwi/OWRX/rtl_tcp use.
+          onAudio: (pcm) => {
+            this.lastFrameTs = Date.now();
+            this.player.pushAudio({
+              seq: audioSeq++,
+              smeter: 0, rssiDbm: -90, flags: 0,
+              payload: pcm, adpcm: false,
+            });
+          },
+          // Server-side FFT bins (1024-wide, Kiwi-format uint8 bytes
+          // mapped to mindb..maxdb dBm). Span = SpyServer IQ rate
+          // centred on the dial (xBinServer=0, no offset). Zoom is
+          // disabled for Airspy — see the case 'zoomIn'/'zoomOut'
+          // handlers above.
+          onFft: (bins) => {
+            this.lastFrameTs = Date.now();
+            const wfBins = new Uint8Array(bins.buffer, bins.byteOffset, bins.byteLength);
+            const f: WaterfallFrame = { xBinServer: 0, flags: 0, seq: 0, bins: wfBins };
+            this.lastWfBins = wfBins;
+            this.spectrum.pushFrame(f);
+            if (this.wfAutoMode > 0) this.feedWfHist(wfBins);
+          },
+          // IQ pass-through still fans out to every viewer-side channel
+          // so Constellation / Eye / sferic / doppler / OTHR / RFI all
+          // remain populated. We deliberately do NOT feed this into any
+          // client-side demod — csdr handles audio server-side.
           onIq: (iq) => {
             this.lastFrameTs = Date.now();
             this.player.onIq?.(iq);
@@ -9296,8 +9378,38 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.lastFrameTs = Date.now();
       for (const k in kv) this.lastKv[k] = kv[k];
       this.refreshKiwiDiag();
-      if (kv.audio_rate) this.player.setInputRate(+kv.audio_rate);
-      if (kv.sample_rate) this.player.setInputRate(+kv.sample_rate);
+      // SpyServer's hello reports the IQ sample rate (not the audio
+      // rate). Route it into the IqListenDemod so a BW-driven decim
+      // change on the upstream gets picked up without disconnecting,
+      // AND keep the player's input rate aligned with the demod's
+      // effective output rate. Without this sync, narrow-BW sessions
+      // (where IQ rate drops below the 12 kHz target) produce audio
+      // at e.g. 8 kHz while the player still expects 12 kHz → buffer
+      // underruns → on/off audio bursts.
+      if (this.isAirspySource()) {
+        // Audio is csdr-demodulated server-side; rate is the
+        // post-decim rate (e.g. 9375 for LSB at 9375 sps IQ, 12500
+        // for AM at 37500 sps with decim=3). kv.audio_rate carries
+        // that exact value from the bridge — kv.sample_rate is the
+        // IQ rate and must NOT be used for the audio player or we
+        // underrun (= on/off noise).
+        if (kv.audio_rate) {
+          const ar = +kv.audio_rate;
+          if (Number.isFinite(ar) && ar > 0) this.player.setInputRate(ar);
+        }
+        // Store the IQ rate so the waterfall freq labels can show the
+        // accurate visible span (= IQ rate centred on the dial).
+        if (kv.sample_rate) {
+          const sr = +kv.sample_rate;
+          if (Number.isFinite(sr) && sr > 0) {
+            this.airspyIqRate = sr;
+            this.refreshCursor();
+          }
+        }
+      } else {
+        if (kv.audio_rate)  this.player.setInputRate(+kv.audio_rate);
+        if (kv.sample_rate) this.player.setInputRate(+kv.sample_rate);
+      }
       if (kv.bandwidth) {
         const bw = +kv.bandwidth;
         if (bw > 0 && bw !== this.bandwidthHz) {
@@ -9426,6 +9538,9 @@ Lock state computed from the % of recent (last 50 samples) errors with
     // Note: leave #noDataLabel display alone — the watchdog may have
     // just set it visible before calling us; the next connect() hides it.
     this.client?.disconnect(); this.client = null;
+    // Tear down the Airspy client-side demod too — releases its OLA
+    // tails so a fresh connection doesn't start with stale audio.
+    if (this.airspyListen) { this.airspyListen.reset(); this.airspyListen = null; }
     // player.stop() now only tears down the Kiwi-side source — the shared
     // mixer + SPEC analyser stay alive, so any TEST sample in progress
     // keeps playing through the same audio graph.
@@ -9462,6 +9577,17 @@ Lock state computed from the % of recent (last 50 samples) errors with
     this.mode = mode;
     [this.lowCut, this.highCut] = DEFAULT_PASSBANDS[mode];
     this.client?.setTune({ mode, lowCutHz: this.lowCut, highCutHz: this.highCut });
+    // When Airspy is the source we run a client-side demod — push the
+    // new mode + passband into it as well. The 'iq' / sam-variants map
+    // to am for now (sam isn't a separate demod in IqListenDemod).
+    if (this.airspyListen) {
+      const lm = (mode === 'iq' ? 'am' :
+                  (mode === 'sam' || mode === 'sal' || mode === 'sau') ? mode :
+                  mode) as ListenMode;
+      this.airspyListen.setMode(lm);
+      this.airspyListen.setPassband(this.lowCut, this.highCut);
+      this.airspyListen.reset();        // drop OLA tails so mode change is instant
+    }
     // Drop the audio queue so the new mode starts playing within a
     // frame instead of after the buffered old-mode audio drains. The
     // ring can balloon to several seconds on slow / congested networks;
@@ -9514,8 +9640,12 @@ Lock state computed from the % of recent (last 50 samples) errors with
           this.pending = this.pending.slice(0, -1) || null;
         } else this.pending = null;
         break;
-      case 'zoomIn':  this.zoom = clamp(this.zoom + 1, 0, 14); this.recenter(); break;
-      case 'zoomOut': this.zoom = clamp(this.zoom - 1, 0, 14); this.recenter(); break;
+      case 'zoomIn':
+        if (this.isAirspySource()) { this.banner('Zoom not available on Airspy', 1200); break; }
+        this.zoom = clamp(this.zoom + 1, 0, 14); this.recenter(); break;
+      case 'zoomOut':
+        if (this.isAirspySource()) { this.banner('Zoom not available on Airspy', 1200); break; }
+        this.zoom = clamp(this.zoom - 1, 0, 14); this.recenter(); break;
       case 'panL': this.panBy(-512); break;
       case 'panR': this.panBy(+512); break;
       case 'mem':
@@ -9804,6 +9934,22 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.wfSpeed = s.wfSpeed;
       this.client?.setWfSpeed(this.wfSpeed);
     }
+    // Airspy bandpass FIR taps — hot-apply via the SpyServer client.
+    // Triggers a server-side csdr rebuild but stays on the same WS.
+    if (this.isAirspySource()) {
+      const c = this.client as unknown as {
+        setBandpassTaps?: (n: number) => void;
+        setAgcProfile?:   (p: string) => void;
+        setFixedGain?:    (g: number) => void;
+      } | null;
+      if (Number.isFinite(s.airspyBandpassTaps)) c?.setBandpassTaps?.(s.airspyBandpassTaps);
+      if (s.airspyAgcProfile) c?.setAgcProfile?.(s.airspyAgcProfile);
+      if (Number.isFinite(s.airspyFixedGain)) c?.setFixedGain?.(s.airspyFixedGain);
+    }
+    // Audio FFT analyser — live size + smoothing. Both are Web Audio
+    // properties that can be tweaked while the graph is running.
+    if (Number.isFinite(s.audioFftSize)) this.player.setAudioFftSize(s.audioFftSize);
+    if (Number.isFinite(s.audioFftSmoothing)) this.player.setAudioFftSmoothing(s.audioFftSmoothing);
     // Decoder parameters — propagate to live decoders + restart where the
     // change can't be hot-applied (PSK passband follows pitch, retune via
     // toggle).
@@ -10179,6 +10325,15 @@ Lock state computed from the % of recent (last 50 samples) errors with
   private ssbfOn = false;
   private ssbfSide: SsbSide = 'L';
   private ssbfDemod: SsbFilteredDemod | null = null;
+  /** Generic IQ→audio demodulator used when Airspy SpyServer is the
+   *  source. Routes AM / USB / LSB / CW / NBFM audio through
+   *  player.pushAudio so the full DSP chain (NB2 / NR2 / PS / SM / VAD
+   *  / EQ) applies. Replaces the absent server-side audio mode. */
+  private airspyListen: IqListenDemod | null = null;
+  /** SpyServer IQ rate (Hz) reported in the kv hello — the bandwidth
+   *  the server-side csdr FFT covers. Drives the waterfall lo/hi
+   *  frequency labels for Airspy. 0 until the first hello arrives. */
+  private airspyIqRate = 0;
   private iqViewOn = false;
   // Optional symbol-rate clock recovery for the IQ constellation. When
   // enabled, only one decision per symbol period is plotted (on top of
@@ -11543,6 +11698,11 @@ Lock state computed from the % of recent (last 50 samples) errors with
     }
     btn.classList.toggle('active', this.audioFftOn);
     if (this.audioFftOn) {
+      // Push user-configured FFT size + smoothing into the analyser
+      // before the first frame so the visible spectrogram matches
+      // settings. Both are no-ops if the audio graph isn't up yet.
+      this.player.setAudioFftSize(this.settings.audioFftSize);
+      this.player.setAudioFftSmoothing(this.settings.audioFftSmoothing);
       // Default the cursor so the lo / hi / center labels are visible right
       // away, instead of waiting for the user to click the spectrogram.
       if (this.audioFftCursorHz == null) this.audioFftCursorHz = this.audio_freq_cursor;
@@ -27387,6 +27547,20 @@ Lock state computed from the % of recent (last 50 samples) errors with
     // changes) and guarantees the WF stream stays paused whenever any
     // decoder or the audio spectrogram is open.
     this.updateWaterfallStream();
+    // Zoom is not implemented for Airspy (the server-side csdr FFT
+    // covers a fixed IQ bandwidth — there's nothing to zoom into).
+    // Grey out the Zin / Zout buttons on the Airspy source.
+    {
+      const airspy = this.isAirspySource();
+      for (const sel of ['button[data-cmd="zoomIn"]', 'button[data-cmd="zoomOut"]']) {
+        const btn = this.root.querySelector(sel) as HTMLButtonElement | null;
+        if (btn) {
+          btn.disabled = airspy;
+          btn.style.opacity = airspy ? '0.4' : '';
+          btn.style.cursor = airspy ? 'not-allowed' : '';
+        }
+      }
+    }
     // LED freq: pending digits in entry mode (no leading-zero padding —
     // just whatever the user has typed so far + cursor), else current tune.
     const display = this.pending != null ? this.pending + ' kHz_' : formatFreqKHz(this.freqKHz);

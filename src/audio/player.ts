@@ -1585,6 +1585,25 @@ export class AudioPlayer {
     this.analyser.getByteFrequencyData(bins);
     return bins;
   }
+
+  /** Live-set the audio FFT analyser size. Must be a power of 2
+   *  between 32 and 32768 per Web Audio spec. */
+  setAudioFftSize(n: number): void {
+    if (!this.analyser) return;
+    if (!Number.isFinite(n)) return;
+    // Clamp to power-of-2 in [256, 32768].
+    let v = Math.max(256, Math.min(32768, Math.round(n)));
+    v = 1 << Math.round(Math.log2(v));
+    try { this.analyser.fftSize = v; } catch { /* invalid value */ }
+  }
+
+  /** Live-set the audio FFT smoothing (EMA factor across frames). */
+  setAudioFftSmoothing(s: number): void {
+    if (!this.analyser) return;
+    if (!Number.isFinite(s)) return;
+    const v = Math.max(0, Math.min(0.95, s));
+    try { this.analyser.smoothingTimeConstant = v; } catch {}
+  }
   /** Sample rate of the audio context (needed to map FFT bin → Hz). */
   getAudioRate(): number { return this.ctx?.sampleRate ?? 48000; }
   /** Underlying AudioContext, ensuring the audio graph is initialised.

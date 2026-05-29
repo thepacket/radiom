@@ -2750,17 +2750,38 @@ const spyserverWss = new WebSocketServer({ noServer: true, perMessageDeflate: fa
 function attachSpyServerBridge(ws, host, port) {
   let bridge = null;
   let iqBytesForwarded = 0;
+  let audioBytesForwarded = 0;
+  let fftBytesForwarded = 0;
   const tag = `${host}:${port}`;
   const send = (obj) => { if (ws.readyState === WS.OPEN) ws.send(JSON.stringify(obj)); };
+  // Binary WS frame tag bytes — the client demuxes binary frames by
+  // looking at this leading byte. Must match the TAG_* constants in
+  // decoder/spyserver.mjs and src/spyserver/client.ts.
+  const TAG_IQ = 0x00, TAG_AUDIO = 0x01, TAG_FFT = 0x02;
+  const sendTagged = (tagByte, buf) => {
+    if (ws.readyState !== WS.OPEN) return;
+    const out = Buffer.allocUnsafe(1 + buf.length);
+    out[0] = tagByte;
+    buf.copy(out, 1);
+    ws.send(out, { binary: true });
+  };
   try {
     bridge = new SpyServerBridge({
       host, port,
       onIq: (buf) => {
-        if (ws.readyState === WS.OPEN) ws.send(buf, { binary: true });
+        sendTagged(TAG_IQ, buf);
         iqBytesForwarded += buf.length;
       },
+      onAudio: (buf) => {
+        sendTagged(TAG_AUDIO, buf);
+        audioBytesForwarded += buf.length;
+      },
+      onFft: (buf) => {
+        sendTagged(TAG_FFT, buf);
+        fftBytesForwarded += buf.length;
+      },
       onHello: (info) => {
-        console.log(`[spyserver] ${tag} hello device=${info.device} srOut=${info.srOut} range=${info.minHz}..${info.maxHz} maxGain=${info.maxGain} decim=${info.decimStage}`);
+        console.log(`[spyserver] ${tag} hello device=${info.device} srOut=${info.srOut} range=${info.minHz}..${info.maxHz} maxGain=${info.maxGain} decim=${info.decimStage} mode=0x${(info.streamMode|0).toString(16)}`);
         send({ t: 'hello', ...info });
       },
       onStatus: (msg) => {
@@ -2775,10 +2796,8 @@ function attachSpyServerBridge(ws, host, port) {
     return;
   }
   console.log(`[spyserver] ${tag} session opened`);
-  // Periodic heartbeat — useful to see whether IQ is flowing at all
-  // and confirm the bridge isn't sitting silent post-handshake.
   const hb = setInterval(() => {
-    console.log(`[spyserver] ${tag} hb iqBytes=${iqBytesForwarded}`);
+    console.log(`[spyserver] ${tag} hb iq=${iqBytesForwarded} audio=${audioBytesForwarded} fft=${fftBytesForwarded}`);
   }, 30_000);
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
@@ -2787,12 +2806,20 @@ function attachSpyServerBridge(ws, host, port) {
       switch (m.t) {
         case 'freq': if (Number.isFinite(m.hz))  bridge.setFreq(m.hz); break;
         case 'gain': if (Number.isFinite(m.idx)) bridge.setGainIndex(m.idx); break;
+        case 'mode': if (typeof m.mode === 'string') bridge.setMode(m.mode); break;
+        case 'bw':   if (Number.isFinite(m.hz)) bridge.setBandwidthHz(m.hz); break;
+        case 'pass': if (Number.isFinite(m.lo) && Number.isFinite(m.hi)) bridge.setPassband(m.lo, m.hi); break;
+        case 'taps': if (Number.isFinite(m.n)) bridge.setBandpassTaps(m.n); break;
+        case 'agc':  if (typeof m.profile === 'string') bridge.setAgcProfile(m.profile); break;
+        case 'fgain': if (Number.isFinite(m.g)) bridge.setFixedGain(m.g); break;
+        // 'shift' removed — every dial change re-tunes the SpyServer.
+        case 'stream': if (Number.isFinite(m.mode)) bridge.setStreamMode(m.mode); break;
       }
     } catch { /* malformed JSON */ }
   });
   ws.on('close', () => {
     clearInterval(hb);
-    console.log(`[spyserver] ${tag} session closed iqBytes=${iqBytesForwarded}`);
+    console.log(`[spyserver] ${tag} session closed iq=${iqBytesForwarded} audio=${audioBytesForwarded} fft=${fftBytesForwarded}`);
     try { bridge?.close(); } catch { /* already gone */ }
   });
 }

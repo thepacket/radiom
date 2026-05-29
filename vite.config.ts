@@ -209,6 +209,28 @@ export default defineConfig({
         changeOrigin: false,
         ws: true,
       },
+      // SpyServer bridge — `/ws/spyserver/<host>:<port>` proxied to the
+      // Node server which owns the TCP connection to the upstream
+      // Airspy spyserver and the csdr DSP pipeline. Without this proxy
+      // the browser's WS upgrade gets swallowed by Vite and no Airspy
+      // connection is possible from `npm run dev`.
+      '/ws/spyserver': {
+        target: 'http://localhost:8080',
+        changeOrigin: false,
+        ws: true,
+      },
+      // rtl_tcp bridge — same pattern.
+      '/ws/rtltcp': {
+        target: 'http://localhost:8080',
+        changeOrigin: false,
+        ws: true,
+      },
+      // OpenWebRX bridge — same pattern.
+      '/ws/openwebrx': {
+        target: 'http://localhost:8080',
+        changeOrigin: false,
+        ws: true,
+      },
     },
   }
 });
