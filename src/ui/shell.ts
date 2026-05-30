@@ -562,6 +562,9 @@ export class Shell {
     this.installVizCloseChip();
     this.installPanelActions();
     this.wireViewHelp();
+    // DEV-only: expose the instance for headless-browser verification of the
+    // viewer panels (synthetic audio/IQ injection). Tree-shaken out of prod.
+    if (import.meta.env.DEV) (window as any).__shell = this;
     this.refreshSourceButtonState();
     this.spectrum = new SpectrumView(
       this.$('fft') as HTMLCanvasElement,
@@ -1091,7 +1094,9 @@ export class Shell {
           </div>
 
           <div id="evmPanel" class="ft8-panel" style="display:none">
-            <div class="ft8-actions"></div>
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="evmKind" type="button" title="Cycle constellation type (BPSK / QPSK / 8PSK)">QPSK</button>
+            </div>
             <div class="ft8-status" id="evmStatus">EVM / MER —</div>
             <canvas id="evmCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
@@ -1121,7 +1126,9 @@ export class Shell {
           </div>
 
           <div id="rdopPanel" class="ft8-panel" style="display:none">
-            <div class="ft8-actions"></div>
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="rdopRecap" type="button" title="Re-capture the reference waveform from the current signal">recap ref</button>
+            </div>
             <div class="ft8-status" id="rdopStatus">Range-Doppler —</div>
             <canvas id="rdopCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
@@ -1215,7 +1222,9 @@ export class Shell {
             <canvas id="bispCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
           <div id="ambigPanel" class="ft8-panel" style="display:none">
-            <div class="ft8-actions"></div>
+            <div class="ft8-actions">
+              <button class="transcript-btn" id="ambigRecap" type="button" title="Re-capture the reference waveform from the current signal">recap ref</button>
+            </div>
             <div class="ft8-status" id="ambigStatus">Ambiguity Function —</div>
             <canvas id="ambigCanvas" style="width:100%;height:100%;background:#000;display:block;border-radius:4px;flex:1"></canvas>
           </div>
@@ -3082,6 +3091,29 @@ export class Shell {
       this.qqKind = next[(i + 1) % next.length];
       const labels: Record<string, string> = { rayleigh: 'Rayleigh', gaussian: 'Gaussian', rician: 'Rician' };
       (this.$('qqKind') as HTMLButtonElement).textContent = labels[this.qqKind];
+    });
+    this.$('evmKind').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next: Shell['evmKind'][] = ['bpsk', 'qpsk', '8psk'];
+      const i = next.indexOf(this.evmKind);
+      this.evmKind = next[(i + 1) % next.length];
+      const labels: Record<string, string> = { bpsk: 'BPSK', qpsk: 'QPSK', '8psk': '8PSK' };
+      (this.$('evmKind') as HTMLButtonElement).textContent = labels[this.evmKind];
+      // Reset the running magnitude AGC + history so the new constellation
+      // re-normalises cleanly instead of carrying the old scale.
+      this.evmMagAvg = 0; this.evmHistFilled = 0; this.evmHistWrite = 0;
+    });
+    this.$('rdopRecap').addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Drop the captured reference so the next frames re-grab it from the
+      // signal currently on the band.
+      this.rdopRefW = 0; this.rdopHaveRef = false;
+      if (this.rdopMap) this.rdopMap.fill(0);
+    });
+    this.$('ambigRecap').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.ambigRefW = 0; this.ambigHaveRef = false;
+      if (this.ambigMap) this.ambigMap.fill(0);
     });
     this.$('btnCiper').addEventListener('click', () => {
       if (this.ciperOn) { this.toggleCiper(); return; }
@@ -10823,6 +10855,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
   private evmFreq = 0;
   private evmIdx = 0;
   private evmKind: 'bpsk' | 'qpsk' | '8psk' = 'qpsk';
+  private evmMagAvg = 0;     // running EMA of |z|, used to AGC-normalise to unit-radius ideals
   /** Higher-Order Cumulants Timeline — per-block C20, C21, C40, C42,
    *  μ42 traces over ~30 s of IQ. */
   private static readonly HOC_HIST = 300;
@@ -10841,6 +10874,8 @@ Lock state computed from the % of recent (last 50 samples) errors with
   private pnoiseBufWrite = 0;
   private pnoisePhase = 0;
   private pnoiseFreq = 0;
+  private pnoiseCarI = 0;     // EMA of de-rotated in-phase (carrier amplitude)
+  private pnoiseMag = 0;      // EMA of total magnitude — lock ratio = |carI|/mag
   private pnoiseAvg: Float32Array | null = null;
   private pnoiseAvgFrames = 0;
   private pnoiseHist: Float32Array[] = [];
@@ -10882,11 +10917,18 @@ Lock state computed from the % of recent (last 50 samples) errors with
   /** Spectral Coherence γ²(f) between two consecutive IQ time windows. */
   private static readonly COH_FFT = 1024;
   private static readonly COH_RENDER_EVERY_N = 8;
-  private cohBufA = new Float32Array(Shell.COH_FFT * 2);   // [I,Q] interleaved
-  private cohBufB = new Float32Array(Shell.COH_FFT * 2);
-  private cohBufWrite = 0;
-  private cohFill = 0;
-  private cohHaveA = false;
+  // Magnitude-squared coherence needs the cross/auto spectra *averaged* over
+  // many segment pairs — a single pair gives γ²≡1 at every bin. We treat
+  // consecutive windows as the two channels and EMA-accumulate Sab/Saa/Sbb.
+  private cohWin = new Float32Array(Shell.COH_FFT * 2);    // current filling window [I,Q]
+  private cohWinW = 0;
+  private cohPrevRe: Float32Array | null = null;            // previous window FFT
+  private cohPrevIm: Float32Array | null = null;
+  private cohSabR = new Float32Array(Shell.COH_FFT >> 1);   // <cur·conj(prev)>
+  private cohSabI = new Float32Array(Shell.COH_FFT >> 1);
+  private cohSaa  = new Float32Array(Shell.COH_FFT >> 1);    // <|cur|²>
+  private cohSbb  = new Float32Array(Shell.COH_FFT >> 1);    // <|prev|²>
+  private cohSegs = 0;
   private cohRafTick = 0;
   // ── 2026 audio-side viewer batch-3 ────────────────────────────────
   private hhtOn = false;
@@ -14967,6 +15009,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.evmPhase = 0;
       this.evmFreq = 0;
       this.evmIdx = 0;
+      this.evmMagAvg = 0;
     } else if (name === 'hoc') {
       this.hocHist.fill(0);
       this.hocHistWrite = 0;
@@ -14979,6 +15022,7 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.pnoiseBufWrite = 0;
       this.pnoisePhase = 0;
       this.pnoiseFreq = 0;
+      this.pnoiseCarI = 0; this.pnoiseMag = 0;
       if (this.pnoiseAvg) this.pnoiseAvg.fill(0);
       this.pnoiseAvgFrames = 0;
     } else if (name === 'mtdev') {
@@ -15003,10 +15047,12 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.rdopRefW = 0;
       this.rdopHaveRef = false;
     } else if (name === 'coh') {
-      this.cohBufA.fill(0); this.cohBufB.fill(0);
-      this.cohBufWrite = 0;
-      this.cohFill = 0;
-      this.cohHaveA = false;
+      this.cohWin.fill(0);
+      this.cohWinW = 0;
+      this.cohPrevRe = null; this.cohPrevIm = null;
+      this.cohSabR.fill(0); this.cohSabI.fill(0);
+      this.cohSaa.fill(0); this.cohSbb.fill(0);
+      this.cohSegs = 0;
     } else if (name === 'wvd') {
       this.wvdBufI.fill(0); this.wvdBufQ.fill(0);
       this.wvdBufWrite = 0; this.wvdBufFill = 0;
@@ -20817,26 +20863,34 @@ Lock state computed from the % of recent (last 50 samples) errors with
       this.evmPhase += this.evmFreq + alphaP * err;
       // Decimate to ~ 100 evm samples / sec ≈ every 120 IQ samples at 12 kHz.
       this.evmIdx++;
+      // Track average magnitude continuously so the AGC follows level changes.
+      const mag = Math.sqrt(I * I + Q * Q);
+      this.evmMagAvg = this.evmMagAvg === 0 ? mag : this.evmMagAvg * 0.999 + mag * 0.001;
       if (this.evmIdx >= 120) {
         this.evmIdx = 0;
+        // Normalise to unit average radius so the per-symbol vector error is
+        // measured against the unit-radius ideal symbols regardless of the
+        // received signal level (true EVM needs a reference amplitude).
+        const g = this.evmMagAvg > 1e-9 ? 1 / this.evmMagAvg : 1;
+        const In = I * g, Qn = Q * g;
+        const r = Math.sqrt(In * In + Qn * Qn);
         // Nearest ideal symbol for the chosen kind.
         let dist = 0;
-        const r = Math.sqrt(I * I + Q * Q);
         if (this.evmKind === 'bpsk') {
-          dist = Math.min(Math.hypot(I - 1, Q), Math.hypot(I + 1, Q));
+          dist = Math.min(Math.hypot(In - 1, Qn), Math.hypot(In + 1, Qn));
         } else if (this.evmKind === '8psk') {
           let best = Infinity;
           for (let k = 0; k < 8; k++) {
             const ai = Math.cos(k * Math.PI / 4), aq = Math.sin(k * Math.PI / 4);
-            const d = Math.hypot(I - ai, Q - aq);
+            const d = Math.hypot(In - ai, Qn - aq);
             if (d < best) best = d;
           }
           dist = best;
         } else {
           // QPSK
-          const ai = (I >= 0 ? 1 : -1) / Math.SQRT2;
-          const aq = (Q >= 0 ? 1 : -1) / Math.SQRT2;
-          dist = Math.hypot(I - ai, Q - aq);
+          const ai = (In >= 0 ? 1 : -1) / Math.SQRT2;
+          const aq = (Qn >= 0 ? 1 : -1) / Math.SQRT2;
+          dist = Math.hypot(In - ai, Qn - aq);
         }
         const evmPct = r > 1e-9 ? (dist / r) * 100 : 100;
         const merDb = evmPct > 0.001 ? -20 * Math.log10(evmPct / 100) : 60;
@@ -21034,6 +21088,11 @@ Lock state computed from the % of recent (last 50 samples) errors with
       const err = Math.atan2(Q, Math.abs(I) + 1e-9);
       this.pnoiseFreq += alpha * err * 0.05;
       this.pnoisePhase += this.pnoiseFreq + alpha * err;
+      // Lock metric: a clean locked carrier sits on +I, so |E[I]|/E[|z|]→1.
+      // Incoherent noise has random phase → ratio collapses toward 0.
+      const mag = Math.sqrt(I * I + Q * Q);
+      this.pnoiseCarI = this.pnoiseCarI * 0.9995 + I * 0.0005;
+      this.pnoiseMag = this.pnoiseMag * 0.9995 + mag * 0.0005;
       // Phase error sample for FFT input.
       this.pnoiseBuf[this.pnoiseBufWrite] = err;
       this.pnoiseBufWrite = (this.pnoiseBufWrite + 1) % this.pnoiseBuf.length;
@@ -21118,8 +21177,11 @@ Lock state computed from the % of recent (last 50 samples) errors with
       if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    this.$('pnoiseStatus').textContent =
-      `Phase Noise L(f) · avg ${M}/${Shell.PNOISE_AVG} frames · range 1 Hz – ${(fHi/1000).toFixed(1)} kHz`;
+    const lockRatio = this.pnoiseMag > 1e-4 ? Math.abs(this.pnoiseCarI) / this.pnoiseMag : 0;
+    const locked = lockRatio > 0.7;
+    this.$('pnoiseStatus').textContent = locked
+      ? `Phase Noise L(f) · LOCKED · avg ${M}/${Shell.PNOISE_AVG} frames · 1 Hz – ${(fHi/1000).toFixed(1)} kHz`
+      : `Phase Noise L(f) · UNLOCKED (no carrier — trace is open-loop noise) · avg ${M}/${Shell.PNOISE_AVG}`;
   }
 
   // ── Modified Allan / TDEV ───────────────────────────────────────
@@ -21465,22 +21527,48 @@ Lock state computed from the % of recent (last 50 samples) errors with
   private feedCoh(iqBytes: Uint8Array) {
     const dv = new DataView(iqBytes.buffer, iqBytes.byteOffset, iqBytes.byteLength);
     const nPairs = (iqBytes.length / 4) | 0;
-    const Ncoh = Shell.COH_FFT;
-    let w = this.cohBufWrite;
-    let dst = this.cohHaveA ? this.cohBufB : this.cohBufA;
+    const N = Shell.COH_FFT;
+    let w = this.cohWinW;
     for (let i = 0; i < nPairs; i++) {
-      const I = dv.getInt16(i * 4, false) / 32768;
-      const Q = dv.getInt16(i * 4 + 2, false) / 32768;
-      dst[w * 2] = I; dst[w * 2 + 1] = Q;
+      this.cohWin[w * 2] = dv.getInt16(i * 4, false) / 32768;
+      this.cohWin[w * 2 + 1] = dv.getInt16(i * 4 + 2, false) / 32768;
       w++;
-      if (w >= Ncoh) {
-        w = 0;
-        if (!this.cohHaveA) { this.cohHaveA = true; dst = this.cohBufB; }
-        else { this.cohHaveA = false; dst = this.cohBufA; } // swap roles: A becomes old, B becomes A
-      }
+      if (w >= N) { w = 0; this.cohAccumulateWindow(); }
     }
-    this.cohBufWrite = w;
-    if (this.cohFill < Ncoh) this.cohFill = Math.min(Ncoh, this.cohFill + nPairs);
+    this.cohWinW = w;
+  }
+  /** FFT the just-completed window and EMA-accumulate the cross-spectrum
+   *  against the previous window's FFT. Averaging over pairs is what makes
+   *  γ² meaningful: → 1 for a steady carrier, → 0 for incoherent noise. */
+  private cohAccumulateWindow() {
+    const N = Shell.COH_FFT, bins = N >> 1;
+    const re = new Float32Array(N), im = new Float32Array(N);
+    const twoPi = 2 * Math.PI / (N - 1);
+    for (let i = 0; i < N; i++) {
+      const wn = 0.5 * (1 - Math.cos(twoPi * i));
+      re[i] = this.cohWin[i * 2] * wn;
+      im[i] = this.cohWin[i * 2 + 1] * wn;
+    }
+    this.fftInPlace(re, im);
+    if (this.cohPrevRe && this.cohPrevIm) {
+      const a = 0.12, ia = 1 - a;
+      const pr = this.cohPrevRe, pi = this.cohPrevIm;
+      for (let k = 0; k < bins; k++) {
+        const cr = re[k], ci = im[k];
+        const sabR = cr * pr[k] + ci * pi[k];   // cur·conj(prev)
+        const sabI = ci * pr[k] - cr * pi[k];
+        this.cohSabR[k] = this.cohSabR[k] * ia + sabR * a;
+        this.cohSabI[k] = this.cohSabI[k] * ia + sabI * a;
+        this.cohSaa[k]  = this.cohSaa[k]  * ia + (cr * cr + ci * ci) * a;
+        this.cohSbb[k]  = this.cohSbb[k]  * ia + (pr[k] * pr[k] + pi[k] * pi[k]) * a;
+      }
+      this.cohSegs++;
+    } else {
+      this.cohPrevRe = new Float32Array(N);
+      this.cohPrevIm = new Float32Array(N);
+    }
+    this.cohPrevRe!.set(re);
+    this.cohPrevIm!.set(im);
   }
   private renderCoh() {
     if ((this.cohRafTick++ % Shell.COH_RENDER_EVERY_N) !== 0) return;
@@ -21495,39 +21583,21 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const W = canvas.width, H = canvas.height;
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
     const N = Shell.COH_FFT;
-    if (!this.cohHaveA) {
-      this.$('cohStatus').textContent = 'Coherence · waiting for first window…';
+    if (this.cohSegs < 8) {
+      this.$('cohStatus').textContent = `Coherence · averaging segments… (${this.cohSegs})`;
       return;
     }
-    // Two FFTs: bufA, bufB.
-    const fft = (src: Float32Array): { re: Float32Array; im: Float32Array } => {
-      const re = new Float32Array(N), im = new Float32Array(N);
-      const twoPi = 2 * Math.PI / (N - 1);
-      for (let i = 0; i < N; i++) {
-        const w = 0.5 * (1 - Math.cos(twoPi * i));
-        re[i] = src[i * 2] * w;
-        im[i] = src[i * 2 + 1] * w;
-      }
-      this.fftInPlace(re, im);
-      return { re, im };
-    };
-    const A = fft(this.cohBufA);
-    const B = fft(this.cohBufB);
     const sr = this.player.getInputRate() || 12000;
     const binHz = sr / N;
     const MAX_HZ = 6000;
     const bins = Math.min(N >> 1, Math.floor(MAX_HZ / binHz) + 1);
-    // Magnitude-squared coherence: |Sab|² / (Saa · Sbb)
+    // Magnitude-squared coherence from the averaged spectra:
+    //   γ²(f) = |<Sab>|² / (<Saa>·<Sbb>)
     const gamma2 = new Float32Array(bins);
     for (let k = 0; k < bins; k++) {
-      const aR = A.re[k], aI = A.im[k];
-      const bR = B.re[k], bI = B.im[k];
-      const sabR = aR * bR + aI * bI;
-      const sabI = aI * bR - aR * bI;
-      const sab2 = sabR * sabR + sabI * sabI;
-      const saa = aR * aR + aI * aI;
-      const sbb = bR * bR + bI * bI;
-      gamma2[k] = (saa > 1e-30 && sbb > 1e-30) ? sab2 / (saa * sbb) : 0;
+      const sab2 = this.cohSabR[k] * this.cohSabR[k] + this.cohSabI[k] * this.cohSabI[k];
+      const den = this.cohSaa[k] * this.cohSbb[k];
+      gamma2[k] = den > 1e-30 ? Math.min(1, sab2 / den) : 0;
     }
     const padL = 30 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
     const plotW = W - padL - padR, plotH = H - padT - padB;
@@ -21600,19 +21670,20 @@ Lock state computed from the % of recent (last 50 samples) errors with
     }
     this.hhtBufWrite = w;
   }
-  /** One-pass sift: smooth with 3-point local mean of extrema. Simple
-   *  educational implementation rather than full sifting. */
+  /** Extract one IMF by iterative sifting with the standard Cauchy-type
+   *  stopping criterion (Huang 1998): repeat h ← h − ½(envUp+envDn) until
+   *  the normalised change SD falls below a threshold or extrema run out.
+   *  Returns the input copy when the residual has < 2 extrema (no IMF). */
   private hhtSift(x: Float32Array): Float32Array {
     const N = x.length;
-    // Find local maxima + minima.
-    const maxIdx: number[] = []; const minIdx: number[] = [];
-    for (let i = 1; i < N - 1; i++) {
-      if (x[i] > x[i - 1] && x[i] >= x[i + 1]) maxIdx.push(i);
-      if (x[i] < x[i - 1] && x[i] <= x[i + 1]) minIdx.push(i);
-    }
-    if (maxIdx.length < 2 || minIdx.length < 2) return new Float32Array(x);
-    // Linear-interp envelopes.
-    const envUp = new Float32Array(N), envDn = new Float32Array(N);
+    const findExtrema = (s: Float32Array) => {
+      const maxIdx: number[] = []; const minIdx: number[] = [];
+      for (let i = 1; i < N - 1; i++) {
+        if (s[i] > s[i - 1] && s[i] >= s[i + 1]) maxIdx.push(i);
+        if (s[i] < s[i - 1] && s[i] <= s[i + 1]) minIdx.push(i);
+      }
+      return { maxIdx, minIdx };
+    };
     const lerp = (arr: number[], yvals: Float32Array, out: Float32Array) => {
       for (let i = 0; i < N; i++) {
         if (i <= arr[0]) { out[i] = yvals[arr[0]]; continue; }
@@ -21624,20 +21695,54 @@ Lock state computed from the % of recent (last 50 samples) errors with
         out[i] = yvals[a] * (1 - t) + yvals[b] * t;
       }
     };
-    lerp(maxIdx, x, envUp);
-    lerp(minIdx, x, envDn);
-    const imf = new Float32Array(N);
-    for (let i = 0; i < N; i++) imf[i] = x[i] - 0.5 * (envUp[i] + envDn[i]);
-    return imf;
-  }
-  /** Median IF estimate via zero-crossing rate (much cheaper than the
-   *  proper Hilbert transform IF, and good enough for a strip chart). */
-  private hhtMedianIfHz(imf: Float32Array, sr: number): number {
-    let zc = 0;
-    for (let i = 1; i < imf.length; i++) {
-      if ((imf[i - 1] >= 0 && imf[i] < 0) || (imf[i - 1] < 0 && imf[i] >= 0)) zc++;
+    const h = new Float32Array(x);          // working signal
+    const envUp = new Float32Array(N), envDn = new Float32Array(N);
+    const MAX_SIFT = 10;
+    for (let it = 0; it < MAX_SIFT; it++) {
+      const { maxIdx, minIdx } = findExtrema(h);
+      if (maxIdx.length < 2 || minIdx.length < 2) {
+        // Not enough extrema → this is the residual/trend, not an IMF.
+        return it === 0 ? new Float32Array(x) : h;
+      }
+      lerp(maxIdx, h, envUp);
+      lerp(minIdx, h, envDn);
+      let sdNum = 0, sdDen = 0;
+      for (let i = 0; i < N; i++) {
+        const m = 0.5 * (envUp[i] + envDn[i]);
+        const prev = h[i];
+        h[i] = prev - m;
+        sdNum += (prev - h[i]) * (prev - h[i]);
+        sdDen += prev * prev;
+      }
+      // Cauchy stopping criterion on the relative squared difference.
+      if (sdNum / Math.max(1e-12, sdDen) < 0.2) break;
     }
-    return (zc * sr) / (2 * imf.length);
+    return h;
+  }
+  /** Instantaneous-frequency estimate via sub-sample zero-crossing timing.
+   *  Linearly interpolates each crossing instant and measures IF from the
+   *  span between the first and last crossing — removes the integer-count
+   *  quantisation bias that made the old zero-crossing-rate read low for
+   *  narrow-band IMFs. Returns 0 for IMFs too weak to be meaningful. */
+  private hhtMedianIfHz(imf: Float32Array, sr: number): number {
+    const N = imf.length;
+    // Reject IMFs whose RMS is in the noise floor → avoids IF spikes on
+    // silent / near-DC residuals.
+    let rms = 0; for (let i = 0; i < N; i++) rms += imf[i] * imf[i];
+    rms = Math.sqrt(rms / N);
+    if (rms < 1e-4) return 0;
+    let first = -1, last = -1, count = 0;
+    for (let i = 1; i < N; i++) {
+      const a = imf[i - 1], b = imf[i];
+      if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
+        const t = i - 1 + a / (a - b);     // sub-sample crossing instant
+        if (first < 0) first = t;
+        last = t; count++;
+      }
+    }
+    if (count < 2 || last <= first) return 0;
+    // (count − 1) half-cycles span (last − first) samples → IF in Hz.
+    return ((count - 1) * sr) / (2 * (last - first));
   }
   private drawHht() {
     const canvas = this.$('hhtCanvas') as HTMLCanvasElement;
@@ -21655,6 +21760,19 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const x = new Float32Array(N);
     const wIdx = this.hhtBufWrite;
     for (let i = 0; i < N; i++) x[i] = buf[(wIdx + i) % N];
+    // Guard against silent / dead-air frames: with no signal the extrema are
+    // pure noise and the IF traces would spike to nonsense. Detect it and
+    // hold the strip flat instead.
+    let xRms = 0; for (let i = 0; i < N; i++) xRms += x[i] * x[i];
+    xRms = Math.sqrt(xRms / N);
+    if (xRms < 1e-3) {
+      const w0 = this.hhtHistWrite;
+      this.hhtImf1Hist[w0] = 0; this.hhtImf2Hist[w0] = 0; this.hhtImf3Hist[w0] = 0;
+      this.hhtHistWrite = (w0 + 1) % Shell.HHT_HIST;
+      if (this.hhtHistFilled < Shell.HHT_HIST) this.hhtHistFilled++;
+      this.$('hhtStatus').textContent = 'HHT · signal too weak (silent band)';
+      return;
+    }
     // 3 EMD passes → IMF1, IMF2, IMF3 (cascaded residual).
     const imf1 = this.hhtSift(x);
     const resid1 = new Float32Array(N); for (let i = 0; i < N; i++) resid1[i] = x[i] - imf1[i];
@@ -21876,8 +21994,10 @@ Lock state computed from the % of recent (last 50 samples) errors with
       const f = k * binHz;
       if (f < 50 || f > 5000) continue;
       // Map to pitch class via semitone position relative to A4=440.
+      // A4 is MIDI 69 → pitch class 9 (the label array starts at C=0), so
+      // the +9 offset aligns semitone-0 (A) with names[9]='A'.
       const semi = 12 * Math.log2(f / 440);
-      const pc = ((Math.round(semi) % 12) + 12) % 12;
+      const pc = (((Math.round(semi) + 9) % 12) + 12) % 12;
       const mag = re[k] * re[k] + im[k] * im[k];
       col[pc] += mag;
     }
@@ -22400,20 +22520,51 @@ Lock state computed from the % of recent (last 50 samples) errors with
       return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
     };
     const rayleighInv = (p: number) => Math.sqrt(-2 * Math.log(1 - p));
-    const ricianInv = (p: number, K = 2) => {
-      // Approximate Rician CDF inverse via Newton's method seeded at sqrt(2 ln 1/(1-p)).
-      const s = Math.sqrt(2);
-      const a = Math.sqrt(2 * K);
-      let r = Math.sqrt(-2 * Math.log(Math.max(1e-9, 1 - p)));
-      // Crude approximation — non-central chi-2 CDF inverse via simple bisection.
-      let lo = 0, hi = 6, mid = r;
-      const ratioCdf = (rr: number) => 1 - Math.exp(-(rr * rr + a * a) / 2);   // upper bound (no Bessel)
-      for (let it = 0; it < 12; it++) {
-        mid = (lo + hi) / 2;
-        if (ratioCdf(mid) < p) lo = mid; else hi = mid;
+    // Scaled modified Bessel I0(x)·e^-|x| (Abramowitz & Stegun 9.8.1/9.8.2) —
+    // used in the stable Rician pdf form below.
+    const i0e = (x: number) => {
+      const ax = Math.abs(x);
+      if (ax < 3.75) {
+        const t = (x / 3.75) * (x / 3.75);
+        const i0 = 1 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492 + t * (0.2659732 + t * (0.0360768 + t * 0.0045813)))));
+        return i0 * Math.exp(-ax);
       }
-      return mid * s / s;     // s/s = 1, keeps signature explicit
+      const t = 3.75 / ax;
+      return (0.39894228 + t * (0.01328592 + t * (0.00225319 + t * (-0.00157565 + t * (0.00916281 + t * (-0.02057706 + t * (0.02635537 + t * (-0.01647633 + t * 0.00392377)))))))) / Math.sqrt(ax);
     };
+    // Estimate the Rice K-factor from the envelope's 2nd/4th moments:
+    //   ρ = E[R²]²/E[R⁴]  →  K = ((2ρ-1)+√(ρ(2ρ-1)))/(1-ρ)   (moment estimator).
+    let rm2 = 0, rm4 = 0;
+    for (const v of data) { const s = v * v; rm2 += s; rm4 += s * s; }
+    rm2 /= N; rm4 /= N;
+    let rho = rm2 * rm2 / Math.max(1e-12, rm4);
+    rho = Math.min(0.999, Math.max(0.5, rho));
+    const riceK = ((2 * rho - 1) + Math.sqrt(rho * (2 * rho - 1))) / Math.max(1e-6, 1 - rho);
+    // Build the Rician CDF on a grid (σ=1, ν=√(2K)) and invert by interpolation.
+    const buildRicianInv = (K: number) => {
+      const nu = Math.sqrt(2 * Math.max(0, K));
+      const rMax = nu + 9, GRID = 1024, dr = rMax / GRID;
+      const cdf = new Float64Array(GRID + 1);
+      let acc = 0, prev = 0;
+      for (let i = 0; i <= GRID; i++) {
+        const r = i * dr;
+        // Stable pdf: r·exp(-(r-ν)²/2)·I0e(rν)  (= r·exp(-(r²+ν²)/2)·I0(rν)).
+        const pdf = r * Math.exp(-((r - nu) * (r - nu)) / 2) * i0e(r * nu);
+        if (i > 0) acc += (pdf + prev) * dr / 2;
+        prev = pdf; cdf[i] = acc;
+      }
+      const total = cdf[GRID] || 1;
+      for (let i = 0; i <= GRID; i++) cdf[i] /= total;
+      return (p: number) => {
+        let lo = 0, hi = GRID;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (cdf[m] < p) lo = m + 1; else hi = m; }
+        if (lo === 0) return 0;
+        const c0 = cdf[lo - 1], c1 = cdf[lo];
+        const f = (p - c0) / Math.max(1e-12, c1 - c0);
+        return (lo - 1 + f) * dr;
+      };
+    };
+    const ricianInv = this.qqKind === 'rician' ? buildRicianInv(riceK) : (_p: number) => 0;
     const padL = 40 * dpr, padR = 8 * dpr, padT = 24 * dpr, padB = 18 * dpr;
     const plotW = W - padL - padR, plotH = H - padT - padB;
     ctx.font = `${10 * dpr}px ui-monospace, monospace`;
@@ -22450,7 +22601,9 @@ Lock state computed from the % of recent (last 50 samples) errors with
       ctx.fillRect(x - 1 * dpr, y - 1 * dpr, 2 * dpr, 2 * dpr);
     }
     this.$('qqStatus').textContent =
-      `Q-Q · ${this.qqKind} reference · n=${N} · diagonal = perfect fit`;
+      this.qqKind === 'rician'
+        ? `Q-Q · rician reference (est. K=${riceK.toFixed(1)}) · n=${N} · diagonal = perfect fit`
+        : `Q-Q · ${this.qqKind} reference · n=${N} · diagonal = perfect fit`;
   }
 
   // ── CI Periodogram ──────────────────────────────────────────────
@@ -22533,6 +22686,10 @@ Lock state computed from the % of recent (last 50 samples) errors with
       return k * f * f * f;
     };
     const dof = 2 * M;
+    // Wilson–Hilferty is only trustworthy for DOF ≥ 10 (M ≥ 5). Below that
+    // the band it produces is misleadingly narrow, so we suppress it until
+    // enough segments have averaged in.
+    const bandValid = dof >= 10;
     const loMult = dof / chi2InvWH(0.975, dof);
     const hiMult = dof / chi2InvWH(0.025, dof);
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
@@ -22552,24 +22709,26 @@ Lock state computed from the % of recent (last 50 samples) errors with
     }
     const xForHz = (hz: number) => padL + (hz / MAX_HZ) * plotW;
     const yForDb = (db: number) => padT + (1 - (db - ymin) / range) * plotH;
-    // CI band (shaded).
-    ctx.fillStyle = 'rgba(100, 200, 100, 0.18)';
-    ctx.beginPath();
-    for (let k = 0; k < bins; k++) {
-      const p = this.ciperAvgSum[k] / M;
-      const upDb = 10 * Math.log10(p * hiMult);
-      const x = xForHz(k * binHz);
-      const y = yForDb(upDb);
-      if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // CI band (shaded) — only once the χ² approximation is valid.
+    if (bandValid) {
+      ctx.fillStyle = 'rgba(100, 200, 100, 0.18)';
+      ctx.beginPath();
+      for (let k = 0; k < bins; k++) {
+        const p = this.ciperAvgSum[k] / M;
+        const upDb = 10 * Math.log10(p * hiMult);
+        const x = xForHz(k * binHz);
+        const y = yForDb(upDb);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      for (let k = bins - 1; k >= 0; k--) {
+        const p = this.ciperAvgSum[k] / M;
+        const loDb = 10 * Math.log10(Math.max(1e-30, p * loMult));
+        const x = xForHz(k * binHz);
+        const y = yForDb(loDb);
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath(); ctx.fill();
     }
-    for (let k = bins - 1; k >= 0; k--) {
-      const p = this.ciperAvgSum[k] / M;
-      const loDb = 10 * Math.log10(Math.max(1e-30, p * loMult));
-      const x = xForHz(k * binHz);
-      const y = yForDb(loDb);
-      ctx.lineTo(x, y);
-    }
-    ctx.closePath(); ctx.fill();
     // Centre trace.
     ctx.strokeStyle = '#cfffa3'; ctx.lineWidth = 1.3 * dpr;
     ctx.beginPath();
@@ -22578,8 +22737,9 @@ Lock state computed from the % of recent (last 50 samples) errors with
       if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    this.$('ciperStatus').textContent =
-      `CI Periodogram · ${M} segments · 95% χ² band · DOF=${dof}`;
+    this.$('ciperStatus').textContent = bandValid
+      ? `CI Periodogram · ${M} segments · 95% χ² band · DOF=${dof}`
+      : `CI Periodogram · ${M} segments · CI band needs ≥5 segments (DOF≥10)…`;
   }
 
   // ── Phase Portrait ──────────────────────────────────────────────
@@ -22689,17 +22849,31 @@ Lock state computed from the % of recent (last 50 samples) errors with
     const M = Nfft;     // half-lag count
     const re = new Float32Array(2 * M), im = new Float32Array(2 * M);
     const wIdx = this.wvdBufWrite;
-    const tCentre = (wIdx - M + this.wvdBufI.length) % this.wvdBufI.length;
-    // Time-smoothing window g(t) — simplified: average kernel evaluated
-    // at single time (skip smoothing pass for cost). Frequency window h(τ).
+    const Lring = this.wvdBufI.length;
+    const tCentre = (wIdx - M + Lring) % Lring;
+    // SPWVD(t,f) = Σ_τ h(τ) [ Σ_m g(m) z(t+m+τ/2) z*(t+m−τ/2) ] e^{−j2πfτ}.
+    // h(τ): Hann frequency-smoothing window over the lag. g(m): short Hann
+    // time-smoothing window — this pass is what actually suppresses the
+    // bilinear cross-terms (a plain pseudo-WVD without it is cross-term
+    // dominated for any multi-component signal). L=4 → 9-tap kernel.
+    const L = 4;
+    let gNorm = 0; const gW: number[] = [];
+    for (let m = -L; m <= L; m++) { const g = 0.5 * (1 + Math.cos(Math.PI * m / (L + 1))); gW.push(g); gNorm += g; }
+    const I = this.wvdBufI, Q = this.wvdBufQ;
     for (let n = -M; n < M; n++) {
-      const idxP = (tCentre + n + this.wvdBufI.length) % this.wvdBufI.length;
-      const idxM = (tCentre - n + this.wvdBufI.length) % this.wvdBufI.length;
-      const aR = this.wvdBufI[idxP], aI = this.wvdBufQ[idxP];
-      const bR = this.wvdBufI[idxM], bI = -this.wvdBufQ[idxM];   // conj
-      const cR = aR * bR - aI * bI;
-      const cI = aR * bI + aI * bR;
-      // Hann window over τ in [-M, M).
+      let cR = 0, cI = 0;
+      for (let mi = 0; mi < gW.length; mi++) {
+        const m = mi - L;
+        const idxP = (tCentre + m + n + Lring) % Lring;
+        const idxM = (tCentre + m - n + Lring) % Lring;
+        const aR = I[idxP], aI = Q[idxP];
+        const bR = I[idxM], bI = -Q[idxM];   // conj
+        const g = gW[mi];
+        cR += g * (aR * bR - aI * bI);
+        cI += g * (aR * bI + aI * bR);
+      }
+      cR /= gNorm; cI /= gNorm;
+      // Hann window h(τ) over τ in [-M, M).
       const w = 0.5 * (1 + Math.cos(Math.PI * n / M));
       re[n + M] = cR * w; im[n + M] = cI * w;
     }
