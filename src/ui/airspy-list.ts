@@ -41,8 +41,20 @@ export interface AirspyEntry {
 const LS_KEY     = 'radiom.airspy.servers.v1';
 const FAV_KEY    = 'radiom.airspy.favs.v1';
 const SEARCH_KEY = 'radiom.airspy.search';
+const HAM_KEY    = 'radiom.airspy.hamonly';
 const CACHE_KEY  = 'radiom.airspy.directory.cache.v1';
 const CACHE_TTL_MS = 10 * 60_000;     // honour our own cache for 10 min
+
+// Amateur-radio callsign matcher (ITU structure): a prefix of two letters,
+// a letter+digit, or a digit+letter (covers G, DL, K, 2E0, 9A1, …), then the
+// call-area digit, then a 1–4 letter suffix. Used by the "Ham" toggle to keep
+// only operator stations whose name/description carries a callsign, filtering
+// out the noise of unnamed / broadcast / test listings.
+const CALLSIGN_RE = /\b(?:[A-Z]{1,2}|[A-Z]\d|\d[A-Z])\d[A-Z]{1,4}\b/;
+function hasCallsign(e: AirspyEntry): boolean {
+  const hay = `${e.name ?? ''} ${e.description ?? ''} ${e.url}`.toUpperCase();
+  return CALLSIGN_RE.test(hay);
+}
 
 // Built-in fallback. Used only when the live fetch fails AND the
 // local-cache copy is missing/stale. Kept deliberately small — the
@@ -193,6 +205,7 @@ export function openAirspyList(onPick: (url: string, entry?: AirspyEntry) => voi
   let loading = !loadDirectoryCache();      // true on first open of the session
   let lastErr = '';
   let filter = localStorage.getItem(SEARCH_KEY) || '';
+  let hamOnly = localStorage.getItem(HAM_KEY) === '1';
 
   const root = document.createElement('div');
   root.className = 'modal';
@@ -200,6 +213,7 @@ export function openAirspyList(onPick: (url: string, entry?: AirspyEntry) => voi
     <div class="modal-card">
       <div class="modal-bar">
         <input class="srv-search" placeholder="host:port (e.g. airspy.us:5555) — or filter the live directory" />
+        <button class="btn-ham" title="Ham only — show only stations whose name carries an amateur-radio callsign">Ham</button>
         <button class="btn-add">Add</button>
         <button class="btn-refresh" title="Re-fetch the live directory from airspy.com">↺</button>
         <button class="btn-close" aria-label="close">✕</button>
@@ -213,7 +227,9 @@ export function openAirspyList(onPick: (url: string, entry?: AirspyEntry) => voi
   const search   = root.querySelector('.srv-search') as HTMLInputElement;
   const list     = root.querySelector('.srv-list') as HTMLDivElement;
   const statusEl = root.querySelector('.srv-status') as HTMLDivElement;
+  const hamBtn   = root.querySelector('.btn-ham') as HTMLButtonElement;
   search.value = filter;
+  hamBtn.classList.toggle('active', hamOnly);
 
   const merge = (): AirspyEntry[] => {
     const seen = new Set<string>();
@@ -252,9 +268,12 @@ export function openAirspyList(onPick: (url: string, entry?: AirspyEntry) => voi
       return (a.name || a.url).localeCompare(b.name || b.url);
     });
     const f = filter.toLowerCase().trim();
-    const filtered = f
+    let filtered = f
       ? all.filter(s => `${s.url} ${s.name ?? ''} ${s.deviceType ?? ''} ${s.description ?? ''}`.toLowerCase().includes(f))
       : all;
+    // "Ham" toggle: keep only stations carrying a callsign — but never hide
+    // the user's own favourites / custom entries, which they curated on purpose.
+    if (hamOnly) filtered = filtered.filter(s => favs.has(s.url) || custom.some(c => c.url === s.url) || hasCallsign(s));
     list.innerHTML = filtered.length
       ? filtered.map(s => {
         const isCustom = custom.some(c => c.url === s.url);
@@ -279,6 +298,13 @@ export function openAirspyList(onPick: (url: string, entry?: AirspyEntry) => voi
   search.addEventListener('input', () => {
     filter = search.value;
     localStorage.setItem(SEARCH_KEY, filter);
+    render();
+  });
+
+  hamBtn.addEventListener('click', () => {
+    hamOnly = !hamOnly;
+    localStorage.setItem(HAM_KEY, hamOnly ? '1' : '0');
+    hamBtn.classList.toggle('active', hamOnly);
     render();
   });
 

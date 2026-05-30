@@ -1481,7 +1481,8 @@ body.panel-ext .ft8-panel {
   padding: 0 14px; height: 40px; font-size: 14px;
 }
 .modal-bar .btn-favs.active,
-.modal-bar .btn-no-rtl.active {
+.modal-bar .btn-no-rtl.active,
+.modal-bar .btn-ham.active {
   border-color: var(--led-bg);
   color: var(--led-bg);
 }

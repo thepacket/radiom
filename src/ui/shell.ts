@@ -631,8 +631,8 @@ export class Shell {
         <button id="help" class="menu" aria-label="decoder help" title="Help · all buttons / knobs reference">?</button>
         <button id="kiwiPicker" class="kpbtn source-btn" title="KiwiSDR — switch source and open the KiwiSDR server picker (mutually exclusive with OpenWebRx / RTL)" aria-label="KiwiSDR source">kiwi</button>
         <button id="owrxPicker" class="kpbtn source-btn" title="OpenWebRx — switch source and open the OpenWebRx server picker (mutually exclusive with KiwiSDR / RTL)" aria-label="OpenWebRx source">owrx</button>
-        <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">rtl</button>
         <button id="airspyPicker" class="kpbtn source-btn" title="Airspy SpyServer — switch source and open the SpyServer picker. Connects to a public Airspy HF+ / R2 server via the binary SpyServer protocol, decimates IQ server-side, streams int16 IQ to the browser" aria-label="Airspy source">airspy</button>
+        <button id="rtlPicker"  class="kpbtn source-btn" title="rtl_tcp — switch source and open the rtl_tcp server picker. Connects to a remote RTL-SDR USB receiver over TCP, decimates IQ server-side, streams to the browser" aria-label="rtl_tcp source">rtl</button>
         <button id="histPicker" class="menu" title="Recent server connections — click any row to switch source and reconnect" aria-label="recent server connections">↺</button>
         <!-- Hidden: still used internally to hold the host:port string. -->
         <input id="server" class="server" style="display:none" value="${escapeAttr(localStorage.getItem('radiom.lastServer') || '')}" placeholder="host:port" spellcheck="false" readonly />
