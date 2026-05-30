@@ -7592,15 +7592,17 @@ Lock state computed from the % of recent (last 50 samples) errors with
         const loKHz = centreKHz - spanKHz / 2;
         f = Math.round((loKHz + frac * spanKHz) * 10) / 10;
       } else if (this.isAirspySource()) {
-        // Airspy: visible span = SpyServer IQ rate centred on the dial
-        // (the SpyServer is always re-tuned to the dial). Click at
-        // fraction `frac` across the canvas maps to dial + (frac − 0.5)
-        // × spanKHz. Bail if the IQ rate isn't known yet — falling
-        // back to the 30 MHz `bandwidthHz` default would produce
-        // multi-MHz tune jumps.
+        // Airspy: visible span = SpyServer IQ rate centred on the
+        // *server* tune (not the dial). Click at fraction `frac` maps
+        // to centreKHz + (frac − 0.5) × spanKHz. Bail if IQ rate is
+        // unknown — fallback to bandwidthHz default of 30 MHz would
+        // produce multi-MHz tune jumps.
         if (this.airspyIqRate <= 0) return;
         const spanKHz = this.airspyIqRate / 1000;
-        const loKHz = this.freqKHz - spanKHz / 2;
+        const c = this.client as unknown as { getServerCenterHz?: () => number } | null;
+        const centreHz = c?.getServerCenterHz?.() || (this.freqKHz * 1000);
+        const centreKHz = centreHz / 1000;
+        const loKHz = centreKHz - spanKHz / 2;
         f = Math.round((loKHz + frac * spanKHz) * 10) / 10;
       } else {
         const totalBins = 1024 * (1 << this.zoom);
@@ -7654,13 +7656,23 @@ Lock state computed from the % of recent (last 50 samples) errors with
     let loKHz: number;
     let hiKHz: number;
     if (this.isAirspySource()) {
-      // Airspy: every dial change re-tunes the SpyServer to that
-      // frequency, so the dial is always at bin 512 of the 1024-bin
-      // FFT (= centre of the waterfall). Span = SpyServer IQ rate.
+      // Airspy: the FFT covers the SpyServer's IQ rate centred on
+      // whatever the SpyServer was LAST tuned to (the server-centre,
+      // tracked separately from the dial). Within the window, dial
+      // moves don't re-tune the server — csdr's --fifo shift handles
+      // the offset live, so the cursor walks across the waterfall as
+      // the dial moves.
       const spanKHz = this.airspyIqRate > 0 ? this.airspyIqRate / 1000 : (this.bandwidthHz / 1000);
-      loKHz = this.freqKHz - spanKHz / 2;
-      hiKHz = this.freqKHz + spanKHz / 2;
-      tRaw = 0.5;
+      const c = this.client as unknown as { getServerCenterHz?: () => number } | null;
+      // Read serverCenterHz explicitly with finite/positive check so a
+      // value of 0 (which JS treats as falsy) doesn't silently fall
+      // back to the dial — that would pin the cursor to centre.
+      const raw = c?.getServerCenterHz?.();
+      const centreHz = (Number.isFinite(raw) && raw! > 0) ? raw! : (this.freqKHz * 1000);
+      const centreKHz = centreHz / 1000;
+      loKHz = centreKHz - spanKHz / 2;
+      hiKHz = centreKHz + spanKHz / 2;
+      tRaw = spanKHz > 0 ? (this.freqKHz - loKHz) / spanKHz : 0.5;
     } else if (this.isOwrxSource()) {
       // OpenWebRX renders a window of `bandwidthHz` centred on
       // owrxViewCenterKHz. Cursor position is the dial freq's offset
@@ -8929,6 +8941,25 @@ Lock state computed from the % of recent (last 50 samples) errors with
    *  toward — the most natural behaviour for scanning across a band. */
   private panBy(deltaBins: number) {
     let loKHz: number, hiKHz: number;
+    if (this.isAirspySource()) {
+      // Airspy: visible span = SpyServer IQ rate centred on server
+      // tune. Pan moves the dial by the same fraction of the window
+      // that the user dragged (deltaBins is in 1024-pixel canvas
+      // units, so deltaBins/1024 is the pan ratio). Then we either
+      // shift within the window via fifo, or re-anchor if the new
+      // dial walks outside — both handled by setFreqKHz internally.
+      if (this.airspyIqRate <= 0) return;
+      const spanKHz = this.airspyIqRate / 1000;
+      const deltaKHz = (deltaBins / 1024) * spanKHz;
+      const newDial = this.freqKHz + deltaKHz;
+      this.freqKHz = +newDial.toFixed(3);
+      this.client?.setFreqKHz(this.freqKHz);
+      // Cursor + label re-render with the new dial relative to the
+      // (possibly updated) server centre.
+      this.refresh();
+      this.refreshCursor();
+      return;
+    }
     if (this.isOwrxSource()) {
       // OWRX path: bandwidthHz is the *visible window*, not the SDR's
       // full span, so the Kiwi-style 1024*(1<<zoom) accounting collapses.
@@ -9374,7 +9405,13 @@ Lock state computed from the % of recent (last 50 samples) errors with
    *  user_cb, stats_cb, etc.) just fall through their ifs harmlessly. */
   private makeKvHandler(): (kv: Record<string, string>) => void {
     return (kv) => {
-      if (kv._debug) { this.log(kv._debug); return; }
+      // A `_debug` message is informational, but other keys (e.g.
+      // sample_rate, bandwidth, audio_rate) often arrive in the SAME
+      // hello kv map alongside _debug — short-circuiting here meant
+      // the airspyIqRate / bandwidthHz / player input rate updates
+      // were being silently dropped for every Airspy hello, leaving
+      // the cursor pinned to centre and the LCD bandwidth wrong.
+      if (kv._debug) this.log(kv._debug);
       this.lastFrameTs = Date.now();
       for (const k in kv) this.lastKv[k] = kv[k];
       this.refreshKiwiDiag();

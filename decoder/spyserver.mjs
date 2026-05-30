@@ -249,8 +249,13 @@ export class SpyServerBridge {
         onStatus: (m) => this.opts.onStatus?.(m),
       });
       this.announceCsdrRate();
+      // Apply any pending shift that arrived before the pipeline was
+      // up (e.g. the user dialed during connect setup).
+      if (this.shiftHz) this.csdr.setShift(-this.shiftHz / this.srOut);
     } else if (this.csdr.inputRate !== this.srOut) {
       this.csdr.setInputRate(this.srOut);
+      // Re-apply shift with the new normalisation since rate changed.
+      if (this.shiftHz) this.csdr.setShift(-this.shiftHz / this.srOut);
       this.announceCsdrRate();
     }
     this.csdr.feedIq(le16IqBuf);
@@ -603,8 +608,19 @@ export class SpyServerBridge {
     if (this.csdr) this.csdr.setBandpassTaps(this.bandpassTaps);
   }
 
-  // setShiftHz removed — every dial change now re-tunes the SpyServer
-  // (simple, reliable model). See SpyServerClient.setFreqKHz.
+  /** Live frequency shift in Hz — passed straight to csdr's
+   *  shift_addition_cc via its --fifo control. No pipeline rebuild,
+   *  no audio gap. Used when the user dials off the SpyServer's
+   *  current tune within the IQ window. */
+  setShiftHz(hz) {
+    if (!Number.isFinite(hz)) return;
+    this.shiftHz = Math.round(hz);
+    const rate = (this.srOut > 0) ? (-this.shiftHz / this.srOut) : 0;
+    this.opts.onStatus?.(`setShiftHz hz=${this.shiftHz} srOut=${this.srOut} rate=${rate.toFixed(6)} csdr=${this.csdr ? 'live' : 'null'}`);
+    if (this.csdr && this.srOut) {
+      this.csdr.setShift(rate);
+    }
+  }
 
   /** Set fixed post-demod gain (applied when AGC is 'off'). */
   setFixedGain(g) {
@@ -683,7 +699,9 @@ export class SpyServerBridge {
   close() {
     this.closed = true;
     if (this.pingTimer != null) { clearInterval(this.pingTimer); this.pingTimer = null; }
-    try { this.csdr?.stop(); } catch {}
+    // destroy() unlinks the shift control fifo from /tmp — important
+    // so we don't leak fifo files across sessions.
+    try { this.csdr?.destroy(); } catch {}
     this.csdr = null;
     try { this.setSettingU32(SETTING_STREAMING_ENABLED, 0); } catch {}
     try { this.sock?.end(); } catch {}

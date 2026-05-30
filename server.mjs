@@ -2812,7 +2812,7 @@ function attachSpyServerBridge(ws, host, port) {
         case 'taps': if (Number.isFinite(m.n)) bridge.setBandpassTaps(m.n); break;
         case 'agc':  if (typeof m.profile === 'string') bridge.setAgcProfile(m.profile); break;
         case 'fgain': if (Number.isFinite(m.g)) bridge.setFixedGain(m.g); break;
-        // 'shift' removed — every dial change re-tunes the SpyServer.
+        case 'shift': if (Number.isFinite(m.hz)) bridge.setShiftHz(m.hz); break;
         case 'stream': if (Number.isFinite(m.mode)) bridge.setStreamMode(m.mode); break;
       }
     } catch { /* malformed JSON */ }

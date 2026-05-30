@@ -31,9 +31,10 @@
 //   logpower_cf <add_db>      Convert complex FFT to dB power.
 //   compress_fft_adpcm_f_u8 N OpenWebRX-style uint8 dB-bin packing.
 
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,12 +137,27 @@ export class CsdrPipeline {
     this.fixedGain = (Number.isFinite(opts.fixedGain) && opts.fixedGain > 0)
       ? opts.fixedGain : 8;
     // Frequency-shift is now applied JS-side in the bridge before
-    // samples reach csdr (see decoder/spyserver.mjs feedCsdr). The
-    // pipeline no longer needs to know about it — that avoided
-    // a full process-respawn on every dial change.
+    // Live frequency shift via csdr's --fifo control. shift_addition_cc
+    // reads "%g\n"-formatted rate values from this named pipe and
+    // updates its internal phase increment without restarting. Lets
+    // the user dial off the SpyServer centre with zero audio gap.
     this.audioProc = null;
     this.fftProc = null;
     this.audioOutRate = MODE_DEMOD[this.mode]?.outRate ?? 12000;
+    // Normalised shift rate (fraction of fs, range ±0.5). 0 = pass-through.
+    this.shiftRate = 0;
+    // File descriptor we write rates into; opened after csdr spawns.
+    this.shiftFifoFd = null;
+    // Unique fifo path so multiple bridge sessions don't collide.
+    const tmp = os.tmpdir();
+    const id = `${process.pid}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    this.shiftFifoPath = path.join(tmp, `radiom-shift-${id}.fifo`);
+    try {
+      execSync(`mkfifo "${this.shiftFifoPath}"`);
+    } catch (e) {
+      this.opts.onStatus?.(`mkfifo failed for shift control: ${e.message}`);
+      this.shiftFifoPath = null;
+    }
     this.build();
   }
 
@@ -221,10 +237,15 @@ export class CsdrPipeline {
     // the receiver whenever lo or hi moves, and folds both halves of
     // the filtered band into mono audio (DSB-like result).
     //
-    const preStages = [
-      `${CSDR_BIN} bandpass_fir_fft_cc ${loN} ${hiN} ${bandpassTrans}`,
-      `${CSDR_BIN} fir_decimate_cc ${decim} ${decimTrans}`,
-    ];
+    // shift_addition_cc with --fifo allows runtime rate updates by
+    // appending "%g\n" lines to the fifo path — no pipeline respawn.
+    // Required for low-latency dial-within-window tuning.
+    const preStages = [];
+    if (this.shiftFifoPath) {
+      preStages.push(`${CSDR_BIN} shift_addition_cc --fifo "${this.shiftFifoPath}"`);
+    }
+    preStages.push(`${CSDR_BIN} bandpass_fir_fft_cc ${loN} ${hiN} ${bandpassTrans}`);
+    preStages.push(`${CSDR_BIN} fir_decimate_cc ${decim} ${decimTrans}`);
     // Post-demod chain: DC block → fractional decimator (locks rate
     // to exactly targetRate) → AGC → int16.
     //
@@ -356,13 +377,110 @@ export class CsdrPipeline {
       `pass=[${pass.lo}..${pass.hi}] (loN=${loN} hiN=${hiN}) ` +
       `decim=${decim} postDecimRate=${postDecimRate} fracDecim=${fracDecim} ` +
       `audioRate=${this.audioOutRate} taps=${this.bandpassTaps} trans=${bandpassTrans.toFixed(6)} ` +
-      `agc=${this.agcProfile} fft=${this.opts.onFft ? 'on' : 'off'}`
+      `agc=${this.agcProfile} fft=${this.opts.onFft ? 'on' : 'off'} ` +
+      `shift=${this.shiftRate.toFixed(6)}`
     );
+
+    // After spawn, open the shift fifo for writing in non-blocking
+    // mode (so the open doesn't block while csdr opens its read end).
+    // Retry a few times with a short delay — typical csdr startup
+    // takes ~20 ms before it open()s the fifo read side.
+    if (this.shiftFifoPath) {
+      this._openShiftFifo();
+    }
+  }
+
+  /** Try to open the shift control fifo for writing. Retries until
+   *  a reader is available (csdr finished opening it) or until we
+   *  give up after ~500 ms. */
+  _openShiftFifo(attempt = 0) {
+    if (!this.shiftFifoPath) return;
+    if (this.shiftFifoFd != null) {
+      try { fs.closeSync(this.shiftFifoFd); } catch {}
+      this.shiftFifoFd = null;
+    }
+    try {
+      // O_WRONLY|O_NONBLOCK fails with ENXIO if no reader is present.
+      this.shiftFifoFd = fs.openSync(
+        this.shiftFifoPath,
+        fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+      );
+      this.opts.onStatus?.(`shift fifo opened fd=${this.shiftFifoFd} attempt=${attempt}`);
+      // ALWAYS write the current shift (even 0) on first open — csdr's
+      // shift_addition_cc blocks in `while(!read_fifo_ctl) usleep(...)`
+      // until it sees a rate value, so without this write csdr never
+      // starts processing samples and the whole pipeline produces no
+      // output. The "rate has same value, skip" optimization in
+      // setShift() can't apply here.
+      this._writeShift(this.shiftRate);
+    } catch (e) {
+      if (e.code === 'ENXIO' && attempt < 25) {
+        setTimeout(() => this._openShiftFifo(attempt + 1), 20);
+      } else {
+        this.opts.onStatus?.(`shift fifo open failed: ${e.code || e.message}`);
+      }
+    }
+  }
+
+  _writeShift(rate) {
+    // If the fd isn't open yet (initial open is still retrying, or it
+    // got closed by a stop()/rebuild), kick another open attempt and
+    // skip this write. Subsequent writes will land once it's up.
+    if (this.shiftFifoFd == null) {
+      this.opts.onStatus?.(`shift skipped (fd null) rate=${rate}`);
+      this._openShiftFifo();
+      return;
+    }
+    try {
+      fs.writeSync(this.shiftFifoFd, `${rate}\n`);
+      this.opts.onStatus?.(`shift write rate=${rate}`);
+    } catch (e) {
+      // EPIPE if reader closed (e.g. csdr exited). Reopen.
+      this.opts.onStatus?.(`shift write failed: ${e.code || e.message}`);
+      if (e.code === 'EPIPE' || e.code === 'EBADF') {
+        try { fs.closeSync(this.shiftFifoFd); } catch {}
+        this.shiftFifoFd = null;
+        this._openShiftFifo();
+      }
+    }
+  }
+
+  /** Live frequency shift, normalised to ±0.5 fs. Zero pipeline
+   *  rebuild, zero audio gap — just writes a new rate into csdr's
+   *  control fifo. */
+  setShift(rate) {
+    if (!Number.isFinite(rate)) return;
+    const clamped = Math.max(-0.5, Math.min(0.5, rate));
+    if (clamped === this.shiftRate) return;
+    this.shiftRate = clamped;
+    this._writeShift(clamped);
   }
 
   spawnPipe(pipeStr, onData, tag) {
+    // CRITICAL: `detached: true` puts the shell + its csdr children
+    // into a NEW process group. Without this, `proc.kill('SIGTERM')`
+    // on rebuild only kills the shell — the csdr children become
+    // orphans of init and keep running forever (shift_addition_cc
+    // spins on `for(;;) ... shift_addition_init(rate)` even after
+    // its upstream stdin closes). Orphans keep their --fifo read
+    // end open and steal subsequent rate writes from the new csdr
+    // → new csdr stays blocked → no audio after pipeline rebuild.
     const proc = spawn('/bin/sh', ['-c', pipeStr], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+      env: {
+        ...process.env,
+        // Shrink csdr's internal sample buffers from the bigbufs
+        // default of 16384 samples (≈ 1.4 s @ 12 kHz IQ) down to
+        // 1024 samples (~85 ms). Each `bigbufs=1` stage —
+        // shift_addition_cc, bandpass_fir_fft_cc, fir_decimate_cc
+        // — fills one buffer before producing output, so the
+        // default buffer size stacks to several seconds of
+        // end-to-end audio lag. csdr auto-grows the buffer for
+        // bandpass when taps_length exceeds 2× buffer (csdr.c:1136),
+        // so this is a safe minimum that doesn't break the FIR.
+        CSDR_FIXED_BUFSIZE: '1024',
+      },
     });
     // Generation-guarded stdout: SIGTERM doesn't kill child processes
     // synchronously — they can keep emitting PCM for hundreds of ms
@@ -462,12 +580,35 @@ export class CsdrPipeline {
       clearTimeout(this._passDebounceTimer);
       this._passDebounceTimer = null;
     }
+    // Close the shift fifo write fd before killing csdr. After kill,
+    // the new build() will reopen it (with the new csdr's read end).
+    if (this.shiftFifoFd != null) {
+      try { fs.closeSync(this.shiftFifoFd); } catch {}
+      this.shiftFifoFd = null;
+    }
     for (const p of [this.audioProc, this.fftProc]) {
-      if (!p) continue;
+      if (!p || p.pid == null) continue;
       try { p.stdin.end(); } catch {}
-      try { p.kill('SIGTERM'); } catch {}
+      // Kill the entire process group so the csdr children die too,
+      // not just the parent shell. Negative PID = process group.
+      // Use SIGKILL because shift_addition_cc has a `for(;;)` outer
+      // loop that doesn't honour SIGTERM on EOF — it just spins
+      // forever, keeping the --fifo reader alive.
+      try { process.kill(-p.pid, 'SIGKILL'); } catch {
+        try { p.kill('SIGKILL'); } catch {}
+      }
     }
     this.audioProc = null;
     this.fftProc = null;
+  }
+
+  /** Final cleanup — call when the bridge session ends. Removes the
+   *  fifo file from /tmp. */
+  destroy() {
+    this.stop();
+    if (this.shiftFifoPath) {
+      try { fs.unlinkSync(this.shiftFifoPath); } catch {}
+      this.shiftFifoPath = null;
+    }
   }
 }

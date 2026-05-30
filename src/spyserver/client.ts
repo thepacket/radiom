@@ -206,17 +206,33 @@ export class SpyServerClient {
   }
 
   /** Centre frequency in kHz (matches Kiwi / OWRX / rtl_tcp clients).
-   *  Simple model: every dial change re-tunes the SpyServer to that
-   *  frequency. Cursor stays dead-centre on the waterfall, labels
-   *  always show ±halfSpan around the dial = always truthful.
-   *  Trade-off: brief audio pause on every dial change (SpyServer
-   *  re-locks). The previous decoupled-centre design eliminated that
-   *  pause for small dial moves but proved too fragile in practice. */
+   *
+   *  Decoupled model: the SpyServer stays tuned at `serverCenterHz`
+   *  while the dial moves within the visible IQ window. Tuning is
+   *  applied via csdr's `shift_addition_cc --fifo` control — no
+   *  pipeline rebuild, no SpyServer retune, no audio gap. Only when
+   *  the dial walks outside ±47 % of the IQ window do we actually
+   *  re-anchor the SpyServer at the new dial (and reset shift to 0).
+   *
+   *  This is the same approach OpenWebRX uses, confirmed against the
+   *  ha7ilm/csdr source (shift_addition_cc reads "%g\n" lines from
+   *  the fifo at runtime — csdr.c:887). */
   setFreqKHz(kHz: number): void {
     const hz = Math.round(kHz * 1000);
     this.pendingCenterHz = hz;
-    this.serverCenterHz = hz;
-    if (this.gotHello) this.sendJson({ t: 'freq', hz });
+    if (!this.gotHello) return;
+    const halfWindow = (this.outputRate || 12000) * 0.47;
+    let shiftHz: number;
+    if (this.serverCenterHz && Math.abs(hz - this.serverCenterHz) < halfWindow) {
+      // Dial within window — keep server tune, demod via csdr shift.
+      shiftHz = hz - this.serverCenterHz;
+    } else {
+      // Walked outside window — re-anchor at new dial, shift back to 0.
+      this.serverCenterHz = hz;
+      this.sendJson({ t: 'freq', hz });
+      shiftHz = 0;
+    }
+    this.sendJson({ t: 'shift', hz: shiftHz });
   }
 
   /** The frequency the upstream SpyServer is currently tuned to (the
