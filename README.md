@@ -7,7 +7,7 @@ ACARS / VDL-2 / ADS-B / AIS / DSC / DMR / NXDN / YSF / M17 / P25 /
 LRPT / APT / HRPT / LoRa / rtl_433 / SONDE / OP25 / AERO / STD-C / and
 ~50 others).
 
-The browser app connects to one of three SDR-server flavors and routes
+The browser app connects to one of four SDR-server flavors and routes
 the demodulated audio (or raw IQ, where appropriate) through a fleet
 of decoder bridges running on a small Node backend:
 
@@ -25,11 +25,15 @@ of decoder bridges running on a small Node backend:
   audio/control coupling and tuning latency are being iterated on.
 - **Airspy SpyServer** — fourth source, public Airspy R2/Mini/HF+
   servers via the SpyServer binary protocol, with server-side csdr
-  audio demod + waterfall synthesis on the radiom backend.
+  audio demod + waterfall synthesis on the radiom backend. Live
+  zero-gap tuning: small dial moves retune inside the IQ window via
+  `csdr shift_addition_cc --fifo` without rebuilding the pipeline, so
+  there is no audio dropout; only large moves re-anchor the upstream
+  tune. The station picker includes a "Ham" filter that keeps only
+  servers whose listing carries an amateur-radio callsign.
   **SpyServer support is work-in-progress** — audio quality varies
-  with the upstream server's RF chain, the AGC chain still has
-  artifact issues on some signals, and cursor/click-tune ergonomics
-  are still being refined.
+  with the upstream server's RF chain, and the AGC chain still has
+  artifact issues on some signals.
 
 The active source is selected from the top bar; each decoder
 indicates in its tooltip whether it requires an IQ-capable source
@@ -45,7 +49,8 @@ indicates in its tooltip whether it requires an IQ-capable source
 
 ## Screenshots
 
-NOTE: The user interface has been significantly modified since the last screenshots.
+NOTE: The screenshots were captured on 2026-05-22 (pre-v0.4.x source-picker
+rework); the user interface has been significantly modified since.
 
 See [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) for a gallery of a small subset of the features.
 
@@ -329,8 +334,9 @@ share-link like `https://your-app.fly.dev/#token=…` and the token gets stored
 
 radiom is a personal project, open-sourced so others can read the code,
 and fork it for their own use. **Pull requests are not
-accepted** — the codebase stays solo-authored. Bug reports, on-air
-results, and ideas are very welcome through
+accepted** — the codebase stays solo-authored, and incoming PRs are
+closed automatically (see [CONTRIBUTING.md](CONTRIBUTING.md)). Bug
+reports, on-air results, and ideas are very welcome through
 [Issues](https://github.com/thepacket/radiom/issues) and
 [Discussions](https://github.com/thepacket/radiom/discussions); anything
 that lands in the upstream codebase will be implemented from there.

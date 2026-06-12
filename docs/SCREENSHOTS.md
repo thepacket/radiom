@@ -1,5 +1,9 @@
 # Screenshots
 
+Captured 2026-05-22. The UI has been significantly reworked since
+(source picker, Airspy SpyServer source, DSP/VIEW panel additions) —
+treat these as a flavor of the app, not a current reference.
+
 <p align="center">
   <img src="screenshots/Screenshot_20260522_024236_Chrome.jpg" width="32%"/>
   <img src="screenshots/Screenshot_20260522_024329_Chrome.jpg" width="32%"/>
