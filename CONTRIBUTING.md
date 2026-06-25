@@ -9,10 +9,6 @@ read the code and fork it for their own use, but the codebase stays
 solo-authored — **pull requests will be automatically closed** (see
 [`.github/workflows/no-prs.yml`](.github/workflows/no-prs.yml)).
 
-This is not a judgement on your work: anything that should land in the
-upstream codebase will be implemented from there, and a good bug report
-or idea is just as valuable as a patch.
-
 ## What is very welcome
 
 - **[Issues](https://github.com/thepacket/radiom/issues)** — bug
