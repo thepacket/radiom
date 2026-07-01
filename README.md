@@ -1,5 +1,7 @@
 # radiom
 
+Note: the user interface is made for smartphones.
+
 A multi-source mobile web SDR client with a large built-in decoder library
 (88 protocols covering CW / RTTY / FT8/FT4 / WSPR / JT9/JT65 / FST4 /
 JS8 / NAVTEX / WEFAX / HFDL / ALE 2G / Olivia / MFSK / MT63 / Throb /
