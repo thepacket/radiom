@@ -2,12 +2,11 @@
 
 Thanks for your interest in radiom!
 
-## Pull requests are not accepted
+## Pull requests
 
-radiom is a **solo-authored project**. It is open-sourced so others can
-read the code and fork it for their own use, but the codebase stays
-solo-authored — **pull requests will be automatically closed** (see
-[`.github/workflows/no-prs.yml`](.github/workflows/no-prs.yml)).
+Pull requests are welcome. Keep each one focused on a single fix or feature,
+and say which receiver, band and platform you tested on. Larger ideas are
+best talked through in a discussion first.
 
 ## What is very welcome
 
